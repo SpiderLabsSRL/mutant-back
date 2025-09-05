@@ -5,8 +5,8 @@ const { connectDB } = require("./db");
 const app = express();
 
 // Rutas
-//ejemplo :const authRoutes = require("./src/routes/authRoutes");
-const loginRoutes = require ("./src/routes/loginroutes");
+const loginRoutes = require("./src/routes/loginroutes");
+const remindersRoutes = require("./src/routes/remindersroutes");
 
 // Lista de orígenes permitidos
 const allowedOrigins = [
@@ -32,7 +32,7 @@ const corsOptions = {
     return callback(new Error(msg), false);
   },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"], // Asegura que PATCH está incluido
+  methods: ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
   allowedHeaders: ["Content-Type", "Authorization"],
 };
 
@@ -46,8 +46,8 @@ app.options("*", cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Rutas
-//ejempl: app.use("/api/auth", authRoutes);
+// Rutas - ¡AGREGA ESTA LÍNEA!
+app.use("/api/reminders", remindersRoutes);
 app.use("/api/login", loginRoutes);
 
 // Manejador de errores global
@@ -60,6 +60,26 @@ app.use((err, req, res, next) => {
   });
 });
 
+// Ruta de prueba para verificar que el servidor funciona
+app.get("/api/health", (req, res) => {
+  res.json({ 
+    success: true, 
+    message: "Servidor funcionando correctamente",
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Ruta de prueba específica para reminders
+app.get("/api/reminders/test", (req, res) => {
+  res.json({ 
+    success: true, 
+    message: "Ruta de reminders funcionando",
+    data: [
+      { id: 1, nombre: "Test Member", telefono: "+591 70000000" }
+    ]
+  });
+});
+
 // Iniciar el servidor
 const startServer = async () => {
   try {
@@ -67,6 +87,12 @@ const startServer = async () => {
     const PORT = process.env.PORT || 5000;
     app.listen(PORT, () => {
       console.log(`Servidor corriendo en el puerto ${PORT}`);
+      console.log(`Rutas disponibles:`);
+      console.log(`- GET  /api/health`);
+      console.log(`- GET  /api/reminders/test`);
+      console.log(`- GET  /api/reminders/new-members`);
+      console.log(`- GET  /api/reminders/expiring-members`);
+      console.log(`- GET  /api/reminders/birthday-members`);
     });
   } catch (error) {
     console.error("Error al iniciar el servidor:", error);
