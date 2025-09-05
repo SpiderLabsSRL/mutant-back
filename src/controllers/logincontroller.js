@@ -1,4 +1,3 @@
-// controllers/logincontroller.js
 const authService = require("../services/loginservice");
 const { generateToken } = require("../utils/jwtUtils");
 
@@ -22,28 +21,43 @@ const login = async (req, res) => {
       });
     }
 
-    // Generar token con los datos del usuario
+    // Preparar datos según el tipo de usuario
+    let userResponse = {};
+    
+    if (user.userType === 'empleado') {
+      userResponse = {
+        idpersona: user.idpersona,
+        idempleado: user.idempleado,
+        idusuario: user.idusuario,
+        idcaja: user.idcaja,
+        idsucursal: user.idsucursal,
+        rol: user.rol,
+        hora_ingreso: user.hora_ingreso,
+        hora_salida: user.hora_salida,
+        nombres: user.nombres,
+        apellidos: user.apellidos,
+        username: user.username,
+        userType: user.userType
+      };
+    } else {
+      userResponse = {
+        idusuario: user.idusuario,
+        idpersona: user.idpersona,
+        nombres: user.nombres,
+        apellidos: user.apellidos,
+        username: user.username,
+        rol: user.rol,
+        userType: user.userType
+      };
+    }
+
+    // Generar token
     const token = generateToken({
       id: user.idusuario,
       username: user.username,
       role: user.rol,
-      sucursalId: user.idsucursal
+      userType: user.userType
     });
-
-    // Preparar datos de usuario para la respuesta
-    const userResponse = {
-      idpersona: user.idpersona,
-      idempleado: user.idempleado,
-      idusuario: user.idusuario,
-      idcaja: user.idcaja,
-      idsucursal: user.idsucursal,
-      rol: user.rol,
-      hora_ingreso: user.hora_ingreso,
-      hora_salida: user.hora_salida,
-      nombres: user.nombres,
-      apellidos: user.apellidos,
-      username: user.username
-    };
 
     res.json({
       success: true,

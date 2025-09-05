@@ -1,4 +1,3 @@
-// middleware/loginmiddleware.js
 const jwt = require("jsonwebtoken");
 const db = require("../../db");
 
@@ -14,7 +13,7 @@ const authenticate = async (req, res, next) => {
       });
     }
 
-    // 2. Verificar que el header tenga el formato correcto
+    // 2. Verificar formato del header
     const tokenParts = authHeader.split(" ");
     if (tokenParts.length !== 2 || tokenParts[0] !== "Bearer") {
       return res.status(401).json({
@@ -43,8 +42,12 @@ const authenticate = async (req, res, next) => {
       });
     }
 
-    // 5. Verificar que el usuario existe y está activo
-    const query = `
+    // 5. Verificar si es usuario empleado o cliente
+    let user = null;
+    let userType = 'empleado';
+    
+    // Primero buscar en usuarios (empleados)
+    const userQuery = `
       SELECT 
         u.id as idusuario,
         u.username,
@@ -65,17 +68,42 @@ const authenticate = async (req, res, next) => {
       WHERE u.id = $1 AND e.estado = 1
     `;
     
-    const result = await db.query(query, [decoded.id]);
-
-    if (result.rows.length === 0) {
-      return res.status(401).json({
-        success: false,
-        message: "User not found or inactive",
-      });
+    const userResult = await db.query(userQuery, [decoded.id]);
+    
+    if (userResult.rows.length === 0) {
+      // Si no es empleado, buscar en usuarios_clientes
+      userType = 'cliente';
+      const clientQuery = `
+        SELECT 
+          uc.id as idusuario,
+          uc.username,
+          p.id as idpersona,
+          p.nombres,
+          p.apellidos,
+          'cliente' as rol
+        FROM usuarios_clientes uc
+        INNER JOIN personas p ON uc.username LIKE '%' || p.nombres || '.' || p.apellidos || '%'
+        WHERE uc.id = $1
+      `;
+      
+      const clientResult = await db.query(clientQuery, [decoded.id]);
+      
+      if (clientResult.rows.length === 0) {
+        return res.status(401).json({
+          success: false,
+          message: "User not found",
+        });
+      }
+      
+      user = clientResult.rows[0];
+      user.userType = 'cliente';
+    } else {
+      user = userResult.rows[0];
+      user.userType = 'empleado';
     }
 
     // 6. Adjuntar información del usuario al request
-    req.user = result.rows[0];
+    req.user = user;
 
     next();
   } catch (error) {

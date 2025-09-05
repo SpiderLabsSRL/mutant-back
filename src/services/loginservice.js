@@ -1,4 +1,3 @@
-// services/loginservice.js
 const { query } = require("../../db");
 const bcrypt = require("bcrypt");
 
@@ -6,8 +5,8 @@ const authenticateUser = async (username, password) => {
   try {
     console.log(`Autenticando usuario: ${username}`);
 
-    // Consulta para obtener usuario con toda la información necesaria
-    const result = await query(
+    // Primero buscar en usuarios (empleados)
+    let result = await query(
       `SELECT 
         u.id as idusuario,
         u.username,
@@ -30,13 +29,36 @@ const authenticateUser = async (username, password) => {
       [username]
     );
 
+    let user = null;
+    let userType = 'empleado';
+
     if (result.rows.length === 0) {
-      console.log("Usuario no encontrado");
-      return null;
+      // Si no es empleado, buscar en usuarios_clientes
+      userType = 'cliente';
+      result = await query(
+        `SELECT 
+          id as idusuario,
+          username,
+          password_hash as password,
+          'cliente' as rol
+        FROM usuarios_clientes 
+        WHERE username = $1`,
+        [username]
+      );
+
+      if (result.rows.length === 0) {
+        console.log("Usuario no encontrado");
+        return null;
+      }
+
+      user = result.rows[0];
+      user.userType = 'cliente';
+    } else {
+      user = result.rows[0];
+      user.userType = 'empleado';
     }
 
-    const user = result.rows[0];
-    console.log("Usuario encontrado:", user.username);
+    console.log("Usuario encontrado:", user.username, "Tipo:", userType);
 
     // Verificar contraseña
     const isMatch = await bcrypt.compare(password, user.password);
