@@ -6,6 +6,7 @@ const app = express();
 
 // Rutas
 //ejemplo :const authRoutes = require("./src/routes/authRoutes");
+const loginRoutes = require ("./src/routes/loginroutes");
 
 // Lista de orígenes permitidos
 const allowedOrigins = [
@@ -47,6 +48,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Rutas
 //ejempl: app.use("/api/auth", authRoutes);
+app.use("/api/login", loginRoutes);
 
 // Manejador de errores global
 app.use((err, req, res, next) => {
