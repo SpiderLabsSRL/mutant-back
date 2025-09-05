@@ -6,7 +6,7 @@ const pool = new Pool({
   user: 'postgres',        // Reemplaza con tu usuario de PostgreSQL
   host: 'localhost',         // Reemplaza con tu host
   database: 'Mutant', // Reemplaza con el nombre de tu BD
-  password: '0205', // Reemplaza con tu contraseña
+  password: 'Univalle', // Reemplaza con tu contraseña
   port: 5432,                // Reemplaza con tu puerto si es diferente
 });
 
