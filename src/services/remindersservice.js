@@ -59,7 +59,7 @@ const getExpiringMembers = async () => {
       FROM personas p
       INNER JOIN inscripciones i ON p.id = i.persona_id
       INNER JOIN servicios s ON i.servicio_id = s.id
-      WHERE i.fecha_vencimiento BETWEEN CURRENT_DATE AND (CURRENT_DATE + INTERVAL '7 days')
+      WHERE i.fecha_vencimiento BETWEEN CURRENT_DATE AND (CURRENT_DATE + INTERVAL '3 days')
       AND i.estado = 1
       ORDER BY i.fecha_vencimiento ASC
     `);
