@@ -7,6 +7,7 @@ const app = express();
 // Rutas
 const loginRoutes = require("./src/routes/loginroutes");
 const remindersRoutes = require("./src/routes/remindersroutes");
+const membersListRoutes = require("./src/routes/memberslistroutes");
 
 // Lista de orígenes permitidos
 const allowedOrigins = [
@@ -49,6 +50,7 @@ app.use(express.urlencoded({ extended: true }));
 // Rutas - ¡AGREGA ESTA LÍNEA!
 app.use("/api/reminders", remindersRoutes);
 app.use("/api/login", loginRoutes);
+app.use("/api/members", membersListRoutes);
 
 // Manejador de errores global
 app.use((err, req, res, next) => {
