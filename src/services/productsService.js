@@ -1,8 +1,8 @@
-const { query } = require("../../db");
+const { query, pool } = require("../../db");
 
-const getAllProducts = async () => {
-  const result = await query(
-    `SELECT 
+const getAllProducts = async (sucursalId) => {
+  let sql = `
+    SELECT 
       p.id as idproducto, 
       p.nombre, 
       p.precio_compra, 
@@ -11,8 +11,22 @@ const getAllProducts = async () => {
       p.estado
     FROM productos p
     WHERE p.estado IN (0, 1)
-    ORDER BY p.nombre`
-  );
+  `;
+  
+  if (sucursalId) {
+    sql += `
+      AND p.id IN (
+        SELECT producto_id 
+        FROM producto_sucursal 
+        WHERE sucursal_id = $1
+      )
+    `;
+  }
+  
+  sql += ` ORDER BY p.nombre`;
+  
+  const params = sucursalId ? [sucursalId] : [];
+  const result = await query(sql, params);
   return result.rows;
 };
 
@@ -128,15 +142,20 @@ const toggleProductStatus = async (id) => {
     `UPDATE productos 
      SET estado = CASE WHEN estado = 1 THEN 0 ELSE 1 END 
      WHERE id = $1 
-     RETURNING *`,
+     RETURNING id, nombre, precio_compra, precio_venta, proveedor, estado`,
     [id]
   );
+  
+  if (result.rows.length === 0) {
+    throw new Error("Producto no encontrado");
+  }
+  
   return result.rows[0];
 };
 
-const getProductStock = async (id) => {
-  const result = await query(
-    `SELECT 
+const getProductStock = async (id, sucursalId) => {
+  let sql = `
+    SELECT 
       ps.id as idproducto_sucursal,
       ps.producto_id,
       ps.sucursal_id,
@@ -144,9 +163,17 @@ const getProductStock = async (id) => {
       s.nombre as sucursal_nombre
     FROM producto_sucursal ps
     INNER JOIN sucursales s ON ps.sucursal_id = s.id
-    WHERE ps.producto_id = $1 AND s.estado = 1`,
-    [id]
-  );
+    WHERE ps.producto_id = $1 AND s.estado = 1
+  `;
+  
+  const params = [id];
+  
+  if (sucursalId) {
+    sql += ` AND ps.sucursal_id = $2`;
+    params.push(sucursalId);
+  }
+  
+  const result = await query(sql, params);
   return result.rows;
 };
 

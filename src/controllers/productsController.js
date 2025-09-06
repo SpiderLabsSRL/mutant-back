@@ -2,7 +2,8 @@ const productsService = require("../services/productsService");
 
 const getProducts = async (req, res) => {
   try {
-    const products = await productsService.getAllProducts();
+    const { sucursal } = req.query;
+    const products = await productsService.getAllProducts(sucursal);
     res.json(products);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -69,6 +70,11 @@ const toggleProductStatus = async (req, res) => {
   try {
     const { id } = req.params;
     const updatedProduct = await productsService.toggleProductStatus(id);
+    
+    if (!updatedProduct) {
+      return res.status(404).json({ error: "Producto no encontrado" });
+    }
+    
     res.json(updatedProduct);
   } catch (error) {
     res.status(500).json({ error: error.message });
@@ -78,7 +84,8 @@ const toggleProductStatus = async (req, res) => {
 const getProductStock = async (req, res) => {
   try {
     const { id } = req.params;
-    const stock = await productsService.getProductStock(id);
+    const { sucursal } = req.query;
+    const stock = await productsService.getProductStock(id, sucursal);
     res.json(stock);
   } catch (error) {
     res.status(500).json({ error: error.message });
