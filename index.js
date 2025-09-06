@@ -11,6 +11,7 @@ const remindersRoutes = require("./src/routes/remindersroutes");
 const membersListRoutes = require("./src/routes/memberslistroutes");
 const ProductRoutes = require("./src/routes/productsRoutes");
 const EmployeeRoutes = require ("./src/routes/employeeRoutes");
+const cashRoutes = require("./src/routes/cashRoutes");
 
 // Lista de orígenes permitidos
 const allowedOrigins = [
@@ -57,6 +58,7 @@ app.use("/api/login", loginRoutes);
 app.use("/api/members", membersListRoutes);
 app.use("/api/products", ProductRoutes);
 app.use("/api/employees",EmployeeRoutes);
+app.use("/api/cash", cashRoutes);
 
 // Manejador de errores global
 app.use((err, req, res, next) => {
