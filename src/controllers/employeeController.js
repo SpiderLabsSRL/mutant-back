@@ -21,6 +21,25 @@ exports.getEmployees = async (req, res) => {
 exports.createEmployee = async (req, res) => {
   try {
     const employeeData = req.body;
+    
+    // Validaciones básicas
+    if (!employeeData.nombres || !employeeData.apellidos || !employeeData.ci || 
+        !employeeData.telefono || !employeeData.cargo || !employeeData.sucursal_id ||
+        !employeeData.horarioIngreso || !employeeData.horarioSalida) {
+      return res.status(400).json({ message: "Todos los campos son obligatorios" });
+    }
+
+    // Validar usuario y contraseña para roles administrativos
+    if (['admin', 'recepcionista'].includes(employeeData.cargo)) {
+      if (!employeeData.username) {
+        return res.status(400).json({ message: "Usuario es obligatorio para este cargo" });
+      }
+      // Solo validar password si se está creando nuevo empleado
+      if (!employeeData.password && req.method === 'POST') {
+        return res.status(400).json({ message: "Contraseña es obligatoria para este cargo" });
+      }
+    }
+
     const newEmployee = await employeeService.createEmployee(employeeData);
     res.status(201).json(newEmployee);
   } catch (error) {
@@ -32,6 +51,19 @@ exports.updateEmployee = async (req, res) => {
   try {
     const { id } = req.params;
     const employeeData = req.body;
+    
+    // Validaciones básicas
+    if (!employeeData.nombres || !employeeData.apellidos || !employeeData.ci || 
+        !employeeData.telefono || !employeeData.cargo || !employeeData.sucursal_id ||
+        !employeeData.horarioIngreso || !employeeData.horarioSalida) {
+      return res.status(400).json({ message: "Todos los campos son obligatorios" });
+    }
+
+    // Validar usuario para roles administrativos
+    if (['admin', 'recepcionista'].includes(employeeData.cargo) && !employeeData.username) {
+      return res.status(400).json({ message: "Usuario es obligatorio para este cargo" });
+    }
+
     const updatedEmployee = await employeeService.updateEmployee(id, employeeData);
     res.json(updatedEmployee);
   } catch (error) {

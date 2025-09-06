@@ -1,4 +1,4 @@
-const { query } = require("../../db");
+const { query, pool } = require("../../db");
 const bcrypt = require("bcrypt");
 
 exports.getBranches = async () => {
@@ -70,7 +70,7 @@ exports.createEmployee = async (employeeData) => {
     );
     const empleadoId = empleadoResult.rows[0].id;
 
-    // 3. Crear usuario si es necesario (para roles administrativos)
+    // 3. Crear usuario si es necesario
     if (username && password && ['admin', 'recepcionista'].includes(cargo)) {
       const hashedPassword = await bcrypt.hash(password, 10);
       await client.query(
@@ -82,7 +82,6 @@ exports.createEmployee = async (employeeData) => {
 
     await client.query('COMMIT');
 
-    // Obtener el empleado recién creado
     const newEmployee = await this.getEmployeeById(empleadoId);
     return newEmployee;
   } catch (error) {
@@ -138,24 +137,48 @@ exports.updateEmployee = async (id, employeeData) => {
       [cargo, sucursal_id, horarioIngreso, horarioSalida, id]
     );
 
-    // 4. Manejar usuario (eliminar existente y crear nuevo si es necesario)
-    await client.query(
-      'DELETE FROM usuarios WHERE empleado_id = $1',
-      [id]
-    );
+    // 4. Manejar usuario
+    if (['admin', 'recepcionista'].includes(cargo)) {
+      // Verificar si ya existe un usuario
+      const usuarioExistente = await client.query(
+        'SELECT id FROM usuarios WHERE empleado_id = $1',
+        [id]
+      );
 
-    if (username && password && ['admin', 'recepcionista'].includes(cargo)) {
-      const hashedPassword = await bcrypt.hash(password, 10);
+      if (usuarioExistente.rows.length > 0) {
+        // Actualizar usuario existente
+        if (password) {
+          const hashedPassword = await bcrypt.hash(password, 10);
+          await client.query(
+            'UPDATE usuarios SET username = $1, password_hash = $2 WHERE empleado_id = $3',
+            [username, hashedPassword, id]
+          );
+        } else {
+          // Solo actualizar username si no se cambia la contraseña
+          await client.query(
+            'UPDATE usuarios SET username = $1 WHERE empleado_id = $2',
+            [username, id]
+          );
+        }
+      } else if (username && password) {
+        // Crear nuevo usuario
+        const hashedPassword = await bcrypt.hash(password, 10);
+        await client.query(
+          `INSERT INTO usuarios (username, password_hash, empleado_id) 
+           VALUES ($1, $2, $3)`,
+          [username, hashedPassword, id]
+        );
+      }
+    } else {
+      // Eliminar usuario si el cargo ya no requiere acceso
       await client.query(
-        `INSERT INTO usuarios (username, password_hash, empleado_id) 
-         VALUES ($1, $2, $3)`,
-        [username, hashedPassword, id]
+        'DELETE FROM usuarios WHERE empleado_id = $1',
+        [id]
       );
     }
 
     await client.query('COMMIT');
 
-    // Obtener el empleado actualizado
     const updatedEmployee = await this.getEmployeeById(id);
     return updatedEmployee;
   } catch (error) {
@@ -195,10 +218,6 @@ exports.toggleEmployeeStatus = async (id) => {
 };
 
 exports.registerFingerprint = async (id) => {
-  // Esta función simularía el registro de huella en un sistema real
-  // En una implementación real, se conectaría con el dispositivo de huellas
-  
-  // Simulamos el registro actualizando la base de datos
   const empleadoResult = await query(
     'SELECT persona_id FROM empleados WHERE id = $1',
     [id]
@@ -210,14 +229,13 @@ exports.registerFingerprint = async (id) => {
   
   const personaId = empleadoResult.rows[0].persona_id;
   
-  // En un sistema real, aquí se almacenaría el template de la huella
+  // Simular registro de huella
   await query(
     'UPDATE personas SET huella_digital = $1 WHERE id = $2',
     [Buffer.from('simulated_fingerprint_data'), personaId]
   );
 };
 
-// Función auxiliar para obtener un empleado por ID
 exports.getEmployeeById = async (id) => {
   const result = await query(`
     SELECT 
