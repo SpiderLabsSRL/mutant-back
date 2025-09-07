@@ -3,15 +3,29 @@ const PDFDocument = require('pdfkit');
 const bcrypt = require("bcrypt");
 
 // Obtener miembros con paginación y filtros
-const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, sucursalFilter) => {
+const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, sucursalFilter, userSucursalId, userRol) => {
   try {
-    console.log("Parámetros del servicio:", { page, limit, searchTerm, serviceFilter, statusFilter, sucursalFilter });
+    console.log("Parámetros del servicio:", { page, limit, searchTerm, serviceFilter, statusFilter, sucursalFilter, userSucursalId, userRol });
     
     const offset = (page - 1) * limit;
     
     let whereConditions = [];
     let queryParams = [];
     let paramCount = 0;
+
+    // Filtrar por sucursal según el rol del usuario
+    if (userRol === 'recepcionista' && userSucursalId) {
+      paramCount++;
+      whereConditions.push(`su.id = $${paramCount}`);
+      queryParams.push(parseInt(userSucursalId));
+    } else if (sucursalFilter && sucursalFilter !== "all") {
+      paramCount++;
+      whereConditions.push(`su.id = $${paramCount}`);
+      queryParams.push(parseInt(sucursalFilter));
+    }
+
+    // Excluir empleados - solo personas con servicios
+    whereConditions.push(`i.persona_id IS NOT NULL`);
 
     // Filtro de búsqueda
     if (searchTerm && searchTerm.trim() !== "") {
@@ -34,13 +48,6 @@ const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, 
       } else if (statusFilter === "inactive") {
         whereConditions.push(`(i.fecha_vencimiento < CURRENT_DATE AND (i.ingresos_disponibles IS NULL OR i.ingresos_disponibles <= 0))`);
       }
-    }
-
-    // Filtro por sucursal
-    if (sucursalFilter && sucursalFilter !== "all") {
-      paramCount++;
-      whereConditions.push(`su.id = $${paramCount}`);
-      queryParams.push(parseInt(sucursalFilter));
     }
 
     const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
@@ -75,10 +82,12 @@ const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, 
         END as status,
         TO_CHAR(MIN(i.fecha_inicio), 'YYYY-MM-DD') as registrationDate
       FROM personas p
-      LEFT JOIN inscripciones i ON p.id = i.persona_id AND i.estado = 1
-      LEFT JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
-      LEFT JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
-      ${whereClause}
+      INNER JOIN inscripciones i ON p.id = i.persona_id AND i.estado = 1
+      INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+      INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
+      -- Excluir empleados
+      WHERE p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)
+      ${whereClause ? 'AND ' + whereClause.replace('WHERE ', '') : ''}
       GROUP BY p.id, p.nombres, p.apellidos, p.ci, p.telefono, p.fecha_nacimiento, su.id, su.nombre
       ORDER BY p.nombres, p.apellidos
       LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}
@@ -88,10 +97,12 @@ const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, 
     const countQuery = `
       SELECT COUNT(DISTINCT p.id)
       FROM personas p
-      LEFT JOIN inscripciones i ON p.id = i.persona_id AND i.estado = 1
-      LEFT JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
-      LEFT JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
-      ${whereClause}
+      INNER JOIN inscripciones i ON p.id = i.persona_id AND i.estado = 1
+      INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+      INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
+      -- Excluir empleados
+      WHERE p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)
+      ${whereClause ? 'AND ' + whereClause.replace('WHERE ', '') : ''}
     `;
 
     queryParams.push(limit, offset);
@@ -125,11 +136,25 @@ const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, 
 };
 
 // Obtener todos los miembros (sin paginación)
-const getAllMembers = async (searchTerm, serviceFilter, statusFilter, sucursalFilter) => {
+const getAllMembers = async (searchTerm, serviceFilter, statusFilter, sucursalFilter, userSucursalId, userRol) => {
   try {
     let whereConditions = [];
     let queryParams = [];
     let paramCount = 0;
+
+    // Filtrar por sucursal según el rol del usuario
+    if (userRol === 'recepcionista' && userSucursalId) {
+      paramCount++;
+      whereConditions.push(`su.id = $${paramCount}`);
+      queryParams.push(parseInt(userSucursalId));
+    } else if (sucursalFilter && sucursalFilter !== "all") {
+      paramCount++;
+      whereConditions.push(`su.id = $${paramCount}`);
+      queryParams.push(parseInt(sucursalFilter));
+    }
+
+    // Excluir empleados - solo personas con servicios
+    whereConditions.push(`i.persona_id IS NOT NULL`);
 
     // Filtro de búsqueda
     if (searchTerm && searchTerm.trim() !== "") {
@@ -152,13 +177,6 @@ const getAllMembers = async (searchTerm, serviceFilter, statusFilter, sucursalFi
       } else if (statusFilter === "inactive") {
         whereConditions.push(`(i.fecha_vencimiento < CURRENT_DATE AND (i.ingresos_disponibles IS NULL OR i.ingresos_disponibles <= 0))`);
       }
-    }
-
-    // Filtro por sucursal
-    if (sucursalFilter && sucursalFilter !== "all") {
-      paramCount++;
-      whereConditions.push(`su.id = $${paramCount}`);
-      queryParams.push(parseInt(sucursalFilter));
     }
 
     const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
@@ -192,10 +210,12 @@ const getAllMembers = async (searchTerm, serviceFilter, statusFilter, sucursalFi
         END as status,
         TO_CHAR(MIN(i.fecha_inicio), 'YYYY-MM-DD') as registrationDate
       FROM personas p
-      LEFT JOIN inscripciones i ON p.id = i.persona_id AND i.estado = 1
-      LEFT JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
-      LEFT JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
-      ${whereClause}
+      INNER JOIN inscripciones i ON p.id = i.persona_id AND i.estado = 1
+      INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+      INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
+      -- Excluir empleados
+      WHERE p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)
+      ${whereClause ? 'AND ' + whereClause.replace('WHERE ', '') : ''}
       GROUP BY p.id, p.nombres, p.apellidos, p.ci, p.telefono, p.fecha_nacimiento, su.id, su.nombre
       ORDER BY p.nombres, p.apellidos
     `;
@@ -222,69 +242,10 @@ const getAllMembers = async (searchTerm, serviceFilter, statusFilter, sucursalFi
   }
 };
 
-// Editar miembro
-const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
-  try {
-    // Verificar si el CI ya existe en otro miembro
-    const checkCiQuery = `
-      SELECT id FROM personas WHERE ci = $1 AND id != $2
-    `;
-    const ciResult = await query(checkCiQuery, [ci, id]);
-    
-    if (ciResult.rows.length > 0) {
-      throw new Error("La cédula de identidad ya existe para otro miembro");
-    }
-
-    const updateQuery = `
-      UPDATE personas 
-      SET nombres = $1, apellidos = $2, ci = $3, telefono = $4, fecha_nacimiento = $5
-      WHERE id = $6
-      RETURNING *
-    `;
-
-    console.log("Ejecutando update de miembro:", { id, nombres, apellidos, ci, phone, birthDate });
-    
-    const result = await query(updateQuery, [nombres, apellidos, ci, phone, birthDate, id]);
-
-    if (result.rows.length === 0) {
-      throw new Error("Miembro no encontrado");
-    }
-
-    return result.rows[0];
-  } catch (error) {
-    console.error("Error en editMember service:", error);
-    throw new Error(`Error al editar miembro en la base de datos: ${error.message}`);
-  }
-};
-
-// Eliminar miembro
-const deleteMember = async (id) => {
-  try {
-    // Verificar si el miembro existe
-    const checkQuery = 'SELECT * FROM personas WHERE id = $1';
-    const checkResult = await query(checkQuery, [id]);
-    
-    if (checkResult.rows.length === 0) {
-      throw new Error("Miembro no encontrado");
-    }
-
-    // Primero eliminamos las inscripciones relacionadas
-    await query('DELETE FROM inscripciones WHERE persona_id = $1', [id]);
-    
-    // Luego eliminamos la persona
-    const result = await query('DELETE FROM personas WHERE id = $1 RETURNING *', [id]);
-
-    return result.rows[0];
-  } catch (error) {
-    console.error("Error en deleteMember service:", error);
-    throw new Error(`Error al eliminar miembro de la base de datos: ${error.message}`);
-  }
-};
-
 // Exportar miembros a PDF
-const exportMembersToPDF = async (searchTerm, serviceFilter, statusFilter, sucursalFilter) => {
+const exportMembersToPDF = async (searchTerm, serviceFilter, statusFilter, sucursalFilter, userSucursalId, userRol) => {
   try {
-    const members = await getAllMembers(searchTerm, serviceFilter, statusFilter, sucursalFilter);
+    const members = await getAllMembers(searchTerm, serviceFilter, statusFilter, sucursalFilter, userSucursalId, userRol);
     
     // Crear documento PDF
     const doc = new PDFDocument({ margin: 50 });
@@ -296,7 +257,8 @@ const exportMembersToPDF = async (searchTerm, serviceFilter, statusFilter, sucur
     doc.fontSize(20).text('LISTA DE MIEMBROS', { align: 'center' });
     doc.moveDown();
     
-    // Agregar fecha de exportación
+    // Agregar información del usuario
+    doc.fontSize(10).text(`Usuario: ${userRol} ${userSucursalId ? '(Sucursal: ' + userSucursalId + ')' : ''}`, { align: 'right' });
     doc.fontSize(10).text(`Fecha de exportación: ${new Date().toLocaleDateString('es-ES')}`, { align: 'right' });
     doc.moveDown();
     
@@ -374,6 +336,65 @@ const exportMembersToPDF = async (searchTerm, serviceFilter, statusFilter, sucur
   } catch (error) {
     console.error("Error en exportMembersToPDF service:", error);
     throw new Error(`Error al generar PDF de miembros: ${error.message}`);
+  }
+};
+
+// Editar miembro (se mantiene igual)
+const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
+  try {
+    // Verificar si el CI ya existe en otro miembro
+    const checkCiQuery = `
+      SELECT id FROM personas WHERE ci = $1 AND id != $2
+    `;
+    const ciResult = await query(checkCiQuery, [ci, id]);
+    
+    if (ciResult.rows.length > 0) {
+      throw new Error("La cédula de identidad ya existe para otro miembro");
+    }
+
+    const updateQuery = `
+      UPDATE personas 
+      SET nombres = $1, apellidos = $2, ci = $3, telefono = $4, fecha_nacimiento = $5
+      WHERE id = $6
+      RETURNING *
+    `;
+
+    console.log("Ejecutando update de miembro:", { id, nombres, apellidos, ci, phone, birthDate });
+    
+    const result = await query(updateQuery, [nombres, apellidos, ci, phone, birthDate, id]);
+
+    if (result.rows.length === 0) {
+      throw new Error("Miembro no encontrado");
+    }
+
+    return result.rows[0];
+  } catch (error) {
+    console.error("Error en editMember service:", error);
+    throw new Error(`Error al editar miembro en la base de datos: ${error.message}`);
+  }
+};
+
+// Eliminar miembro (se mantiene igual)
+const deleteMember = async (id) => {
+  try {
+    // Verificar si el miembro existe
+    const checkQuery = 'SELECT * FROM personas WHERE id = $1';
+    const checkResult = await query(checkQuery, [id]);
+    
+    if (checkResult.rows.length === 0) {
+      throw new Error("Miembro no encontrado");
+    }
+
+    // Primero eliminamos las inscripciones relacionadas
+    await query('DELETE FROM inscripciones WHERE persona_id = $1', [id]);
+    
+    // Luego eliminamos la persona
+    const result = await query('DELETE FROM personas WHERE id = $1 RETURNING *', [id]);
+
+    return result.rows[0];
+  } catch (error) {
+    console.error("Error en deleteMember service:", error);
+    throw new Error(`Error al eliminar miembro de la base de datos: ${error.message}`);
   }
 };
 
