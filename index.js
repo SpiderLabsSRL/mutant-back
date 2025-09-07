@@ -12,6 +12,7 @@ const membersListRoutes = require("./src/routes/memberslistroutes");
 const ProductRoutes = require("./src/routes/productsRoutes");
 const EmployeeRoutes = require ("./src/routes/employeeRoutes");
 const cashRoutes = require("./src/routes/cashRoutes");
+const servicesRoutes = require("./src/routes/servicesRoutes"); 
 
 // Lista de orígenes permitidos
 const allowedOrigins = [
@@ -59,6 +60,7 @@ app.use("/api/members", membersListRoutes);
 app.use("/api/products", ProductRoutes);
 app.use("/api/employees",EmployeeRoutes);
 app.use("/api/cash", cashRoutes);
+app.use("/api/services", servicesRoutes);
 
 // Manejador de errores global
 app.use((err, req, res, next) => {
