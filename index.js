@@ -15,7 +15,15 @@ const cashRoutes = require("./src/routes/cashRoutes");
 const servicesRoutes = require("./src/routes/servicesRoutes"); 
 const ReportsRoutes = require("./src/routes/reportsRoutes");
 const AccessRoutes = require("./src/routes/accessRoutes");
+<<<<<<< Updated upstream
 const RegisterMemberRoutes = require("./src/routes/RegisterMemberRoutes");
+=======
+<<<<<<< HEAD
+const salesControlRoutes = require('./src/routes/salescontrolRoutes');
+=======
+const RegisterMemberRoutes = require("./src/routes/RegisterMemberRoutes");
+>>>>>>> 6ce65f7289d8669d6ae2057c32d1f117d9fc92b1
+>>>>>>> Stashed changes
 // Lista de orígenes permitidos
 const allowedOrigins = [
   "http://localhost:8080",
@@ -65,7 +73,15 @@ app.use("/api/cash", cashRoutes);
 app.use("/api/services", servicesRoutes);
 app.use("/api/reports", ReportsRoutes);
 app.use("/api/access",AccessRoutes);
+<<<<<<< Updated upstream
 app.use("/api/inscription", RegisterMemberRoutes);
+=======
+<<<<<<< HEAD
+app.use('/api/sales', salesControlRoutes);
+=======
+app.use("/api/inscription", RegisterMemberRoutes);
+>>>>>>> 6ce65f7289d8669d6ae2057c32d1f117d9fc92b1
+>>>>>>> Stashed changes
 
 // Manejador de errores global
 app.use((err, req, res, next) => {
