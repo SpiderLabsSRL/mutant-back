@@ -15,6 +15,7 @@ const cashRoutes = require("./src/routes/cashRoutes");
 const servicesRoutes = require("./src/routes/servicesRoutes"); 
 const ReportsRoutes = require("./src/routes/reportsRoutes");
 const AccessRoutes = require("./src/routes/accessRoutes");
+const RegisterMemberRoutes = require("./src/routes/RegisterMemberRoutes");
 // Lista de orígenes permitidos
 const allowedOrigins = [
   "http://localhost:8080",
@@ -64,6 +65,7 @@ app.use("/api/cash", cashRoutes);
 app.use("/api/services", servicesRoutes);
 app.use("/api/reports", ReportsRoutes);
 app.use("/api/access",AccessRoutes);
+app.use("/api/inscription", RegisterMemberRoutes);
 
 // Manejador de errores global
 app.use((err, req, res, next) => {
