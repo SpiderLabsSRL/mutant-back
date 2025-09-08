@@ -28,7 +28,7 @@ const getSucursales = async (req, res) => {
 
 const createService = async (req, res) => {
   try {
-    const { name, price, maxEntries, sucursales } = req.body;
+    const { name, price, maxEntries, sucursales, multisucursal, sucursalesMultisucursal } = req.body;
     
     if (!name || !price || !maxEntries || !sucursales || sucursales.length === 0) {
       return res.status(400).json({ 
@@ -37,11 +37,34 @@ const createService = async (req, res) => {
       });
     }
 
+    if (multisucursal && (!sucursalesMultisucursal || sucursalesMultisucursal.length < 2)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Para servicios multisucursal debe seleccionar al menos 2 sucursales" 
+      });
+    }
+
+    // Validar que las sucursales multisucursal estén dentro de las disponibles
+    if (multisucursal) {
+      const invalidSucursales = sucursalesMultisucursal.filter(
+        sucursalId => !sucursales.includes(sucursalId)
+      );
+      
+      if (invalidSucursales.length > 0) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "Las sucursales multisucursal deben estar entre las sucursales disponibles" 
+        });
+      }
+    }
+
     const newService = await servicesService.createService({
       name,
       price,
       maxEntries,
-      sucursales
+      sucursales,
+      multisucursal: multisucursal || false,
+      sucursalesMultisucursal: multisucursal ? sucursalesMultisucursal : []
     });
     
     res.status(201).json(newService);
@@ -57,7 +80,7 @@ const createService = async (req, res) => {
 const updateService = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, price, maxEntries, sucursales } = req.body;
+    const { name, price, maxEntries, sucursales, multisucursal, sucursalesMultisucursal } = req.body;
     
     if (!name || !price || !maxEntries || !sucursales || sucursales.length === 0) {
       return res.status(400).json({ 
@@ -66,11 +89,34 @@ const updateService = async (req, res) => {
       });
     }
 
+    if (multisucursal && (!sucursalesMultisucursal || sucursalesMultisucursal.length < 2)) {
+      return res.status(400).json({ 
+        success: false, 
+        message: "Para servicios multisucursal debe seleccionar al menos 2 sucursales" 
+      });
+    }
+
+    // Validar que las sucursales multisucursal estén dentro de las disponibles
+    if (multisucursal) {
+      const invalidSucursales = sucursalesMultisucursal.filter(
+        sucursalId => !sucursales.includes(sucursalId)
+      );
+      
+      if (invalidSucursales.length > 0) {
+        return res.status(400).json({ 
+          success: false, 
+          message: "Las sucursales multisucursal deben estar entre las sucursales disponibles" 
+        });
+      }
+    }
+
     const updatedService = await servicesService.updateService(id, {
       name,
       price,
       maxEntries,
-      sucursales
+      sucursales,
+      multisucursal: multisucursal || false,
+      sucursalesMultisucursal: multisucursal ? sucursalesMultisucursal : []
     });
     
     res.json(updatedService);
