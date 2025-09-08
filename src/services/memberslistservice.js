@@ -25,7 +25,7 @@ const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, 
     }
 
     // Excluir empleados - solo personas con servicios
-    whereConditions.push(`i.persona_id IS NOT NULL`);
+    whereConditions.push(`p.id IN (SELECT DISTINCT persona_id FROM inscripciones WHERE estado = 1)`);
 
     // Filtro de búsqueda
     if (searchTerm && searchTerm.trim() !== "") {
@@ -44,16 +44,41 @@ const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, 
     // Filtro por estado
     if (statusFilter && statusFilter !== "all") {
       if (statusFilter === "active") {
-        whereConditions.push(`(i.fecha_vencimiento >= CURRENT_DATE OR i.ingresos_disponibles > 0)`);
+        whereConditions.push(`EXISTS (
+          SELECT 1 FROM inscripciones i2 
+          WHERE i2.persona_id = p.id 
+          AND i2.fecha_vencimiento >= CURRENT_DATE
+          AND i2.estado = 1
+        )`);
       } else if (statusFilter === "inactive") {
-        whereConditions.push(`(i.fecha_vencimiento < CURRENT_DATE AND (i.ingresos_disponibles IS NULL OR i.ingresos_disponibles <= 0))`);
+        whereConditions.push(`NOT EXISTS (
+          SELECT 1 FROM inscripciones i2 
+          WHERE i2.persona_id = p.id 
+          AND i2.fecha_vencimiento >= CURRENT_DATE
+          AND i2.estado = 1
+        )`);
       }
     }
 
     const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
-    // Consulta para obtener miembros - MEJORADA
+    // Consulta para obtener miembros - CORREGIDA
     const membersQuery = `
+      WITH ultimas_inscripciones AS (
+        SELECT DISTINCT ON (i.persona_id, i.servicio_id)
+          i.persona_id,
+          i.servicio_id,
+          i.fecha_inicio,
+          i.fecha_vencimiento,
+          i.ingresos_disponibles,
+          i.sucursal_id,  -- AÑADIDO: esta columna faltaba
+          i.estado,
+          s.nombre as servicio_nombre,
+          ROW_NUMBER() OVER (PARTITION BY i.persona_id, i.servicio_id ORDER BY i.fecha_inicio DESC) as rn
+        FROM inscripciones i
+        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        WHERE i.estado = 1
+      )
       SELECT 
         p.id,
         CONCAT(p.nombres, ' ', p.apellidos) as name,
@@ -65,26 +90,27 @@ const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, 
         COALESCE(
           jsonb_agg(
             DISTINCT jsonb_build_object(
-              'name', s.nombre,
-              'expirationDate', TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD')
+              'name', ui.servicio_nombre,
+              'expirationDate', TO_CHAR(ui.fecha_vencimiento, 'YYYY-MM-DD'),
+              'status', CASE WHEN ui.fecha_vencimiento >= CURRENT_DATE THEN 'active' ELSE 'inactive' END
             )
-          ) FILTER (WHERE s.nombre IS NOT NULL),
+          ) FILTER (WHERE ui.servicio_nombre IS NOT NULL),
           '[]'::jsonb
         ) as services,
         CASE 
           WHEN EXISTS (
             SELECT 1 FROM inscripciones i2 
             WHERE i2.persona_id = p.id 
-            AND (i2.fecha_vencimiento >= CURRENT_DATE OR i2.ingresos_disponibles > 0)
+            AND i2.fecha_vencimiento >= CURRENT_DATE
             AND i2.estado = 1
           ) THEN 'active'
           ELSE 'inactive'
         END as status,
-        TO_CHAR(MIN(i.fecha_inicio), 'YYYY-MM-DD') as registrationDate
+        TO_CHAR(MIN(ui.fecha_inicio), 'YYYY-MM-DD') as registrationDate
       FROM personas p
-      INNER JOIN inscripciones i ON p.id = i.persona_id AND i.estado = 1
-      INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
-      INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
+      INNER JOIN ultimas_inscripciones ui ON p.id = ui.persona_id
+      INNER JOIN servicios s ON ui.servicio_id = s.id AND s.estado = 1
+      INNER JOIN sucursales su ON ui.sucursal_id = su.id AND su.estado = 1
       -- Excluir empleados
       WHERE p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)
       ${whereClause ? 'AND ' + whereClause.replace('WHERE ', '') : ''}
@@ -93,13 +119,22 @@ const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, 
       LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}
     `;
 
-    // Consulta para contar total - MEJORADA
+    // Consulta para contar total - CORREGIDA
     const countQuery = `
+      WITH ultimas_inscripciones AS (
+        SELECT DISTINCT ON (i.persona_id, i.servicio_id)
+          i.persona_id,
+          i.servicio_id,
+          i.sucursal_id,  -- AÑADIDO: esta columna faltaba
+          i.fecha_vencimiento
+        FROM inscripciones i
+        WHERE i.estado = 1
+      )
       SELECT COUNT(DISTINCT p.id)
       FROM personas p
-      INNER JOIN inscripciones i ON p.id = i.persona_id AND i.estado = 1
-      INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
-      INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
+      INNER JOIN ultimas_inscripciones ui ON p.id = ui.persona_id
+      INNER JOIN servicios s ON ui.servicio_id = s.id AND s.estado = 1
+      INNER JOIN sucursales su ON ui.sucursal_id = su.id AND su.estado = 1
       -- Excluir empleados
       WHERE p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)
       ${whereClause ? 'AND ' + whereClause.replace('WHERE ', '') : ''}
@@ -154,7 +189,7 @@ const getAllMembers = async (searchTerm, serviceFilter, statusFilter, sucursalFi
     }
 
     // Excluir empleados - solo personas con servicios
-    whereConditions.push(`i.persona_id IS NOT NULL`);
+    whereConditions.push(`p.id IN (SELECT DISTINCT persona_id FROM inscripciones WHERE estado = 1)`);
 
     // Filtro de búsqueda
     if (searchTerm && searchTerm.trim() !== "") {
@@ -173,15 +208,40 @@ const getAllMembers = async (searchTerm, serviceFilter, statusFilter, sucursalFi
     // Filtro por estado
     if (statusFilter && statusFilter !== "all") {
       if (statusFilter === "active") {
-        whereConditions.push(`(i.fecha_vencimiento >= CURRENT_DATE OR i.ingresos_disponibles > 0)`);
+        whereConditions.push(`EXISTS (
+          SELECT 1 FROM inscripciones i2 
+          WHERE i2.persona_id = p.id 
+          AND i2.fecha_vencimiento >= CURRENT_DATE
+          AND i2.estado = 1
+        )`);
       } else if (statusFilter === "inactive") {
-        whereConditions.push(`(i.fecha_vencimiento < CURRENT_DATE AND (i.ingresos_disponibles IS NULL OR i.ingresos_disponibles <= 0))`);
+        whereConditions.push(`NOT EXISTS (
+          SELECT 1 FROM inscripciones i2 
+          WHERE i2.persona_id = p.id 
+          AND i2.fecha_vencimiento >= CURRENT_DATE
+          AND i2.estado = 1
+        )`);
       }
     }
 
     const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
 
     const queryText = `
+      WITH ultimas_inscripciones AS (
+        SELECT DISTINCT ON (i.persona_id, i.servicio_id)
+          i.persona_id,
+          i.servicio_id,
+          i.fecha_inicio,
+          i.fecha_vencimiento,
+          i.ingresos_disponibles,
+          i.sucursal_id,  -- AÑADIDO: esta columna faltaba
+          i.estado,
+          s.nombre as servicio_nombre,
+          ROW_NUMBER() OVER (PARTITION BY i.persona_id, i.servicio_id ORDER BY i.fecha_inicio DESC) as rn
+        FROM inscripciones i
+        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        WHERE i.estado = 1
+      )
       SELECT 
         p.id,
         CONCAT(p.nombres, ' ', p.apellidos) as name,
@@ -193,26 +253,27 @@ const getAllMembers = async (searchTerm, serviceFilter, statusFilter, sucursalFi
         COALESCE(
           jsonb_agg(
             DISTINCT jsonb_build_object(
-              'name', s.nombre,
-              'expirationDate', TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD')
+              'name', ui.servicio_nombre,
+              'expirationDate', TO_CHAR(ui.fecha_vencimiento, 'YYYY-MM-DD'),
+              'status', CASE WHEN ui.fecha_vencimiento >= CURRENT_DATE THEN 'active' ELSE 'inactive' END
             )
-          ) FILTER (WHERE s.nombre IS NOT NULL),
+          ) FILTER (WHERE ui.servicio_nombre IS NOT NULL),
           '[]'::jsonb
         ) as services,
         CASE 
           WHEN EXISTS (
             SELECT 1 FROM inscripciones i2 
             WHERE i2.persona_id = p.id 
-            AND (i2.fecha_vencimiento >= CURRENT_DATE OR i2.ingresos_disponibles > 0)
+            AND i2.fecha_vencimiento >= CURRENT_DATE
             AND i2.estado = 1
           ) THEN 'active'
           ELSE 'inactive'
         END as status,
-        TO_CHAR(MIN(i.fecha_inicio), 'YYYY-MM-DD') as registrationDate
+        TO_CHAR(MIN(ui.fecha_inicio), 'YYYY-MM-DD') as registrationDate
       FROM personas p
-      INNER JOIN inscripciones i ON p.id = i.persona_id AND i.estado = 1
-      INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
-      INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
+      INNER JOIN ultimas_inscripciones ui ON p.id = ui.persona_id
+      INNER JOIN servicios s ON ui.servicio_id = s.id AND s.estado = 1
+      INNER JOIN sucursales su ON ui.sucursal_id = su.id AND su.estado = 1
       -- Excluir empleados
       WHERE p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)
       ${whereClause ? 'AND ' + whereClause.replace('WHERE ', '') : ''}
@@ -314,7 +375,7 @@ const exportMembersToPDF = async (searchTerm, serviceFilter, statusFilter, sucur
       doc.text(member.ci, 200, yPosition, { width: 80 });
       doc.text(member.phone, 270, yPosition, { width: 80 });
       doc.text(member.status === 'active' ? 'ACTIVO' : 'INACTIVO', 350, yPosition, { width: 60 });
-      doc.text(member.sucursal, 420, yPosition, { width: 100 });
+      doc.text(member.sucursal_name || member.sucursal, 420, yPosition, { width: 100 });
       
       yPosition += 15;
     });
@@ -339,7 +400,7 @@ const exportMembersToPDF = async (searchTerm, serviceFilter, statusFilter, sucur
   }
 };
 
-// Editar miembro (se mantiene igual)
+// Editar miembro
 const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
   try {
     // Verificar si el CI ya existe en otro miembro
@@ -374,7 +435,7 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
   }
 };
 
-// Eliminar miembro (se mantiene igual)
+// Eliminar miembro
 const deleteMember = async (id) => {
   try {
     // Verificar si el miembro existe
