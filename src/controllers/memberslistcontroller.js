@@ -49,13 +49,19 @@ const getMembers = async (req, res) => {
       });
     }
 
+    // Obtener información del usuario autenticado
+    const userSucursalId = req.user.idsucursal;
+    const userRol = req.user.rol;
+
     const result = await membersListService.getMembers(
       parseInt(page),
       parseInt(limit),
       searchTerm,
       serviceFilter,
       statusFilter,
-      sucursalFilter
+      sucursalFilter,
+      userSucursalId,
+      userRol
     );
 
     console.log(`Encontrados ${result.members.length} miembros de ${result.totalCount} totales`);
@@ -87,11 +93,17 @@ const getAllMembers = async (req, res) => {
       sucursalFilter = "all"
     } = req.query;
 
+    // Obtener información del usuario autenticado
+    const userSucursalId = req.user.idsucursal;
+    const userRol = req.user.rol;
+
     const result = await membersListService.getAllMembers(
       searchTerm,
       serviceFilter,
       statusFilter,
-      sucursalFilter
+      sucursalFilter,
+      userSucursalId,
+      userRol
     );
 
     console.log(`Encontrados ${result.length} miembros en total`);
@@ -213,11 +225,17 @@ const exportMembersToPDF = async (req, res) => {
 
     console.log("Exportando a PDF con filtros:", { searchTerm, serviceFilter, statusFilter, sucursalFilter });
 
+    // Obtener información del usuario autenticado
+    const userSucursalId = req.user.idsucursal;
+    const userRol = req.user.rol;
+
     const pdfBuffer = await membersListService.exportMembersToPDF(
       searchTerm,
       serviceFilter,
       statusFilter,
-      sucursalFilter
+      sucursalFilter,
+      userSucursalId,
+      userRol
     );
 
     res.setHeader('Content-Type', 'application/pdf');
