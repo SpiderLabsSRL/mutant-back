@@ -118,6 +118,16 @@ exports.registerMember = async (registrationData) => {
       }
     }
     
+    // Determinar el detalle del pago según la forma de pago
+    let detallePago = null;
+    if (registrationData.formaPago === 'efectivo') {
+      detallePago = 'Pago completo en efectivo';
+    } else if (registrationData.formaPago === 'qr') {
+      detallePago = 'Pago completo con QR';
+    } else if (registrationData.formaPago === 'mixto') {
+      detallePago = `Efectivo: ${registrationData.montoEfectivo}, QR: ${registrationData.montoQr}`;
+    }
+    
     // Registrar venta de servicios
     const ventaResult = await client.query(`
       INSERT INTO ventas_servicios (
@@ -134,9 +144,7 @@ exports.registerMember = async (registrationData) => {
       registrationData.descripcionDescuento,
       registrationData.total,
       registrationData.formaPago,
-      registrationData.formaPago === 'mixto' 
-        ? `Efectivo: ${registrationData.montoEfectivo}, QR: ${registrationData.montoQr}`
-        : null,
+      detallePago,
       registrationData.sucursalId,
       registrationData.cajaId
     ]);
