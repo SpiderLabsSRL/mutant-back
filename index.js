@@ -17,6 +17,8 @@ const ReportsRoutes = require("./src/routes/reportsRoutes");
 const AccessRoutes = require("./src/routes/accessRoutes");
 const RegisterMemberRoutes = require("./src/routes/RegisterMemberRoutes");
 const salesControlRoutes = require('./src/routes/salescontrolRoutes');
+const newtransactionRoutes = require('./src/routes/newtransactionRoutes');
+
 const allowedOrigins = [
   "http://localhost:8080",
   "https://libreriamaite.netlify.app",//front en linea
@@ -68,6 +70,7 @@ app.use("/api/access",AccessRoutes);
 app.use("/api/inscription", RegisterMemberRoutes);
 app.use('/api/sales', salesControlRoutes);
 app.use("/api/inscription", RegisterMemberRoutes);
+app.use('/api', newtransactionRoutes);
 
 // Manejador de errores global
 app.use((err, req, res, next) => {
