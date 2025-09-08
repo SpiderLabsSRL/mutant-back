@@ -227,6 +227,20 @@ const getAvailableServices = async (req, res) => {
     });
   }
 };
+const getAvailableBranches = async (req, res) => {
+  try {
+    const branches = await membersListService.getAvailableBranches();
+    
+    res.json(branches);
+  } catch (error) {
+    console.error("Error en getAvailableBranches controller:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error interno del servidor al obtener sucursales disponibles",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined
+    });
+  }
+};
 
 module.exports = {
   testRoute,
@@ -234,5 +248,6 @@ module.exports = {
   getAllMembers,
   editMember,
   deleteMember,
-  getAvailableServices
+  getAvailableServices,
+  getAvailableBranches
 };

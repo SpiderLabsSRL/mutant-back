@@ -325,10 +325,31 @@ const getAvailableServices = async () => {
     throw new Error(`Error al obtener servicios disponibles desde la base de datos: ${error.message}`);
   }
 };
+const getAvailableBranches = async () => {
+  try {
+    const queryText = `
+      SELECT id, nombre 
+      FROM sucursales 
+      WHERE estado = 1 
+      ORDER BY nombre
+    `;
+    
+    const result = await query(queryText);
+    
+    return result.rows.map(row => ({
+      id: row.id.toString(),
+      name: row.nombre
+    }));
+  } catch (error) {
+    console.error("Error en getAvailableBranches service:", error);
+    throw new Error(`Error al obtener sucursales disponibles desde la base de datos: ${error.message}`);
+  }
+};
 module.exports = {
   getMembers,
   getAllMembers,
   editMember,
   deleteMember,
-  getAvailableServices
+  getAvailableServices,
+  getAvailableBranches
 };

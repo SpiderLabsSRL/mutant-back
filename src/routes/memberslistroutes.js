@@ -18,5 +18,6 @@ router.get("/services/available", authenticate, authorize(['admin', 'recepcionis
 // Rutas accesibles solo para admin
 router.put("/:id", authorize(['admin']), membersListController.editMember);
 router.delete("/:id", authorize(['admin']), membersListController.deleteMember);
+router.get("/branches/available", authenticate, authorize(['admin', 'recepcionista']), membersListController.getAvailableBranches);
 
 module.exports = router;
