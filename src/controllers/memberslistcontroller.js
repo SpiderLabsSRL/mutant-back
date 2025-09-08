@@ -213,49 +213,10 @@ const deleteMember = async (req, res) => {
   }
 };
 
-// Exportar miembros a PDF
-const exportMembersToPDF = async (req, res) => {
-  try {
-    const {
-      searchTerm = "",
-      serviceFilter = "all",
-      statusFilter = "all",
-      sucursalFilter = "all"
-    } = req.query;
-
-    console.log("Exportando a PDF con filtros:", { searchTerm, serviceFilter, statusFilter, sucursalFilter });
-
-    // Obtener información del usuario autenticado
-    const userSucursalId = req.user.idsucursal;
-    const userRol = req.user.rol;
-
-    const pdfBuffer = await membersListService.exportMembersToPDF(
-      searchTerm,
-      serviceFilter,
-      statusFilter,
-      sucursalFilter,
-      userSucursalId,
-      userRol
-    );
-
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'attachment; filename=miembros.pdf');
-    res.send(pdfBuffer);
-  } catch (error) {
-    console.error("Error en exportMembersToPDF controller:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error interno del servidor al exportar miembros a PDF",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined
-    });
-  }
-};
-
 module.exports = {
   testRoute,
   getMembers,
   getAllMembers,
   editMember,
-  deleteMember,
-  exportMembersToPDF
+  deleteMember
 };

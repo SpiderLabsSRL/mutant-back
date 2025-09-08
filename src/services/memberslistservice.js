@@ -303,102 +303,6 @@ const getAllMembers = async (searchTerm, serviceFilter, statusFilter, sucursalFi
   }
 };
 
-// Exportar miembros a PDF
-const exportMembersToPDF = async (searchTerm, serviceFilter, statusFilter, sucursalFilter, userSucursalId, userRol) => {
-  try {
-    const members = await getAllMembers(searchTerm, serviceFilter, statusFilter, sucursalFilter, userSucursalId, userRol);
-    
-    // Crear documento PDF
-    const doc = new PDFDocument({ margin: 50 });
-    const buffers = [];
-    
-    doc.on('data', buffers.push.bind(buffers));
-    
-    // Configurar el documento
-    doc.fontSize(20).text('LISTA DE MIEMBROS', { align: 'center' });
-    doc.moveDown();
-    
-    // Agregar información del usuario
-    doc.fontSize(10).text(`Usuario: ${userRol} ${userSucursalId ? '(Sucursal: ' + userSucursalId + ')' : ''}`, { align: 'right' });
-    doc.fontSize(10).text(`Fecha de exportación: ${new Date().toLocaleDateString('es-ES')}`, { align: 'right' });
-    doc.moveDown();
-    
-    // Agregar información de filtros
-    if (searchTerm || serviceFilter !== 'all' || statusFilter !== 'all' || sucursalFilter !== 'all') {
-      doc.fontSize(10).text('Filtros aplicados:', { underline: true });
-      
-      if (searchTerm) doc.text(`• Búsqueda: ${searchTerm}`);
-      if (serviceFilter !== 'all') doc.text(`• Servicio: ${serviceFilter}`);
-      if (statusFilter !== 'all') doc.text(`• Estado: ${statusFilter}`);
-      if (sucursalFilter !== 'all') doc.text(`• Sucursal: ${sucursalFilter}`);
-      
-      doc.moveDown();
-    }
-    
-    // Agregar tabla de miembros
-    let yPosition = 150;
-    
-    // Encabezados de tabla
-    doc.fontSize(10).font('Helvetica-Bold');
-    doc.text('NOMBRE', 50, yPosition);
-    doc.text('CI', 200, yPosition, { width: 80 });
-    doc.text('TELÉFONO', 270, yPosition, { width: 80 });
-    doc.text('ESTADO', 350, yPosition, { width: 60 });
-    doc.text('SUCURSAL', 420, yPosition, { width: 100 });
-    
-    yPosition += 20;
-    doc.moveTo(50, yPosition).lineTo(550, yPosition).stroke();
-    yPosition += 10;
-    
-    // Contenido de la tabla
-    doc.font('Helvetica');
-    members.forEach((member, index) => {
-      if (yPosition > 700) {
-        doc.addPage();
-        yPosition = 50;
-        
-        // Encabezados en nueva página
-        doc.fontSize(10).font('Helvetica-Bold');
-        doc.text('NOMBRE', 50, yPosition);
-        doc.text('CI', 200, yPosition, { width: 80 });
-        doc.text('TELÉFONO', 270, yPosition, { width: 80 });
-        doc.text('ESTADO', 350, yPosition, { width: 60 });
-        doc.text('SUCURSAL', 420, yPosition, { width: 100 });
-        
-        yPosition += 20;
-        doc.moveTo(50, yPosition).lineTo(550, yPosition).stroke();
-        yPosition += 10;
-        doc.font('Helvetica');
-      }
-      
-      doc.fontSize(8).text(member.name, 50, yPosition, { width: 140 });
-      doc.text(member.ci, 200, yPosition, { width: 80 });
-      doc.text(member.phone, 270, yPosition, { width: 80 });
-      doc.text(member.status === 'active' ? 'ACTIVO' : 'INACTIVO', 350, yPosition, { width: 60 });
-      doc.text(member.sucursal_name || member.sucursal, 420, yPosition, { width: 100 });
-      
-      yPosition += 15;
-    });
-    
-    // Pie de página
-    doc.fontSize(8).text(`Total de miembros: ${members.length}`, 50, 750, { align: 'right' });
-    
-    doc.end();
-    
-    // Esperar a que el PDF se genere completamente
-    return new Promise((resolve, reject) => {
-      doc.on('end', () => {
-        const pdfData = Buffer.concat(buffers);
-        resolve(pdfData);
-      });
-      
-      doc.on('error', reject);
-    });
-  } catch (error) {
-    console.error("Error en exportMembersToPDF service:", error);
-    throw new Error(`Error al generar PDF de miembros: ${error.message}`);
-  }
-};
 
 // Editar miembro
 const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
@@ -463,6 +367,5 @@ module.exports = {
   getMembers,
   getAllMembers,
   editMember,
-  deleteMember,
-  exportMembersToPDF
+  deleteMember
 };
