@@ -151,16 +151,36 @@ exports.registerMember = async (registrationData) => {
       `, [ventaId, inscripcionesIds[i], registrationData.servicios[i].precio]);
     }
     
-    // Registrar transacciones de caja
+    // Obtener el último estado de caja para el monto inicial
+    const lastCashStatus = await client.query(`
+      SELECT monto_final 
+      FROM estado_caja 
+      WHERE caja_id = $1 
+      ORDER BY id DESC 
+      LIMIT 1
+    `, [registrationData.cajaId]);
+    
+    const montoInicial = lastCashStatus.rows.length > 0 ? lastCashStatus.rows[0].monto_final : 0;
+    
+    // Registrar transacciones de caja y actualizar estado_caja si es pago en efectivo o mixto
     if (registrationData.formaPago === 'efectivo' || registrationData.formaPago === 'mixto') {
       const montoEfectivo = registrationData.formaPago === 'efectivo' 
         ? registrationData.total 
         : registrationData.montoEfectivo;
       
+      // Registrar transacción de caja
       await client.query(`
         INSERT INTO transacciones_caja (caja_id, tipo, descripcion, monto, fecha, usuario_id)
         VALUES ($1, 'ingreso', 'Venta de servicio', $2, NOW(), $3)
       `, [registrationData.cajaId, montoEfectivo, registrationData.empleadoId]);
+      
+      // Actualizar estado_caja
+      const montoFinal = parseFloat(montoInicial) + parseFloat(montoEfectivo);
+      
+      await client.query(`
+        INSERT INTO estado_caja (caja_id, estado, monto_inicial, monto_final, usuario_id)
+        VALUES ($1, 'abierta', $2, $3, $4)
+      `, [registrationData.cajaId, montoInicial, montoFinal, registrationData.empleadoId]);
     }
     
     if (registrationData.formaPago === 'qr' || registrationData.formaPago === 'mixto') {
