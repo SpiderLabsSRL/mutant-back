@@ -17,8 +17,6 @@ const ReportsRoutes = require("./src/routes/reportsRoutes");
 const AccessRoutes = require("./src/routes/accessRoutes");
 const RegisterMemberRoutes = require("./src/routes/RegisterMemberRoutes");
 const salesControlRoutes = require('./src/routes/salescontrolRoutes');
-const RegisterMemberRoutes = require("./src/routes/RegisterMemberRoutes");
-// Lista de orígenes permitidos
 const allowedOrigins = [
   "http://localhost:8080",
   "https://libreriamaite.netlify.app",//front en linea
