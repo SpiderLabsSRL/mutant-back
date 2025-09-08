@@ -212,11 +212,27 @@ const deleteMember = async (req, res) => {
     });
   }
 };
+// Obtener servicios disponibles
+const getAvailableServices = async (req, res) => {
+  try {
+    const services = await membersListService.getAvailableServices();
+    
+    res.json(services);
+  } catch (error) {
+    console.error("Error en getAvailableServices controller:", error);
+    res.status(500).json({
+      success: false,
+      message: "Error interno del servidor al obtener servicios disponibles",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined
+    });
+  }
+};
 
 module.exports = {
   testRoute,
   getMembers,
   getAllMembers,
   editMember,
-  deleteMember
+  deleteMember,
+  getAvailableServices
 };

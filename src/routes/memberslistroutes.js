@@ -12,6 +12,8 @@ router.use(authenticate);
 // Rutas accesibles solo para admin y recepcionista
 router.get("/", authorize(['admin', 'recepcionista']), membersListController.getMembers);
 router.get("/all", authorize(['admin', 'recepcionista']), membersListController.getAllMembers);
+// Agregar esta ruta
+router.get("/services/available", authenticate, authorize(['admin', 'recepcionista']), membersListController.getAvailableServices);
 
 // Rutas accesibles solo para admin
 router.put("/:id", authorize(['admin']), membersListController.editMember);
