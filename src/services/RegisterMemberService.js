@@ -2,10 +2,10 @@ const { query, pool } = require("../../db");
 
 exports.getServicesByBranch = async (sucursalId) => {
   const result = await query(`
-    SELECT s.id, s.nombre, s.precio, s.numero_ingresos, s.estado
+    SELECT s.id, s.nombre, s.precio, s.numero_ingresos, s.estado, s.multisucursal
     FROM servicios s
     INNER JOIN servicio_sucursal ss ON s.id = ss.servicio_id
-    WHERE ss.sucursal_id = $1 AND s.estado = 1
+    WHERE ss.sucursal_id = $1 AND s.estado = 1 AND ss.disponible = true
     ORDER BY s.nombre
   `, [sucursalId]);
   
@@ -26,8 +26,10 @@ exports.searchPeople = async (searchTerm) => {
 
 exports.getActiveSubscriptions = async (personaId) => {
   const result = await query(`
-    SELECT i.id, i.servicio_id, i.fecha_inicio, i.fecha_vencimiento, i.estado
+    SELECT i.id, i.servicio_id, i.sucursal_id, i.fecha_inicio, i.fecha_vencimiento, 
+           i.ingresos_disponibles, i.estado, s.multisucursal
     FROM inscripciones i
+    INNER JOIN servicios s ON i.servicio_id = s.id
     WHERE i.persona_id = $1 
     AND i.estado = 1 
     AND i.fecha_vencimiento >= CURRENT_DATE
@@ -38,7 +40,8 @@ exports.getActiveSubscriptions = async (personaId) => {
 
 exports.getCashRegisterStatus = async (cajaId) => {
   const result = await query(`
-    SELECT c.id, ec.estado, ec.monto_inicial, ec.monto_final
+    SELECT ec.id as estado_caja_id, c.id as caja_id, ec.estado, 
+           ec.monto_inicial, ec.monto_final, ec.usuario_id
     FROM cajas c
     INNER JOIN estado_caja ec ON c.id = ec.caja_id
     WHERE c.id = $1
@@ -74,15 +77,38 @@ exports.registerMember = async (registrationData) => {
       personaId = personaResult.rows[0].id;
     }
     
+    // Obtener información de los servicios seleccionados
+    const serviciosInfo = [];
+    for (const servicio of registrationData.servicios) {
+      const servicioResult = await client.query(`
+        SELECT s.id, s.nombre, s.precio, s.numero_ingresos, s.multisucursal,
+               ss.sucursal_id, ss.disponible
+        FROM servicios s
+        INNER JOIN servicio_sucursal ss ON s.id = ss.servicio_id
+        WHERE s.id = $1 AND ss.sucursal_id = $2
+      `, [servicio.servicioId, registrationData.sucursalId]);
+      
+      if (servicioResult.rows.length === 0) {
+        throw new Error(`Servicio no disponible en esta sucursal: ${servicio.servicioId}`);
+      }
+      
+      serviciosInfo.push({
+        ...servicio,
+        ...servicioResult.rows[0]
+      });
+    }
+    
     // Crear inscripciones para cada servicio
     const inscripcionesIds = [];
-    for (const servicio of registrationData.servicios) {
+    for (const servicio of serviciosInfo) {
       // Verificar si ya existe una inscripción activa para este servicio
       const existingSubscription = await client.query(`
         SELECT id FROM inscripciones 
         WHERE persona_id = $1 AND servicio_id = $2 
         AND estado = 1 AND fecha_vencimiento >= CURRENT_DATE
       `, [personaId, servicio.servicioId]);
+      
+      let inscripcionId;
       
       if (existingSubscription.rows.length > 0) {
         // Actualizar inscripción existente
@@ -94,13 +120,13 @@ exports.registerMember = async (registrationData) => {
         `, [
           servicio.fechaInicio,
           servicio.fechaVencimiento,
-          (await client.query('SELECT numero_ingresos FROM servicios WHERE id = $1', [servicio.servicioId])).rows[0].numero_ingresos,
+          servicio.numero_ingresos,
           existingSubscription.rows[0].id
         ]);
         
-        inscripcionesIds.push(updateResult.rows[0].id);
+        inscripcionId = updateResult.rows[0].id;
       } else {
-        // Crear nueva inscripción
+        // Crear nueva inscripción para la sucursal principal
         const inscripcionResult = await client.query(`
           INSERT INTO inscripciones (persona_id, servicio_id, sucursal_id, fecha_inicio, fecha_vencimiento, ingresos_disponibles, estado)
           VALUES ($1, $2, $3, $4, $5, $6, 1)
@@ -111,11 +137,35 @@ exports.registerMember = async (registrationData) => {
           registrationData.sucursalId,
           servicio.fechaInicio,
           servicio.fechaVencimiento,
-          (await client.query('SELECT numero_ingresos FROM servicios WHERE id = $1', [servicio.servicioId])).rows[0].numero_ingresos
+          servicio.numero_ingresos
         ]);
         
-        inscripcionesIds.push(inscripcionResult.rows[0].id);
+        inscripcionId = inscripcionResult.rows[0].id;
+        
+        // Si el servicio es multisucursal, crear inscripciones en todas las sucursales disponibles
+        if (servicio.multisucursal) {
+          const otrasSucursales = await client.query(`
+            SELECT sucursal_id 
+            FROM servicio_sucursal 
+            WHERE servicio_id = $1 AND sucursal_id != $2 AND disponible = true
+          `, [servicio.servicioId, registrationData.sucursalId]);
+          
+          for (const otraSucursal of otrasSucursales.rows) {
+            await client.query(`
+              INSERT INTO inscripciones (persona_id, servicio_id, sucursal_id, fecha_inicio, fecha_vencimiento, ingresos_disponibles, estado)
+              VALUES ($1, $2, $3, $4, $5, 0, 1)
+            `, [
+              personaId,
+              servicio.servicioId,
+              otraSucursal.sucursal_id,
+              servicio.fechaInicio,
+              servicio.fechaVencimiento
+            ]);
+          }
+        }
       }
+      
+      inscripcionesIds.push(inscripcionId);
     }
     
     // Determinar el detalle del pago según la forma de pago
@@ -167,7 +217,7 @@ exports.registerMember = async (registrationData) => {
       
       // Obtener el último estado de caja para el monto inicial
       const lastCashStatus = await client.query(`
-        SELECT monto_final 
+        SELECT id as estado_caja_id, monto_final 
         FROM estado_caja 
         WHERE caja_id = $1 
         ORDER BY id DESC 
@@ -175,20 +225,31 @@ exports.registerMember = async (registrationData) => {
       `, [registrationData.cajaId]);
       
       const montoInicial = lastCashStatus.rows.length > 0 ? lastCashStatus.rows[0].monto_final : 0;
-      
-      // Registrar transacción de caja (solo para efectivo)
-      await client.query(`
-        INSERT INTO transacciones_caja (caja_id, tipo, descripcion, monto, fecha, usuario_id)
-        VALUES ($1, 'ingreso', 'Venta de servicio', $2, NOW(), $3)
-      `, [registrationData.cajaId, montoEfectivo, registrationData.empleadoId]);
+      const estadoCajaIdExistente = lastCashStatus.rows.length > 0 ? lastCashStatus.rows[0].estado_caja_id : null;
       
       // Actualizar estado_caja (solo para efectivo)
       const montoFinal = parseFloat(montoInicial) + parseFloat(montoEfectivo);
       
-      await client.query(`
+      const estadoCajaResult = await client.query(`
         INSERT INTO estado_caja (caja_id, estado, monto_inicial, monto_final, usuario_id)
         VALUES ($1, 'abierta', $2, $3, $4)
+        RETURNING id
       `, [registrationData.cajaId, montoInicial, montoFinal, registrationData.empleadoId]);
+      
+      const nuevoEstadoCajaId = estadoCajaResult.rows[0].id;
+      
+      // Registrar transacción de caja (solo para efectivo) con referencia al estado_caja
+      await client.query(`
+        INSERT INTO transacciones_caja (caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id)
+        VALUES ($1, $2, 'ingreso', 'Venta de servicio', $3, NOW(), $4)
+      `, [registrationData.cajaId, nuevoEstadoCajaId, montoEfectivo, registrationData.empleadoId]);
+      
+      // Si había un estado de caja anterior, actualizarlo a cerrado
+      if (estadoCajaIdExistente) {
+        await client.query(`
+          UPDATE estado_caja SET estado = 'cerrada' WHERE id = $1
+        `, [estadoCajaIdExistente]);
+      }
     }
     
     // Los pagos QR (tanto puros como la parte QR del pago mixto) NO se registran en transacciones_caja ni estado_caja
