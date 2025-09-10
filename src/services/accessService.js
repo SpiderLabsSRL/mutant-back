@@ -106,6 +106,24 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
   if (typeFilter === "all" || typeFilter === "cliente") {
     const clientParams = [searchParam, branchId];
     const clientSql = `
+      WITH ultimas_inscripciones AS (
+        SELECT DISTINCT ON (i.persona_id, i.servicio_id)
+          i.persona_id,
+          i.servicio_id,
+          i.id as idinscripcion,
+          i.ingresos_disponibles,
+          i.fecha_inicio,
+          i.fecha_vencimiento,
+          i.estado,
+          i.sucursal_id,
+          s.nombre as nombre_servicio,
+          s.multisucursal
+        FROM inscripciones i
+        INNER JOIN servicios s ON i.servicio_id = s.id
+        WHERE i.estado = 1
+        AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)
+        ORDER BY i.servicio_id, i.persona_id, i.fecha_inicio DESC
+      )
       SELECT 
         p.id as idpersona,
         p.nombres,
@@ -117,29 +135,24 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
         COALESCE(
           json_agg(
             json_build_object(
-              'idinscripcion', i.id,
-              'idservicio', s.id,
-              'nombre_servicio', s.nombre,
-              'ingresos_disponibles', i.ingresos_disponibles,
-              'fecha_inicio', i.fecha_inicio,
-              'fecha_vencimiento', i.fecha_vencimiento,
-              'estado', i.estado,
-              'sucursal_id', i.sucursal_id,
-              'multisucursal', s.multisucursal
-            ) ORDER BY i.fecha_vencimiento DESC
-          ) FILTER (WHERE i.id IS NOT NULL),
+              'idinscripcion', ui.idinscripcion,
+              'idservicio', ui.servicio_id,
+              'nombre_servicio', ui.nombre_servicio,
+              'ingresos_disponibles', ui.ingresos_disponibles,
+              'fecha_inicio', ui.fecha_inicio,
+              'fecha_vencimiento', ui.fecha_vencimiento,
+              'estado', ui.estado,
+              'sucursal_id', ui.sucursal_id,
+              'multisucursal', ui.multisucursal
+            ) ORDER BY ui.fecha_vencimiento DESC
+          ) FILTER (WHERE ui.idinscripcion IS NOT NULL),
           '[]'
         ) as servicios
       FROM personas p
-      LEFT JOIN inscripciones i ON p.id = i.persona_id
-      LEFT JOIN servicios s ON i.servicio_id = s.id
+      LEFT JOIN ultimas_inscripciones ui ON p.id = ui.persona_id
       WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
-      AND i.estado = 1
-      AND i.fecha_vencimiento >= CURRENT_DATE
-      AND i.ingresos_disponibles > 0
-      AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)
       GROUP BY p.id
-      HAVING COUNT(i.id) > 0
+      HAVING COUNT(ui.idinscripcion) > 0
     `;
 
     try {
@@ -148,19 +161,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       // Formatear fechas de últimos registros
       const formattedClientResults = clientResult.rows.map((row) => {
         if (row.servicios && row.servicios.length > 0) {
-          // Filtrar solo servicios activos y ordenar por fecha de vencimiento
-          const serviciosActivos = row.servicios
-            .filter((servicio) => servicio.estado === 1)
-            .sort(
-              (a, b) =>
-                new Date(b.fecha_vencimiento) - new Date(a.fecha_vencimiento)
-            );
-
-          // Tomar solo el servicio más reciente
-          const servicioMasReciente =
-            serviciosActivos.length > 0 ? [serviciosActivos[0]] : [];
-
-          const servicios = servicioMasReciente.map((servicio) => ({
+          const servicios = row.servicios.map((servicio) => ({
             ...servicio,
             fecha_inicio: formatBoliviaDateTime(servicio.fecha_inicio),
             fecha_vencimiento: formatBoliviaDateTime(
