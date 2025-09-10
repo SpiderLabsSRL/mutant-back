@@ -3,6 +3,7 @@ const bcrypt = require("bcrypt");
 
 // Función para formatear fecha y hora en zona horaria de Bolivia (UTC-4)
 const formatBoliviaDateTime = (date) => {
+  if (!date) return null;
   // Ajustar a zona horaria de Bolivia (UTC-4)
   const boliviaOffset = -4 * 60; // UTC-4 en minutos
   const localDate = new Date(date);
@@ -15,7 +16,7 @@ const formatBoliviaDateTime = (date) => {
 };
 
 // Obtener registros de acceso
-exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, startDate, endDate) => {
+exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, startDate, endDate, branchId) => {
   let sql = `
     SELECT 
       ra.id, 
@@ -38,6 +39,12 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, startDate, e
   
   const params = [];
   let whereClauses = [];
+  
+  // Filtrar por sucursal
+  if (branchId) {
+    whereClauses.push(`ra.sucursal_id = $${params.length + 1}`);
+    params.push(branchId);
+  }
   
   // Filtrar por fecha (por defecto solo día actual)
   if (startDate) {
@@ -79,15 +86,14 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, startDate, e
 };
 
 // Buscar miembros (clientes y empleados)
-exports.searchMembers = async (searchTerm, typeFilter = 'all') => {
-  let clientSql = '';
-  let employeeSql = '';
+exports.searchMembers = async (searchTerm, typeFilter = 'all', branchId) => {
   const searchParam = `%${searchTerm}%`;
-  const params = [searchParam];
+  const results = [];
   
-  // Construir consultas según el filtro
+  // Buscar clientes si el filtro es 'all' o 'cliente'
   if (typeFilter === 'all' || typeFilter === 'cliente') {
-    clientSql = `
+    const clientParams = [searchParam, branchId];
+    const clientSql = `
       SELECT 
         p.id as idpersona,
         p.nombres,
@@ -105,22 +111,58 @@ exports.searchMembers = async (searchTerm, typeFilter = 'all') => {
               'ingresos_disponibles', i.ingresos_disponibles,
               'fecha_inicio', i.fecha_inicio,
               'fecha_vencimiento', i.fecha_vencimiento,
-              'estado', i.estado
-            )
+              'estado', i.estado,
+              'sucursal_id', i.sucursal_id,
+              'multisucursal', s.multisucursal
+            ) ORDER BY i.fecha_vencimiento DESC
           ) FILTER (WHERE i.id IS NOT NULL),
           '[]'
         ) as servicios
       FROM personas p
-      LEFT JOIN inscripciones i ON p.id = i.persona_id AND i.estado = 1
+      LEFT JOIN inscripciones i ON p.id = i.persona_id
       LEFT JOIN servicios s ON i.servicio_id = s.id
       WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
+      AND i.estado = 1
+      AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)
       GROUP BY p.id
       HAVING COUNT(i.id) > 0
     `;
+    
+    try {
+      const clientResult = await query(clientSql, clientParams);
+      
+      // Formatear fechas de últimos registros
+      const formattedClientResults = clientResult.rows.map(row => {
+        if (row.servicios && row.servicios.length > 0) {
+          // Filtrar solo servicios activos y ordenar por fecha de vencimiento
+          const serviciosActivos = row.servicios
+            .filter(servicio => servicio.estado === 1)
+            .sort((a, b) => new Date(b.fecha_vencimiento) - new Date(a.fecha_vencimiento));
+          
+          // Tomar solo el servicio más reciente
+          const servicioMasReciente = serviciosActivos.length > 0 ? [serviciosActivos[0]] : [];
+          
+          const servicios = servicioMasReciente.map(servicio => ({
+            ...servicio,
+            fecha_inicio: formatBoliviaDateTime(servicio.fecha_inicio),
+            fecha_vencimiento: formatBoliviaDateTime(servicio.fecha_vencimiento)
+          }));
+          return { ...row, servicios };
+        }
+        return row;
+      });
+      
+      results.push(...formattedClientResults);
+    } catch (error) {
+      console.error("Error searching clients:", error);
+      throw error;
+    }
   }
   
+  // Buscar empleados si el filtro es 'all' o 'empleado'
   if (typeFilter === 'all' || typeFilter === 'empleado') {
-    employeeSql = `
+    const employeeParams = [searchParam, branchId];
+    const employeeSql = `
       SELECT 
         p.id as idpersona,
         p.nombres,
@@ -171,67 +213,57 @@ exports.searchMembers = async (searchTerm, typeFilter = 'all') => {
       INNER JOIN empleados e ON p.id = e.persona_id
       WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
       AND e.estado = 1
+      AND e.sucursal_id = $2
     `;
-  }
-  
-  const results = [];
-  
-  if (clientSql) {
-    const clientResult = await query(clientSql, params);
     
-    // Formatear fechas de últimos registros
-    const formattedClientResults = clientResult.rows.map(row => {
-      if (row.servicios && row.servicios.length > 0) {
-        const servicios = row.servicios.map(servicio => ({
-          ...servicio,
-          fecha_inicio: formatBoliviaDateTime(servicio.fecha_inicio),
-          fecha_vencimiento: formatBoliviaDateTime(servicio.fecha_vencimiento)
-        }));
-        return { ...row, servicios };
-      }
-      return row;
-    });
-    
-    results.push(...formattedClientResults);
-  }
-  
-  if (employeeSql) {
-    const employeeResult = await query(employeeSql, params);
-    
-    // Formatear fechas de últimos registros
-    const formattedEmployeeResults = employeeResult.rows.map(row => {
-      if (row.empleado_info) {
-        const empleadoInfo = {
-          ...row.empleado_info,
-          ultimo_registro_entrada: row.empleado_info.ultimo_registro_entrada 
-            ? formatBoliviaDateTime(row.empleado_info.ultimo_registro_entrada)
-            : null,
-          ultimo_registro_salida: row.empleado_info.ultimo_registro_salida 
-            ? formatBoliviaDateTime(row.empleado_info.ultimo_registro_salida)
-            : null
-        };
-        return { ...row, empleado_info: empleadoInfo };
-      }
-      return row;
-    });
-    
-    results.push(...formattedEmployeeResults);
+    try {
+      const employeeResult = await query(employeeSql, employeeParams);
+      
+      // Formatear fechas de últimos registros
+      const formattedEmployeeResults = employeeResult.rows.map(row => {
+        if (row.empleado_info) {
+          const empleadoInfo = {
+            ...row.empleado_info,
+            ultimo_registro_entrada: row.empleado_info.ultimo_registro_entrada 
+              ? formatBoliviaDateTime(row.empleado_info.ultimo_registro_entrada)
+              : null,
+            ultimo_registro_salida: row.empleado_info.ultimo_registro_salida 
+              ? formatBoliviaDateTime(row.empleado_info.ultimo_registro_salida)
+              : null
+          };
+          return { ...row, empleado_info: empleadoInfo };
+        }
+        return row;
+      });
+      
+      results.push(...formattedEmployeeResults);
+    } catch (error) {
+      console.error("Error searching employees:", error);
+      throw error;
+    }
   }
   
   return results;
 };
 
 // Registrar acceso de cliente
+// Registrar acceso de cliente
 exports.registerClientAccess = async (personId, serviceId, branchId, userId) => {
+  // Primero obtenemos la información completa de la inscripción
   const client = await query(`
-    SELECT i.*, s.nombre as servicio_nombre
+    SELECT 
+      i.*, 
+      s.id as servicio_real_id,
+      s.nombre as servicio_nombre, 
+      s.multisucursal
     FROM inscripciones i
     INNER JOIN servicios s ON i.servicio_id = s.id
-    WHERE i.persona_id = $1 AND i.id = $2 AND i.sucursal_id = $3
+    WHERE i.persona_id = $1 AND i.id = $2
+    AND (i.sucursal_id = $3 OR s.multisucursal = TRUE)
   `, [personId, serviceId, branchId]);
   
   if (client.rows.length === 0) {
-    throw new Error("Inscripción no encontrada");
+    throw new Error("Inscripción no encontrada o no válida para esta sucursal");
   }
   
   const inscription = client.rows[0];
@@ -247,7 +279,7 @@ exports.registerClientAccess = async (personId, serviceId, branchId, userId) => 
       VALUES ($1, $2, $3, $4, $5, $6, NOW(), 'cliente')
     `, [
       personId, 
-      serviceId, 
+      inscription.servicio_real_id, // Usar el ID real del servicio
       `Acceso denegado - Servicio ${inscription.servicio_nombre} vencido`, 
       'denegado', 
       branchId, 
@@ -269,7 +301,7 @@ exports.registerClientAccess = async (personId, serviceId, branchId, userId) => 
       VALUES ($1, $2, $3, $4, $5, $6, NOW(), 'cliente')
     `, [
       personId, 
-      serviceId, 
+      inscription.servicio_real_id, // Usar el ID real del servicio
       `Acceso denegado - Sin visitas disponibles para ${inscription.servicio_nombre}`, 
       'denegado', 
       branchId, 
@@ -303,7 +335,7 @@ exports.registerClientAccess = async (personId, serviceId, branchId, userId) => 
     VALUES ($1, $2, $3, $4, $5, $6, NOW(), 'cliente')
   `, [
     personId, 
-    serviceId, 
+    inscription.servicio_real_id, // Usar el ID real del servicio
     `Servicio: ${inscription.servicio_nombre} - Visitas restantes: ${remainingVisits}`, 
     'exitoso', 
     branchId, 
@@ -316,7 +348,6 @@ exports.registerClientAccess = async (personId, serviceId, branchId, userId) => 
     remainingVisits
   };
 };
-
 // Registrar entrada de empleado
 exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   const employee = await query(`
@@ -427,63 +458,4 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     isEarly,
     minutes: Math.abs(diffMinutes)
   };
-};
-
-// Exportar registros de acceso a CSV
-exports.exportAccessLogs = async (startDate, endDate, type) => {
-  let sql = `
-    SELECT 
-      ra.fecha as "Fecha",
-      CONCAT(p.nombres, ' ', p.apellidos) as "Nombre",
-      p.ci as "CI",
-      ra.tipo_persona as "Tipo",
-      ra.detalle as "Detalle",
-      ra.estado as "Estado",
-      s.nombre as "Servicio",
-      suc.nombre as "Sucursal"
-    FROM registros_acceso ra
-    INNER JOIN personas p ON ra.persona_id = p.id
-    LEFT JOIN servicios s ON ra.servicio_id = s.id
-    INNER JOIN sucursales suc ON ra.sucursal_id = suc.id
-  `;
-  
-  const params = [];
-  let whereClauses = [];
-  
-  if (startDate) {
-    whereClauses.push(`ra.fecha::date >= $${params.length + 1}`);
-    params.push(startDate);
-  }
-  
-  if (endDate) {
-    whereClauses.push(`ra.fecha::date <= $${params.length + 1}`);
-    params.push(endDate);
-  }
-  
-  if (type && type !== 'all') {
-    whereClauses.push(`ra.tipo_persona = $${params.length + 1}`);
-    params.push(type);
-  }
-  
-  if (whereClauses.length > 0) {
-    sql += ` WHERE ${whereClauses.join(' AND ')}`;
-  }
-  
-  sql += ` ORDER BY ra.fecha DESC`;
-  
-  const result = await query(sql, params);
-  
-  // Formatear fechas en zona horaria de Bolivia
-  const formattedResults = result.rows.map(row => ({
-    ...row,
-    Fecha: formatBoliviaDateTime(row.Fecha)
-  }));
-  
-  // Convertir a CSV
-  let csv = 'Fecha,Nombre,CI,Tipo,Detalle,Estado,Servicio,Sucursal\n';
-  formattedResults.forEach(row => {
-    csv += `"${row.Fecha}","${row.Nombre}","${row.CI}","${row.Tipo}","${row.Detalle}","${row.Estado}","${row.Servicio || ''}","${row.Sucursal}"\n`;
-  });
-  
-  return csv;
 };

@@ -2,7 +2,7 @@ const accessService = require("../services/accessService");
 
 exports.getAccessLogs = async (req, res) => {
   try {
-    const { search, type, limit, startDate, endDate } = req.query;
+    const { search, type, limit, startDate, endDate, branchId } = req.query;
     
     // Por defecto, mostrar solo los registros del día actual
     const defaultStartDate = startDate || new Date().toISOString().split('T')[0];
@@ -12,7 +12,8 @@ exports.getAccessLogs = async (req, res) => {
       type, 
       limit ? parseInt(limit) : 100,
       defaultStartDate,
-      endDate
+      endDate,
+      branchId
     );
     res.json(logs);
   } catch (error) {
@@ -23,12 +24,12 @@ exports.getAccessLogs = async (req, res) => {
 
 exports.searchMembers = async (req, res) => {
   try {
-    const { search, type } = req.query;
+    const { search, type, branchId } = req.query;
     if (!search || search.length < 2) {
       return res.status(400).json({ message: "Término de búsqueda debe tener al menos 2 caracteres" });
     }
     
-    const members = await accessService.searchMembers(search, type);
+    const members = await accessService.searchMembers(search, type, branchId);
     res.json(members);
   } catch (error) {
     console.error("Error in searchMembers:", error);
@@ -80,20 +81,6 @@ exports.registerEmployeeCheckOut = async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error("Error in registerEmployeeCheckOut:", error);
-    res.status(500).json({ message: error.message });
-  }
-};
-
-exports.exportAccessLogs = async (req, res) => {
-  try {
-    const { startDate, endDate, type } = req.query;
-    const csvData = await accessService.exportAccessLogs(startDate, endDate, type);
-    
-    res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename=access_logs_${new Date().toISOString().split('T')[0]}.csv`);
-    res.send(csvData);
-  } catch (error) {
-    console.error("Error in exportAccessLogs:", error);
     res.status(500).json({ message: error.message });
   }
 };
