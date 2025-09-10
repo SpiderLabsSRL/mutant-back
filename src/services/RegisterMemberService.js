@@ -103,7 +103,7 @@ exports.registerMember = async (registrationData) => {
     for (const servicio of serviciosInfo) {
       // Verificar si ya existe una inscripción activa para este servicio
       const existingSubscription = await client.query(`
-        SELECT id FROM inscripciones 
+        SELECT id, ingresos_disponibles FROM inscripciones 
         WHERE persona_id = $1 AND servicio_id = $2 
         AND estado = 1 AND fecha_vencimiento >= CURRENT_DATE
       `, [personaId, servicio.servicioId]);
@@ -111,20 +111,28 @@ exports.registerMember = async (registrationData) => {
       let inscripcionId;
       
       if (existingSubscription.rows.length > 0) {
-        // Actualizar inscripción existente
-        const updateResult = await client.query(`
-          UPDATE inscripciones 
-          SET fecha_inicio = $1, fecha_vencimiento = $2, ingresos_disponibles = $3
-          WHERE id = $4
-          RETURNING id
-        `, [
-          servicio.fechaInicio,
-          servicio.fechaVencimiento,
-          servicio.numero_ingresos,
-          existingSubscription.rows[0].id
-        ]);
+        const existingSub = existingSubscription.rows[0];
         
-        inscripcionId = updateResult.rows[0].id;
+        // Si la suscripción existe pero no tiene ingresos disponibles, podemos actualizarla
+        if (existingSub.ingresos_disponibles <= 0) {
+          // Actualizar inscripción existente (renovación)
+          const updateResult = await client.query(`
+            UPDATE inscripciones 
+            SET fecha_inicio = $1, fecha_vencimiento = $2, ingresos_disponibles = $3
+            WHERE id = $4
+            RETURNING id
+          `, [
+            servicio.fechaInicio,
+            servicio.fechaVencimiento,
+            servicio.numero_ingresos,
+            existingSub.id
+          ]);
+          
+          inscripcionId = updateResult.rows[0].id;
+        } else {
+          // Si todavía tiene ingresos disponibles, no permitir reinscripción
+          throw new Error(`El cliente ya tiene una suscripción activa para este servicio con ingresos disponibles`);
+        }
       } else {
         // Crear nueva inscripción para la sucursal principal
         const inscripcionResult = await client.query(`
