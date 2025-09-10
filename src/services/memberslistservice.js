@@ -1,8 +1,6 @@
 const { query } = require("../../db");
-const PDFDocument = require("pdfkit");
-const bcrypt = require("bcrypt");
 
-// Obtener miembros con paginación y filtros - CONSULTA CORREGIDA
+// Obtener miembros con paginación y filtros
 const getMembers = async (
   page,
   limit,
@@ -81,7 +79,7 @@ const getMembers = async (
         ? `WHERE ${whereConditions.join(" AND ")}`
         : "";
 
-    // Consulta para obtener miembros - CORREGIDA PARA MULTISUCURSAL
+    // Consulta para obtener miembros - CORREGIDA para evaluar estado por sucursal
     const membersQuery = `
       SELECT 
         p.id,
@@ -92,39 +90,40 @@ const getMembers = async (
         i.sucursal_id as sucursal_id,
         su.nombre as sucursal_name,
         i.ingresos_disponibles,
-        jsonb_build_object(
-          'name', s.nombre,
-          'expirationDate', TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD'),
-          'status', CASE 
-            WHEN i.fecha_vencimiento >= CURRENT_DATE AND i.ingresos_disponibles > 0 THEN 'active' 
-            ELSE 'inactive' 
-          END
-        ) as service,
+        s.nombre as servicio_nombre,
+        TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
         CASE 
           WHEN i.fecha_vencimiento >= CURRENT_DATE AND i.ingresos_disponibles > 0 THEN 'active'
           ELSE 'inactive'
-        END as status,
-        TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') as registrationDate
+        END as servicio_status,
+        TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') as registrationDate,
+        CASE 
+          WHEN EXISTS (
+            SELECT 1 FROM inscripciones i2 
+            WHERE i2.persona_id = p.id 
+            AND i2.sucursal_id = i.sucursal_id
+            AND i2.fecha_vencimiento >= CURRENT_DATE 
+            AND i2.ingresos_disponibles > 0
+          ) THEN 'active'
+          ELSE 'inactive'
+        END as member_status
       FROM personas p
       INNER JOIN inscripciones i ON p.id = i.persona_id
       INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
       INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
       ${whereClause}
-      ORDER BY p.nombres, p.apellidos
+      ORDER BY p.nombres, p.apellidos, s.nombre
       LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}
     `;
 
-    // Consulta para contar total - CORREGIDA (COUNT correcto)
+    // Consulta para contar total
     const countQuery = `
-      SELECT COUNT(*)
-      FROM (
-        SELECT DISTINCT p.id, i.sucursal_id
-        FROM personas p
-        INNER JOIN inscripciones i ON p.id = i.persona_id
-        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
-        INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
-        ${whereClause}
-      ) as total_count
+      SELECT COUNT(DISTINCT CONCAT(p.id, '-', i.sucursal_id))
+      FROM personas p
+      INNER JOIN inscripciones i ON p.id = i.persona_id
+      INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+      INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
+      ${whereClause}
     `;
 
     queryParams.push(limit, offset);
@@ -149,15 +148,21 @@ const getMembers = async (
           phone: row.phone || "",
           birthDate: row.birthdate || "",
           sucursal: row.sucursal_id ? row.sucursal_id.toString() : "",
-          ingresos_disponibles: row.ingresos_disponibles || 0,
-          services: [],
-          status: row.status || "inactive",
+          status: row.member_status || "inactive",
           registrationDate: row.registrationdate || "",
+          services: [],
         });
       }
 
       const member = membersMap.get(key);
-      member.services.push(row.service);
+
+      // Agregar cada servicio con sus ingresos individuales
+      member.services.push({
+        name: row.servicio_nombre,
+        expirationDate: row.fecha_vencimiento,
+        status: row.servicio_status,
+        ingresos_disponibles: row.ingresos_disponibles || 0,
+      });
     });
 
     const members = Array.from(membersMap.values());
@@ -174,7 +179,7 @@ const getMembers = async (
   }
 };
 
-// Obtener todos los miembros (sin paginación) - CONSULTA CORREGIDA
+// Obtener todos los miembros (sin paginación) - CORREGIDA para evaluar estado por sucursal
 const getAllMembers = async (
   searchTerm,
   serviceFilter,
@@ -248,25 +253,29 @@ const getAllMembers = async (
         i.sucursal_id as sucursal_id,
         su.nombre as sucursal_name,
         i.ingresos_disponibles,
-        jsonb_build_object(
-          'name', s.nombre,
-          'expirationDate', TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD'),
-          'status', CASE 
-            WHEN i.fecha_vencimiento >= CURRENT_DATE AND i.ingresos_disponibles > 0 THEN 'active' 
-            ELSE 'inactive' 
-          END
-        ) as service,
+        s.nombre as servicio_nombre,
+        TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
         CASE 
           WHEN i.fecha_vencimiento >= CURRENT_DATE AND i.ingresos_disponibles > 0 THEN 'active'
           ELSE 'inactive'
-        END as status,
-        TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') as registrationDate
+        END as servicio_status,
+        TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') as registrationDate,
+        CASE 
+          WHEN EXISTS (
+            SELECT 1 FROM inscripciones i2 
+            WHERE i2.persona_id = p.id 
+            AND i2.sucursal_id = i.sucursal_id
+            AND i2.fecha_vencimiento >= CURRENT_DATE 
+            AND i2.ingresos_disponibles > 0
+          ) THEN 'active'
+          ELSE 'inactive'
+        END as member_status
       FROM personas p
       INNER JOIN inscripciones i ON p.id = i.persona_id
       INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
       INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
       ${whereClause}
-      ORDER BY p.nombres, p.apellidos
+      ORDER BY p.nombres, p.apellidos, s.nombre
     `;
 
     console.log("Ejecutando consulta todos los miembros:", queryText);
@@ -288,15 +297,21 @@ const getAllMembers = async (
           phone: row.phone || "",
           birthDate: row.birthdate || "",
           sucursal: row.sucursal_id ? row.sucursal_id.toString() : "",
-          ingresos_disponibles: row.ingresos_disponibles || 0,
-          services: [],
-          status: row.status || "inactive",
+          status: row.member_status || "inactive",
           registrationDate: row.registrationdate || "",
+          services: [],
         });
       }
 
       const member = membersMap.get(key);
-      member.services.push(row.service);
+
+      // Agregar cada servicio con sus ingresos individuales
+      member.services.push({
+        name: row.servicio_nombre,
+        expirationDate: row.fecha_vencimiento,
+        status: row.servicio_status,
+        ingresos_disponibles: row.ingresos_disponibles || 0,
+      });
     });
 
     return Array.from(membersMap.values());
