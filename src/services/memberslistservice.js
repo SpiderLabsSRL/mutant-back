@@ -1,21 +1,38 @@
 const { query } = require("../../db");
-const PDFDocument = require('pdfkit');
+const PDFDocument = require("pdfkit");
 const bcrypt = require("bcrypt");
 
-// Obtener miembros con paginación y filtros
 // Obtener miembros con paginación y filtros - CONSULTA CORREGIDA
-const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, sucursalFilter, userSucursalId, userRol) => {
+const getMembers = async (
+  page,
+  limit,
+  searchTerm,
+  serviceFilter,
+  statusFilter,
+  sucursalFilter,
+  userSucursalId,
+  userRol
+) => {
   try {
-    console.log("Parámetros del servicio:", { page, limit, searchTerm, serviceFilter, statusFilter, sucursalFilter, userSucursalId, userRol });
-    
+    console.log("Parámetros del servicio:", {
+      page,
+      limit,
+      searchTerm,
+      serviceFilter,
+      statusFilter,
+      sucursalFilter,
+      userSucursalId,
+      userRol,
+    });
+
     const offset = (page - 1) * limit;
-    
+
     let whereConditions = [];
     let queryParams = [];
     let paramCount = 0;
 
     // Filtrar por sucursal según el rol del usuario
-    if (userRol === 'recepcionista' && userSucursalId) {
+    if (userRol === "recepcionista" && userSucursalId) {
       paramCount++;
       whereConditions.push(`i.sucursal_id = $${paramCount}`);
       queryParams.push(parseInt(userSucursalId));
@@ -26,12 +43,16 @@ const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, 
     }
 
     // Excluir empleados - solo personas con servicios
-    whereConditions.push(`p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)`);
+    whereConditions.push(
+      `p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)`
+    );
 
     // Filtro de búsqueda
     if (searchTerm && searchTerm.trim() !== "") {
       paramCount++;
-      whereConditions.push(`(p.nombres ILIKE $${paramCount} OR p.apellidos ILIKE $${paramCount} OR p.ci ILIKE $${paramCount})`);
+      whereConditions.push(
+        `(p.nombres ILIKE $${paramCount} OR p.apellidos ILIKE $${paramCount} OR p.ci ILIKE $${paramCount})`
+      );
       queryParams.push(`%${searchTerm}%`);
     }
 
@@ -45,13 +66,20 @@ const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, 
     // Filtro por estado
     if (statusFilter && statusFilter !== "all") {
       if (statusFilter === "active") {
-        whereConditions.push(`i.fecha_vencimiento >= CURRENT_DATE`);
+        whereConditions.push(
+          `i.fecha_vencimiento >= CURRENT_DATE AND i.ingresos_disponibles > 0`
+        );
       } else if (statusFilter === "inactive") {
-        whereConditions.push(`i.fecha_vencimiento < CURRENT_DATE`);
+        whereConditions.push(
+          `(i.fecha_vencimiento < CURRENT_DATE OR i.ingresos_disponibles = 0)`
+        );
       }
     }
 
-    const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+    const whereClause =
+      whereConditions.length > 0
+        ? `WHERE ${whereConditions.join(" AND ")}`
+        : "";
 
     // Consulta para obtener miembros - CORREGIDA PARA MULTISUCURSAL
     const membersQuery = `
@@ -63,13 +91,17 @@ const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, 
         TO_CHAR(p.fecha_nacimiento, 'YYYY-MM-DD') as birthDate,
         i.sucursal_id as sucursal_id,
         su.nombre as sucursal_name,
+        i.ingresos_disponibles,
         jsonb_build_object(
           'name', s.nombre,
           'expirationDate', TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD'),
-          'status', CASE WHEN i.fecha_vencimiento >= CURRENT_DATE THEN 'active' ELSE 'inactive' END
+          'status', CASE 
+            WHEN i.fecha_vencimiento >= CURRENT_DATE AND i.ingresos_disponibles > 0 THEN 'active' 
+            ELSE 'inactive' 
+          END
         ) as service,
         CASE 
-          WHEN i.fecha_vencimiento >= CURRENT_DATE THEN 'active'
+          WHEN i.fecha_vencimiento >= CURRENT_DATE AND i.ingresos_disponibles > 0 THEN 'active'
           ELSE 'inactive'
         END as status,
         TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') as registrationDate
@@ -96,33 +128,34 @@ const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, 
     `;
 
     queryParams.push(limit, offset);
-    
+
     console.log("Ejecutando consulta members:", membersQuery);
     console.log("Parámetros:", queryParams);
-    
+
     const membersResult = await query(membersQuery, queryParams);
     const countResult = await query(countQuery, queryParams.slice(0, -2));
 
     // Agrupar servicios por persona y sucursal
     const membersMap = new Map();
-    
-    membersResult.rows.forEach(row => {
+
+    membersResult.rows.forEach((row) => {
       const key = `${row.id}-${row.sucursal_id}`;
-      
+
       if (!membersMap.has(key)) {
         membersMap.set(key, {
           id: row.id.toString(),
-          name: row.name || '',
-          ci: row.ci || '',
-          phone: row.phone || '',
-          birthDate: row.birthdate || '',
-          sucursal: row.sucursal_id ? row.sucursal_id.toString() : '',
+          name: row.name || "",
+          ci: row.ci || "",
+          phone: row.phone || "",
+          birthDate: row.birthdate || "",
+          sucursal: row.sucursal_id ? row.sucursal_id.toString() : "",
+          ingresos_disponibles: row.ingresos_disponibles || 0,
           services: [],
-          status: row.status || 'inactive',
-          registrationDate: row.registrationdate || ''
+          status: row.status || "inactive",
+          registrationDate: row.registrationdate || "",
         });
       }
-      
+
       const member = membersMap.get(key);
       member.services.push(row.service);
     });
@@ -131,23 +164,32 @@ const getMembers = async (page, limit, searchTerm, serviceFilter, statusFilter, 
 
     return {
       members,
-      totalCount: parseInt(countResult.rows[0]?.count || 0)
+      totalCount: parseInt(countResult.rows[0]?.count || 0),
     };
   } catch (error) {
     console.error("Error en getMembers service:", error);
-    throw new Error(`Error al obtener miembros desde la base de datos: ${error.message}`);
+    throw new Error(
+      `Error al obtener miembros desde la base de datos: ${error.message}`
+    );
   }
 };
 
 // Obtener todos los miembros (sin paginación) - CONSULTA CORREGIDA
-const getAllMembers = async (searchTerm, serviceFilter, statusFilter, sucursalFilter, userSucursalId, userRol) => {
+const getAllMembers = async (
+  searchTerm,
+  serviceFilter,
+  statusFilter,
+  sucursalFilter,
+  userSucursalId,
+  userRol
+) => {
   try {
     let whereConditions = [];
     let queryParams = [];
     let paramCount = 0;
 
     // Filtrar por sucursal según el rol del usuario
-    if (userRol === 'recepcionista' && userSucursalId) {
+    if (userRol === "recepcionista" && userSucursalId) {
       paramCount++;
       whereConditions.push(`i.sucursal_id = $${paramCount}`);
       queryParams.push(parseInt(userSucursalId));
@@ -158,12 +200,16 @@ const getAllMembers = async (searchTerm, serviceFilter, statusFilter, sucursalFi
     }
 
     // Excluir empleados - solo personas con servicios
-    whereConditions.push(`p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)`);
+    whereConditions.push(
+      `p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)`
+    );
 
     // Filtro de búsqueda
     if (searchTerm && searchTerm.trim() !== "") {
       paramCount++;
-      whereConditions.push(`(p.nombres ILIKE $${paramCount} OR p.apellidos ILIKE $${paramCount} OR p.ci ILIKE $${paramCount})`);
+      whereConditions.push(
+        `(p.nombres ILIKE $${paramCount} OR p.apellidos ILIKE $${paramCount} OR p.ci ILIKE $${paramCount})`
+      );
       queryParams.push(`%${searchTerm}%`);
     }
 
@@ -177,13 +223,20 @@ const getAllMembers = async (searchTerm, serviceFilter, statusFilter, sucursalFi
     // Filtro por estado
     if (statusFilter && statusFilter !== "all") {
       if (statusFilter === "active") {
-        whereConditions.push(`i.fecha_vencimiento >= CURRENT_DATE`);
+        whereConditions.push(
+          `i.fecha_vencimiento >= CURRENT_DATE AND i.ingresos_disponibles > 0`
+        );
       } else if (statusFilter === "inactive") {
-        whereConditions.push(`i.fecha_vencimiento < CURRENT_DATE`);
+        whereConditions.push(
+          `(i.fecha_vencimiento < CURRENT_DATE OR i.ingresos_disponibles = 0)`
+        );
       }
     }
 
-    const whereClause = whereConditions.length > 0 ? `WHERE ${whereConditions.join(' AND ')}` : '';
+    const whereClause =
+      whereConditions.length > 0
+        ? `WHERE ${whereConditions.join(" AND ")}`
+        : "";
 
     const queryText = `
       SELECT 
@@ -194,13 +247,17 @@ const getAllMembers = async (searchTerm, serviceFilter, statusFilter, sucursalFi
         TO_CHAR(p.fecha_nacimiento, 'YYYY-MM-DD') as birthDate,
         i.sucursal_id as sucursal_id,
         su.nombre as sucursal_name,
+        i.ingresos_disponibles,
         jsonb_build_object(
           'name', s.nombre,
           'expirationDate', TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD'),
-          'status', CASE WHEN i.fecha_vencimiento >= CURRENT_DATE THEN 'active' ELSE 'inactive' END
+          'status', CASE 
+            WHEN i.fecha_vencimiento >= CURRENT_DATE AND i.ingresos_disponibles > 0 THEN 'active' 
+            ELSE 'inactive' 
+          END
         ) as service,
         CASE 
-          WHEN i.fecha_vencimiento >= CURRENT_DATE THEN 'active'
+          WHEN i.fecha_vencimiento >= CURRENT_DATE AND i.ingresos_disponibles > 0 THEN 'active'
           ELSE 'inactive'
         END as status,
         TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') as registrationDate
@@ -214,29 +271,30 @@ const getAllMembers = async (searchTerm, serviceFilter, statusFilter, sucursalFi
 
     console.log("Ejecutando consulta todos los miembros:", queryText);
     console.log("Parámetros:", queryParams);
-    
+
     const result = await query(queryText, queryParams);
 
     // Agrupar servicios por persona y sucursal
     const membersMap = new Map();
-    
-    result.rows.forEach(row => {
+
+    result.rows.forEach((row) => {
       const key = `${row.id}-${row.sucursal_id}`;
-      
+
       if (!membersMap.has(key)) {
         membersMap.set(key, {
           id: row.id.toString(),
-          name: row.name || '',
-          ci: row.ci || '',
-          phone: row.phone || '',
-          birthDate: row.birthdate || '',
-          sucursal: row.sucursal_id ? row.sucursal_id.toString() : '',
+          name: row.name || "",
+          ci: row.ci || "",
+          phone: row.phone || "",
+          birthDate: row.birthdate || "",
+          sucursal: row.sucursal_id ? row.sucursal_id.toString() : "",
+          ingresos_disponibles: row.ingresos_disponibles || 0,
           services: [],
-          status: row.status || 'inactive',
-          registrationDate: row.registrationdate || ''
+          status: row.status || "inactive",
+          registrationDate: row.registrationdate || "",
         });
       }
-      
+
       const member = membersMap.get(key);
       member.services.push(row.service);
     });
@@ -244,10 +302,11 @@ const getAllMembers = async (searchTerm, serviceFilter, statusFilter, sucursalFi
     return Array.from(membersMap.values());
   } catch (error) {
     console.error("Error en getAllMembers service:", error);
-    throw new Error(`Error al obtener todos los miembros desde la base de datos: ${error.message}`);
+    throw new Error(
+      `Error al obtener todos los miembros desde la base de datos: ${error.message}`
+    );
   }
 };
-
 
 // Editar miembro
 const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
@@ -257,7 +316,7 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
       SELECT id FROM personas WHERE ci = $1 AND id != $2
     `;
     const ciResult = await query(checkCiQuery, [ci, id]);
-    
+
     if (ciResult.rows.length > 0) {
       throw new Error("La cédula de identidad ya existe para otro miembro");
     }
@@ -269,9 +328,23 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
       RETURNING *
     `;
 
-    console.log("Ejecutando update de miembro:", { id, nombres, apellidos, ci, phone, birthDate });
-    
-    const result = await query(updateQuery, [nombres, apellidos, ci, phone, birthDate, id]);
+    console.log("Ejecutando update de miembro:", {
+      id,
+      nombres,
+      apellidos,
+      ci,
+      phone,
+      birthDate,
+    });
+
+    const result = await query(updateQuery, [
+      nombres,
+      apellidos,
+      ci,
+      phone,
+      birthDate,
+      id,
+    ]);
 
     if (result.rows.length === 0) {
       throw new Error("Miembro no encontrado");
@@ -280,7 +353,9 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
     return result.rows[0];
   } catch (error) {
     console.error("Error en editMember service:", error);
-    throw new Error(`Error al editar miembro en la base de datos: ${error.message}`);
+    throw new Error(
+      `Error al editar miembro en la base de datos: ${error.message}`
+    );
   }
 };
 
@@ -288,25 +363,31 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
 const deleteMember = async (id) => {
   try {
     // Verificar si el miembro existe
-    const checkQuery = 'SELECT * FROM personas WHERE id = $1';
+    const checkQuery = "SELECT * FROM personas WHERE id = $1";
     const checkResult = await query(checkQuery, [id]);
-    
+
     if (checkResult.rows.length === 0) {
       throw new Error("Miembro no encontrado");
     }
 
     // Primero eliminamos las inscripciones relacionadas
-    await query('DELETE FROM inscripciones WHERE persona_id = $1', [id]);
-    
+    await query("DELETE FROM inscripciones WHERE persona_id = $1", [id]);
+
     // Luego eliminamos la persona
-    const result = await query('DELETE FROM personas WHERE id = $1 RETURNING *', [id]);
+    const result = await query(
+      "DELETE FROM personas WHERE id = $1 RETURNING *",
+      [id]
+    );
 
     return result.rows[0];
   } catch (error) {
     console.error("Error en deleteMember service:", error);
-    throw new Error(`Error al eliminar miembro de la base de datos: ${error.message}`);
+    throw new Error(
+      `Error al eliminar miembro de la base de datos: ${error.message}`
+    );
   }
 };
+
 // Obtener servicios disponibles
 const getAvailableServices = async () => {
   try {
@@ -316,15 +397,19 @@ const getAvailableServices = async () => {
       WHERE estado = 1 
       ORDER BY nombre
     `;
-    
+
     const result = await query(queryText);
-    
-    return result.rows.map(row => row.nombre);
+
+    return result.rows.map((row) => row.nombre);
   } catch (error) {
     console.error("Error en getAvailableServices service:", error);
-    throw new Error(`Error al obtener servicios disponibles desde la base de datos: ${error.message}`);
+    throw new Error(
+      `Error al obtener servicios disponibles desde la base de datos: ${error.message}`
+    );
   }
 };
+
+// Obtener sucursales disponibles
 const getAvailableBranches = async () => {
   try {
     const queryText = `
@@ -333,23 +418,26 @@ const getAvailableBranches = async () => {
       WHERE estado = 1 
       ORDER BY nombre
     `;
-    
+
     const result = await query(queryText);
-    
-    return result.rows.map(row => ({
+
+    return result.rows.map((row) => ({
       id: row.id.toString(),
-      name: row.nombre
+      name: row.nombre,
     }));
   } catch (error) {
     console.error("Error en getAvailableBranches service:", error);
-    throw new Error(`Error al obtener sucursales disponibles desde la base de datos: ${error.message}`);
+    throw new Error(
+      `Error al obtener sucursales disponibles desde la base de datos: ${error.message}`
+    );
   }
 };
+
 module.exports = {
   getMembers,
   getAllMembers,
   editMember,
   deleteMember,
   getAvailableServices,
-  getAvailableBranches
+  getAvailableBranches,
 };
