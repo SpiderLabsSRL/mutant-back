@@ -1,3 +1,4 @@
+// services/loginservice.js
 const { query } = require("../../db");
 const bcrypt = require("bcrypt");
 
@@ -20,11 +21,13 @@ const authenticateUser = async (username, password) => {
         p.id as idpersona,
         p.nombres,
         p.apellidos,
-        ec.caja_id as idcaja
+        ec.caja_id as idcaja,
+        s.nombre as sucursalNombre  -- Nuevo campo
       FROM usuarios u
       INNER JOIN empleados e ON u.empleado_id = e.id
       INNER JOIN personas p ON e.persona_id = p.id
       LEFT JOIN empleado_caja ec ON e.id = ec.empleado_id AND ec.estado = 1
+      LEFT JOIN sucursales s ON e.sucursal_id = s.id  -- Join para obtener nombre de sucursal
       WHERE u.username = $1 AND e.estado = 1`,
       [username]
     );

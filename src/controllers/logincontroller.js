@@ -1,3 +1,4 @@
+// controllers/loginController.js
 const authService = require("../services/loginservice");
 const { generateToken } = require("../utils/jwtUtils");
 
@@ -37,7 +38,8 @@ const login = async (req, res) => {
         nombres: user.nombres,
         apellidos: user.apellidos,
         username: user.username,
-        userType: user.userType
+        userType: user.userType,
+        sucursalNombre: user.sucursalNombre // Nuevo campo
       };
     } else {
       userResponse = {
