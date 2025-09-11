@@ -49,7 +49,6 @@ const processSale = async (userId, saleData) => {
     await client.query('BEGIN');
     
     // 1. Obtener información del empleado y sucursal
-    // El campo c.estado es SMALLINT (1 = activa, 0 = inactiva, 2 = otro estado)
     const userQuery = `
       SELECT 
         e.id as empleado_id,
@@ -74,19 +73,28 @@ const processSale = async (userId, saleData) => {
       throw new Error("No hay caja activa para esta sucursal");
     }
     
-    // 2. Verificar si hay un estado_caja abierto para esta caja
+    // 2. Obtener el último estado de caja abierto
     const estadoCajaQuery = `
-      SELECT id 
+      SELECT id, monto_final, estado
       FROM estado_caja 
-      WHERE caja_id = $1 AND estado = 'abierta'
+      WHERE caja_id = $1 
+      ORDER BY id DESC 
       LIMIT 1
     `;
     
     const estadoCajaResult = await client.query(estadoCajaQuery, [caja_id]);
     
     if (estadoCajaResult.rows.length === 0) {
-      throw new Error("No hay caja abierta para realizar ventas");
+      throw new Error("No se encontró estado de caja para esta caja");
     }
+    
+    const estadoCajaActual = estadoCajaResult.rows[0];
+    
+    if (estadoCajaActual.estado !== 'abierta') {
+      throw new Error("La caja no está abierta para realizar ventas");
+    }
+    
+    const estado_caja_id = estadoCajaActual.id;
     
     // 3. Insertar venta en ventas_productos
     const insertSaleQuery = `
@@ -143,29 +151,21 @@ const processSale = async (userId, saleData) => {
       ]);
     }
     
-    // 5. Si el pago es en efectivo, registrar en transacciones_caja
+    // 5. Procesar pagos según la forma de pago
     if (saleData.forma_pago === 'efectivo' || saleData.forma_pago === 'mixto') {
-      let montoEfectivo = 0;
-      
-      if (saleData.forma_pago === 'efectivo') {
-        montoEfectivo = saleData.total;
-      } else if (saleData.forma_pago === 'mixto') {
-        // Extraer monto en efectivo del detalle de pago
-        const efectivoMatch = saleData.detalle_pago.match(/Efectivo: Bs\. (\d+\.?\d*)/);
-        if (efectivoMatch) {
-          montoEfectivo = parseFloat(efectivoMatch[1]);
-        }
-      }
+      const montoEfectivo = saleData.monto_efectivo || 0;
       
       if (montoEfectivo > 0) {
+        // Registrar transacción de caja con estado_caja_id
         const insertTransactionQuery = `
           INSERT INTO transacciones_caja (
-            caja_id, tipo, descripcion, monto, fecha, usuario_id
-          ) VALUES ($1, 'ingreso', 'Venta de productos', $2, NOW(), $3)
+            caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id
+          ) VALUES ($1, $2, 'ingreso', 'Venta de productos', $3, NOW(), $4)
         `;
         
         await client.query(insertTransactionQuery, [
           caja_id,
+          estado_caja_id,
           montoEfectivo,
           userId
         ]);
@@ -174,12 +174,14 @@ const processSale = async (userId, saleData) => {
         const updateCajaQuery = `
           UPDATE estado_caja 
           SET monto_final = monto_final + $1
-          WHERE caja_id = $2 AND estado = 'abierta'
+          WHERE id = $2
         `;
         
-        await client.query(updateCajaQuery, [montoEfectivo, caja_id]);
+        await client.query(updateCajaQuery, [montoEfectivo, estado_caja_id]);
       }
     }
+    
+    // Los pagos QR (tanto puros como la parte QR del pago mixto) NO se registran en transacciones_caja
     
     await client.query('COMMIT');
     
