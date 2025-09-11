@@ -21,6 +21,17 @@ exports.getCashBoxesByBranch = async (req, res) => {
   }
 };
 
+exports.getCashBoxStatus = async (req, res) => {
+  try {
+    const { cashBoxId } = req.params;
+    const status = await cashService.getCashBoxStatus(cashBoxId);
+    res.json(status);
+  } catch (error) {
+    console.error("Error in getCashBoxStatus:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
 exports.getTransactionsByCashBox = async (req, res) => {
   try {
     const { cashBoxId } = req.params;

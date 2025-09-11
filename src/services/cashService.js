@@ -15,6 +15,29 @@ exports.getCashBoxesByBranch = async (branchId) => {
   return result.rows;
 };
 
+exports.getCashBoxStatus = async (cashBoxId) => {
+  try {
+    // Consulta para obtener el monto_final del último registro (mayor ID) de la caja
+    const result = await query(
+      `SELECT monto_final 
+       FROM estado_caja 
+       WHERE caja_id = $1 
+       ORDER BY id DESC 
+       LIMIT 1`,
+      [cashBoxId]
+    );
+    
+    if (result.rows.length === 0) {
+      return { monto_final: "0" };
+    }
+    
+    return result.rows[0];
+  } catch (error) {
+    console.error("Error al consultar estado_caja:", error);
+    return { monto_final: "0" };
+  }
+};
+
 exports.getTransactionsByCashBox = async (cashBoxId) => {
   const result = await query(
     `SELECT id, caja_id, tipo, descripcion, monto, fecha, usuario_id 
