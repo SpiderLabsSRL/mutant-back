@@ -24,7 +24,8 @@ exports.searchPeople = async (searchTerm) => {
   return result.rows;
 };
 
-exports.getActiveSubscriptions = async (personaId) => {
+// MODIFICADO: Ahora acepta sucursalId como parámetro
+exports.getActiveSubscriptions = async (personaId, sucursalId) => {
   const result = await query(`
     SELECT i.id, i.servicio_id, i.sucursal_id, i.fecha_inicio, i.fecha_vencimiento, 
            i.ingresos_disponibles, i.estado, s.multisucursal
@@ -33,7 +34,8 @@ exports.getActiveSubscriptions = async (personaId) => {
     WHERE i.persona_id = $1 
     AND i.estado = 1 
     AND i.fecha_vencimiento >= CURRENT_DATE
-  `, [personaId]);
+    AND (i.sucursal_id = $2 OR s.multisucursal = true)
+  `, [personaId, sucursalId]);
   
   return result.rows;
 };
@@ -106,7 +108,8 @@ exports.registerMember = async (registrationData) => {
         SELECT id, ingresos_disponibles FROM inscripciones 
         WHERE persona_id = $1 AND servicio_id = $2 
         AND estado = 1 AND fecha_vencimiento >= CURRENT_DATE
-      `, [personaId, servicio.servicioId]);
+        AND (sucursal_id = $3 OR (SELECT multisucursal FROM servicios WHERE id = $2) = true)
+      `, [personaId, servicio.servicioId, registrationData.sucursalId]);
       
       let inscripcionId;
       

@@ -25,10 +25,17 @@ exports.searchPeople = async (req, res) => {
   }
 };
 
+// MODIFICADO: Ahora acepta sucursalId como parámetro de consulta
 exports.getActiveSubscriptions = async (req, res) => {
   try {
     const { personaId } = req.params;
-    const subscriptions = await RegisterMemberService.getActiveSubscriptions(personaId);
+    const { sucursalId } = req.query; // Nuevo parámetro
+    
+    if (!sucursalId) {
+      return res.status(400).json({ message: "sucursalId es requerido" });
+    }
+    
+    const subscriptions = await RegisterMemberService.getActiveSubscriptions(personaId, sucursalId);
     res.json(subscriptions);
   } catch (error) {
     console.error("Error in getActiveSubscriptions:", error);
