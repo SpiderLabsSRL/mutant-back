@@ -3,8 +3,13 @@ const sellProductsService = require("../services/sellProductsService");
 
 const getProducts = async (req, res) => {
   try {
-    // Para testing - usar un ID de usuario por defecto
-    const userId = 1; // ID de usuario hardcodeado para testing
+    const userId = parseInt(req.query.userId);
+    if (!userId) {
+      return res.status(400).json({ 
+        error: "ID de usuario requerido" 
+      });
+    }
+    
     const products = await sellProductsService.getProducts(userId);
     res.json(products);
   } catch (error) {
@@ -17,10 +22,14 @@ const getProducts = async (req, res) => {
 
 const processSale = async (req, res) => {
   try {
-    // Para testing - usar un ID de usuario por defecto
-    const userId = 1; // ID de usuario hardcodeado para testing
-    const saleData = req.body;
+    const userId = parseInt(req.query.userId);
+    if (!userId) {
+      return res.status(400).json({ 
+        error: "ID de usuario requerido" 
+      });
+    }
     
+    const saleData = req.body;
     const result = await sellProductsService.processSale(userId, saleData);
     res.json(result);
   } catch (error) {
