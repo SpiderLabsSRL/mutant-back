@@ -1,5 +1,14 @@
 const { query } = require("../../db");
 
+// Función para obtener la fecha actual en zona horaria de Bolivia (UTC-4)
+const getBoliviaDate = () => {
+  const now = new Date();
+  // Ajustar a UTC-4 (horario de Bolivia)
+  const boliviaOffset = -4 * 60;
+  const localOffset = now.getTimezoneOffset();
+  return new Date(now.getTime() + (localOffset - boliviaOffset) * 60 * 1000);
+};
+
 // Función para obtener todas las sucursales
 const obtenerSucursales = async () => {
   try {
@@ -23,6 +32,10 @@ const obtenerReportes = async (filtros) => {
   try {
     // Obtener fechas para el filtro
     const { fechaInicio, fechaFin } = obtenerFechasFiltro(filtros);
+    
+    console.log('Filtros recibidos:', filtros);
+    console.log('Fecha inicio:', fechaInicio);
+    console.log('Fecha fin:', fechaFin);
     
     // Obtener todos los datos en paralelo
     const [
@@ -58,66 +71,76 @@ const obtenerFechasFiltro = (filtros) => {
   
   switch (filtros.tipoFiltro) {
     case 'today':
-      const hoy = new Date();
+      const hoy = getBoliviaDate();
       fechaInicio = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
-      fechaFin = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 23, 59, 59);
+      fechaFin = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 23, 59, 59, 999);
       break;
     
     case 'yesterday':
-      const ayer = new Date();
+      const ayer = new Date(getBoliviaDate());
       ayer.setDate(ayer.getDate() - 1);
       fechaInicio = new Date(ayer.getFullYear(), ayer.getMonth(), ayer.getDate());
-      fechaFin = new Date(ayer.getFullYear(), ayer.getMonth(), ayer.getDate(), 23, 59, 59);
+      fechaFin = new Date(ayer.getFullYear(), ayer.getMonth(), ayer.getDate(), 23, 59, 59, 999);
       break;
     
     case 'thisWeek':
-      const inicioSemana = new Date();
+      const inicioSemana = new Date(getBoliviaDate());
+      // Domingo es el día 0, así que restamos el día actual para llegar al domingo
       inicioSemana.setDate(inicioSemana.getDate() - inicioSemana.getDay());
       fechaInicio = new Date(inicioSemana.getFullYear(), inicioSemana.getMonth(), inicioSemana.getDate());
-      fechaFin = new Date();
+      fechaFin = new Date(getBoliviaDate());
+      fechaFin.setHours(23, 59, 59, 999);
       break;
     
     case 'lastWeek':
-      const semanaPasada = new Date();
+      const semanaPasada = new Date(getBoliviaDate());
       semanaPasada.setDate(semanaPasada.getDate() - 7 - semanaPasada.getDay());
       fechaInicio = new Date(semanaPasada.getFullYear(), semanaPasada.getMonth(), semanaPasada.getDate());
-      semanaPasada.setDate(semanaPasada.getDate() + 6);
-      fechaFin = new Date(semanaPasada.getFullYear(), semanaPasada.getMonth(), semanaPasada.getDate(), 23, 59, 59);
+      const finSemanaPasada = new Date(semanaPasada);
+      finSemanaPasada.setDate(semanaPasada.getDate() + 6);
+      fechaFin = new Date(finSemanaPasada.getFullYear(), finSemanaPasada.getMonth(), finSemanaPasada.getDate(), 23, 59, 59, 999);
       break;
     
     case 'thisMonth':
-      fechaInicio = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-      fechaFin = new Date();
+      const ahora = getBoliviaDate();
+      fechaInicio = new Date(ahora.getFullYear(), ahora.getMonth(), 1);
+      fechaFin = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate(), 23, 59, 59, 999);
       break;
     
     case 'lastMonth':
-      const mesPasado = new Date();
+      const mesPasado = new Date(getBoliviaDate());
       mesPasado.setMonth(mesPasado.getMonth() - 1);
       fechaInicio = new Date(mesPasado.getFullYear(), mesPasado.getMonth(), 1);
-      fechaFin = new Date(mesPasado.getFullYear(), mesPasado.getMonth() + 1, 0, 23, 59, 59);
+      fechaFin = new Date(mesPasado.getFullYear(), mesPasado.getMonth() + 1, 0, 23, 59, 59, 999);
       break;
     
     case 'specific':
       if (filtros.fechaEspecifica) {
         const fecha = new Date(filtros.fechaEspecifica);
         fechaInicio = new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate());
-        fechaFin = new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate(), 23, 59, 59);
+        fechaFin = new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate(), 23, 59, 59, 999);
       }
       break;
     
     case 'range':
-      if (filtros.fechaInicio && filtros.fechaFin) {
+      if (filtros.fechaInicio) {
         fechaInicio = new Date(filtros.fechaInicio);
+      }
+      if (filtros.fechaFin) {
         fechaFin = new Date(filtros.fechaFin);
-        fechaFin.setHours(23, 59, 59);
+        fechaFin.setHours(23, 59, 59, 999);
       }
       break;
     
-    default: // 'all' - mes actual por defecto
-      const ahora = new Date();
-      fechaInicio = new Date(ahora.getFullYear(), ahora.getMonth(), 1);
-      fechaFin = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate(), 23, 59, 59);
+    default: // 'all' - todos los datos
+      fechaInicio = new Date(0); // Fecha mínima
+      fechaFin = new Date(); // Fecha actual
+      fechaFin.setHours(23, 59, 59, 999);
   }
+  
+  // Si no se definieron fechas, usar valores por defecto
+  if (!fechaInicio) fechaInicio = new Date(0);
+  if (!fechaFin) fechaFin = new Date();
   
   return { fechaInicio, fechaFin };
 };
@@ -125,11 +148,15 @@ const obtenerFechasFiltro = (filtros) => {
 // Función para obtener el resumen general
 const obtenerResumen = async (fechaInicio, fechaFin, sucursalId) => {
   try {
+    // Formatear fechas en formato YYYY-MM-DD HH:MM:SS
+    const fechaInicioStr = formatDateToSQL(fechaInicio);
+    const fechaFinStr = formatDateToSQL(fechaFin);
+    
     let whereClause = "WHERE vs.fecha BETWEEN $1 AND $2";
-    let params = [fechaInicio, fechaFin];
+    let params = [fechaInicioStr, fechaFinStr];
     let paramCount = 2;
     
-    if (sucursalId) {
+    if (sucursalId && sucursalId !== 'all') {
       paramCount++;
       whereClause += ` AND vs.sucursal_id = $${paramCount}`;
       params.push(sucursalId);
@@ -148,10 +175,10 @@ const obtenerResumen = async (fechaInicio, fechaFin, sucursalId) => {
       SELECT COALESCE(SUM(total), 0) as total 
       FROM (
         SELECT total FROM ventas_servicios WHERE fecha BETWEEN $1 AND $2
-        ${sucursalId ? `AND sucursal_id = $${paramCount}` : ''}
+        ${sucursalId && sucursalId !== 'all' ? `AND sucursal_id = $${paramCount}` : ''}
         UNION ALL
         SELECT total FROM ventas_productos WHERE fecha BETWEEN $1 AND $2
-        ${sucursalId ? `AND sucursal_id = $${paramCount}` : ''}
+        ${sucursalId && sucursalId !== 'all' ? `AND sucursal_id = $${paramCount}` : ''}
       ) as ventas_totales
     `;
     
@@ -161,7 +188,7 @@ const obtenerResumen = async (fechaInicio, fechaFin, sucursalId) => {
       FROM detalle_venta_productos dvp
       JOIN ventas_productos vp ON dvp.venta_producto_id = vp.id
       WHERE vp.fecha BETWEEN $1 AND $2
-      ${sucursalId ? `AND vp.sucursal_id = $${paramCount}` : ''}
+      ${sucursalId && sucursalId !== 'all' ? `AND vp.sucursal_id = $${paramCount}` : ''}
     `;
     
     // Consulta para minutos de atraso
@@ -174,12 +201,13 @@ const obtenerResumen = async (fechaInicio, fechaFin, sucursalId) => {
         ))) / 60
       ), 0) as minutos
       FROM registros_acceso ra
-      JOIN empleados e ON ra.usuario_registro_id = e.id
+      JOIN usuarios u ON ra.usuario_registro_id = u.id
+      JOIN empleados e ON u.empleado_id = e.id
       WHERE ra.fecha BETWEEN $1 AND $2 
       AND ra.tipo_persona = 'empleado'
       AND ra.estado = 'exitoso'
       AND ra.fecha::time > e.hora_ingreso
-      ${sucursalId ? `AND ra.sucursal_id = $${paramCount}` : ''}
+      ${sucursalId && sucursalId !== 'all' ? `AND ra.sucursal_id = $${paramCount}` : ''}
     `;
     
     // Ejecutar todas las consultas en paralelo
@@ -195,7 +223,7 @@ const obtenerResumen = async (fechaInicio, fechaFin, sucursalId) => {
       query(atrasosQuery, params)
     ]);
     
-    // Calcular tendencias (comparar con el mes anterior)
+    // Calcular tendencias (comparar con el período anterior)
     const tendencias = await calcularTendencias(
       fechaInicio, 
       fechaFin, 
@@ -224,41 +252,56 @@ const obtenerResumen = async (fechaInicio, fechaFin, sucursalId) => {
   }
 };
 
-// Función para calcular tendencias comparando con el mes anterior
+// Función para formatear fecha a formato SQL YYYY-MM-DD HH:MM:SS
+const formatDateToSQL = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+};
+
+// Función para calcular tendencias comparando con el período anterior
 const calcularTendencias = async (fechaInicio, fechaFin, sucursalId, datosActuales) => {
   try {
-    // Calcular fechas del mes anterior
-    const mesAnteriorInicio = new Date(fechaInicio);
-    mesAnteriorInicio.setMonth(mesAnteriorInicio.getMonth() - 1);
+    // Calcular la duración del período actual
+    const duracion = fechaFin - fechaInicio;
     
-    const mesAnteriorFin = new Date(fechaFin);
-    mesAnteriorFin.setMonth(mesAnteriorFin.getMonth() - 1);
+    // Calcular fechas del período anterior
+    const periodoAnteriorInicio = new Date(fechaInicio.getTime() - duracion);
+    const periodoAnteriorFin = new Date(fechaFin.getTime() - duracion);
     
-    let paramsAnterior = [mesAnteriorInicio, mesAnteriorFin];
+    const fechaInicioAnteriorStr = formatDateToSQL(periodoAnteriorInicio);
+    const fechaFinAnteriorStr = formatDateToSQL(periodoAnteriorFin);
+    
+    let paramsAnterior = [fechaInicioAnteriorStr, fechaFinAnteriorStr];
     let paramCount = 2;
     
-    if (sucursalId) {
+    if (sucursalId && sucursalId !== 'all') {
       paramCount++;
       paramsAnterior.push(sucursalId);
     }
     
-    // Consultas para el mes anterior
+    // Consultas para el período anterior
     const serviciosQueryAnterior = `
       SELECT COUNT(*) as count 
       FROM detalle_venta_servicios dvs
       JOIN ventas_servicios vs ON dvs.venta_servicio_id = vs.id
       WHERE vs.fecha BETWEEN $1 AND $2
-      ${sucursalId ? `AND vs.sucursal_id = $${paramCount}` : ''}
+      ${sucursalId && sucursalId !== 'all' ? `AND vs.sucursal_id = $${paramCount}` : ''}
     `;
     
     const ingresosQueryAnterior = `
       SELECT COALESCE(SUM(total), 0) as total 
       FROM (
         SELECT total FROM ventas_servicios WHERE fecha BETWEEN $1 AND $2
-        ${sucursalId ? `AND sucursal_id = $${paramCount}` : ''}
+        ${sucursalId && sucursalId !== 'all' ? `AND sucursal_id = $${paramCount}` : ''}
         UNION ALL
         SELECT total FROM ventas_productos WHERE fecha BETWEEN $1 AND $2
-        ${sucursalId ? `AND sucursal_id = $${paramCount}` : ''}
+        ${sucursalId && sucursalId !== 'all' ? `AND sucursal_id = $${paramCount}` : ''}
       ) as ventas_totales
     `;
     
@@ -267,7 +310,7 @@ const calcularTendencias = async (fechaInicio, fechaFin, sucursalId, datosActual
       FROM detalle_venta_productos dvp
       JOIN ventas_productos vp ON dvp.venta_producto_id = vp.id
       WHERE vp.fecha BETWEEN $1 AND $2
-      ${sucursalId ? `AND vp.sucursal_id = $${paramCount}` : ''}
+      ${sucursalId && sucursalId !== 'all' ? `AND vp.sucursal_id = $${paramCount}` : ''}
     `;
     
     const atrasosQueryAnterior = `
@@ -279,15 +322,16 @@ const calcularTendencias = async (fechaInicio, fechaFin, sucursalId, datosActual
         ))) / 60
       ), 0) as minutos
       FROM registros_acceso ra
-      JOIN empleados e ON ra.usuario_registro_id = e.id
+      JOIN usuarios u ON ra.usuario_registro_id = u.id
+      JOIN empleados e ON u.empleado_id = e.id
       WHERE ra.fecha BETWEEN $1 AND $2 
       AND ra.tipo_persona = 'empleado'
       AND ra.estado = 'exitoso'
       AND ra.fecha::time > e.hora_ingreso
-      ${sucursalId ? `AND ra.sucursal_id = $${paramCount}` : ''}
+      ${sucursalId && sucursalId !== 'all' ? `AND ra.sucursal_id = $${paramCount}` : ''}
     `;
     
-    // Ejecutar consultas del mes anterior
+    // Ejecutar consultas del período anterior
     const [
       serviciosAnterior,
       ingresosAnterior,
@@ -330,14 +374,17 @@ const calcularTendencias = async (fechaInicio, fechaFin, sucursalId, datosActual
   }
 };
 
-// Función para obtener servicios más vendidos
+// Función para obtener servicios más vendidos - AJUSTADA
 const obtenerServiciosMasVendidos = async (fechaInicio, fechaFin, sucursalId) => {
   try {
+    const fechaInicioStr = formatDateToSQL(fechaInicio);
+    const fechaFinStr = formatDateToSQL(fechaFin);
+    
     let whereClause = "WHERE vs.fecha BETWEEN $1 AND $2";
-    let params = [fechaInicio, fechaFin];
+    let params = [fechaInicioStr, fechaFinStr];
     let paramCount = 2;
     
-    if (sucursalId) {
+    if (sucursalId && sucursalId !== 'all') {
       paramCount++;
       whereClause += ` AND vs.sucursal_id = $${paramCount}`;
       params.push(sucursalId);
@@ -349,7 +396,8 @@ const obtenerServiciosMasVendidos = async (fechaInicio, fechaFin, sucursalId) =>
         COUNT(dvs.id) as ventas,
         COALESCE(SUM(dvs.precio), 0) as ingresos
       FROM servicios s
-      JOIN detalle_venta_servicios dvs ON s.id = dvs.inscripcion_id
+      JOIN inscripciones i ON s.id = i.servicio_id
+      JOIN detalle_venta_servicios dvs ON i.id = dvs.inscripcion_id
       JOIN ventas_servicios vs ON dvs.venta_servicio_id = vs.id
       ${whereClause}
       GROUP BY s.id, s.nombre
@@ -374,14 +422,17 @@ const obtenerServiciosMasVendidos = async (fechaInicio, fechaFin, sucursalId) =>
   }
 };
 
-// Función para obtener productos más vendidos
+// Función para obtener productos más vendidos - AJUSTADA
 const obtenerProductosMasVendidos = async (fechaInicio, fechaFin, sucursalId) => {
   try {
+    const fechaInicioStr = formatDateToSQL(fechaInicio);
+    const fechaFinStr = formatDateToSQL(fechaFin);
+    
     let whereClause = "WHERE vp.fecha BETWEEN $1 AND $2";
-    let params = [fechaInicio, fechaFin];
+    let params = [fechaInicioStr, fechaFinStr];
     let paramCount = 2;
     
-    if (sucursalId) {
+    if (sucursalId && sucursalId !== 'all') {
       paramCount++;
       whereClause += ` AND vp.sucursal_id = $${paramCount}`;
       params.push(sucursalId);
@@ -397,7 +448,7 @@ const obtenerProductosMasVendidos = async (fechaInicio, fechaFin, sucursalId) =>
       JOIN detalle_venta_productos dvp ON p.id = dvp.producto_id
       JOIN ventas_productos vp ON dvp.venta_producto_id = vp.id
       LEFT JOIN producto_sucursal ps ON p.id = ps.producto_id 
-        AND ps.sucursal_id = ${sucursalId ? `$${paramCount}` : 'vp.sucursal_id'}
+        AND ps.sucursal_id = ${sucursalId && sucursalId !== 'all' ? `$${paramCount}` : 'vp.sucursal_id'}
       ${whereClause}
       GROUP BY p.id, p.nombre, ps.stock
       ORDER BY ventas DESC
@@ -418,14 +469,17 @@ const obtenerProductosMasVendidos = async (fechaInicio, fechaFin, sucursalId) =>
   }
 };
 
-// Función para obtener atrasos de trabajadores
+// Función para obtener atrasos de trabajadores - AJUSTADA
 const obtenerAtrasosTrabajadores = async (fechaInicio, fechaFin, sucursalId) => {
   try {
+    const fechaInicioStr = formatDateToSQL(fechaInicio);
+    const fechaFinStr = formatDateToSQL(fechaFin);
+    
     let whereClause = "WHERE ra.fecha BETWEEN $1 AND $2 AND ra.tipo_persona = 'empleado' AND ra.estado = 'exitoso'";
-    let params = [fechaInicio, fechaFin];
+    let params = [fechaInicioStr, fechaFinStr];
     let paramCount = 2;
     
-    if (sucursalId) {
+    if (sucursalId && sucursalId !== 'all') {
       paramCount++;
       whereClause += ` AND ra.sucursal_id = $${paramCount}`;
       params.push(sucursalId);
@@ -445,7 +499,8 @@ const obtenerAtrasosTrabajadores = async (fechaInicio, fechaFin, sucursalId) => 
           NULLIF(COUNT(*), 0)), 2
         ) as porcentaje_asistencia
       FROM registros_acceso ra
-      JOIN empleados e ON ra.usuario_registro_id = e.id
+      JOIN usuarios u ON ra.usuario_registro_id = u.id
+      JOIN empleados e ON u.empleado_id = e.id
       JOIN personas p ON e.persona_id = p.id
       ${whereClause}
       GROUP BY p.id, p.nombres, p.apellidos, e.hora_ingreso
@@ -474,17 +529,20 @@ const obtenerTendenciasMensuales = async (fechaInicio, fechaFin, sucursalId) => 
     const tendencias = [];
     
     // Obtener los últimos 6 meses
-    const fechaActual = new Date();
+    const fechaActual = getBoliviaDate();
     for (let i = 5; i >= 0; i--) {
       const mes = new Date(fechaActual.getFullYear(), fechaActual.getMonth() - i, 1);
       const mesSiguiente = new Date(fechaActual.getFullYear(), fechaActual.getMonth() - i + 1, 0);
       const nombreMes = meses[mes.getMonth()];
       
-      let params = [mes, mesSiguiente];
+      const fechaInicioMesStr = formatDateToSQL(mes);
+      const fechaFinMesStr = formatDateToSQL(mesSiguiente);
+      
+      let params = [fechaInicioMesStr, fechaFinMesStr];
       let paramCount = 2;
       let whereClause = "WHERE fecha BETWEEN $1 AND $2";
       
-      if (sucursalId) {
+      if (sucursalId && sucursalId !== 'all') {
         paramCount++;
         whereClause += ` AND sucursal_id = $${paramCount}`;
         params.push(sucursalId);

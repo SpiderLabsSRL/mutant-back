@@ -11,12 +11,14 @@ const getReportes = async (req, res) => {
     } = req.query;
 
     const filtros = {
-      tipoFiltro: tipoFiltro || 'all',
-      fechaEspecifica,
-      fechaInicio,
-      fechaFin,
+      tipoFiltro: tipoFiltro || 'today',
+      fechaEspecifica: fechaEspecifica ? new Date(fechaEspecifica) : undefined,
+      fechaInicio: fechaInicio ? new Date(fechaInicio) : undefined,
+      fechaFin: fechaFin ? new Date(fechaFin) : undefined,
       sucursalId: sucursalId === 'all' ? null : sucursalId
     };
+
+    console.log('Filtros recibidos en controller:', filtros);
 
     const reportes = await reportsService.obtenerReportes(filtros);
     res.json(reportes);
