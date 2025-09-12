@@ -15,13 +15,6 @@ const login = async (req, res) => {
 
     const user = await authService.authenticateUser(username, password);
 
-    if (!user) {
-      return res.status(401).json({
-        success: false,
-        message: "Credenciales inválidas",
-      });
-    }
-
     // Preparar datos según el tipo de usuario
     let userResponse = {};
     
@@ -39,7 +32,7 @@ const login = async (req, res) => {
         apellidos: user.apellidos,
         username: user.username,
         userType: user.userType,
-        sucursalNombre: user.sucursalNombre // Nuevo campo
+        sucursalNombre: user.sucursalNombre
       };
     } else {
       userResponse = {
@@ -70,9 +63,9 @@ const login = async (req, res) => {
     });
   } catch (error) {
     console.error("Error en login:", error);
-    res.status(500).json({
+    res.status(401).json({
       success: false,
-      message: "Error en el servidor",
+      message: error.message,
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     });
   }
