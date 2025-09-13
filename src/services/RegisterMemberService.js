@@ -54,6 +54,17 @@ exports.getCashRegisterStatus = async (cajaId) => {
   return result.rows[0] || { estado: 'cerrada' };
 };
 
+// Función para verificar si una persona ya existe por CI
+const checkExistingPerson = async (client, ci) => {
+  const existingPerson = await client.query(`
+    SELECT id, nombres, apellidos, ci, telefono, fecha_nacimiento
+    FROM personas 
+    WHERE ci = $1
+  `, [ci]);
+  
+  return existingPerson.rows[0] || null;
+};
+
 exports.registerMember = async (registrationData) => {
   const client = await pool.connect();
   
@@ -62,8 +73,20 @@ exports.registerMember = async (registrationData) => {
     
     let personaId = registrationData.personaId;
     
-    // Si no es un miembro existente, crear nueva persona
+    // Si no es un miembro existente, verificar si ya existe una persona con el mismo CI
     if (!personaId) {
+      const { ci } = registrationData;
+      
+      // Verificar si ya existe una persona con el mismo CI
+      const existingPerson = await checkExistingPerson(client, ci);
+      if (existingPerson) {
+        // Lanzar un error específico con los datos de la persona existente
+        const error = new Error("La persona ya existe");
+        error.existingPerson = existingPerson;
+        throw error;
+      }
+      
+      // Si no existe, crear nueva persona
       const personaResult = await client.query(`
         INSERT INTO personas (nombres, apellidos, ci, telefono, fecha_nacimiento)
         VALUES ($1, $2, $3, $4, $5)
@@ -275,7 +298,7 @@ exports.registerMember = async (registrationData) => {
   } catch (error) {
     await client.query('ROLLBACK');
     console.error("Error in registerMember service:", error);
-    throw new Error(error.message || "Error al registrar la inscripción");
+    throw error; // Re-lanzar el error para que el controller lo maneje
   } finally {
     client.release();
   }

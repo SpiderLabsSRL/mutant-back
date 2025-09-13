@@ -61,6 +61,15 @@ exports.registerMember = async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error("Error in registerMember:", error);
+    
+    // Manejar específicamente el error de persona existente
+    if (error.message === "La persona ya existe") {
+      return res.status(409).json({ 
+        message: error.message,
+        existingPerson: error.existingPerson 
+      });
+    }
+    
     res.status(500).json({ message: error.message });
   }
 };
