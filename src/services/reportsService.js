@@ -44,13 +44,15 @@ const obtenerReportes = async (filtros) => {
       servicios,
       productos,
       atrasos,
-      tendencias
+      tendencias,
+      ingresosServicios
     ] = await Promise.all([
       obtenerResumen(fechaInicio, fechaFin, filtros.sucursalId, usarZonaHoraria),
       obtenerServiciosMasVendidos(fechaInicio, fechaFin, filtros.sucursalId, usarZonaHoraria),
       obtenerProductosMasVendidos(fechaInicio, fechaFin, filtros.sucursalId, usarZonaHoraria),
       obtenerAtrasosTrabajadores(fechaInicio, fechaFin, filtros.sucursalId, usarZonaHoraria),
-      obtenerTendenciasMensuales(fechaInicio, fechaFin, filtros.sucursalId, usarZonaHoraria)
+      obtenerTendenciasMensuales(fechaInicio, fechaFin, filtros.sucursalId, usarZonaHoraria),
+      obtenerIngresosServicios(filtros) // Nueva llamada
     ]);
 
     return {
@@ -58,7 +60,8 @@ const obtenerReportes = async (filtros) => {
       servicios,
       productos,
       atrasos,
-      tendencias
+      tendencias,
+      ingresosServicios // Agregar al resultado
     };
   } catch (error) {
     console.error("Error en reportsService:", error);
@@ -651,8 +654,64 @@ const obtenerTendenciasMensuales = async (fechaInicio, fechaFin, sucursalId, usa
     }));
   }
 };
+const obtenerIngresosServicios = async (filtros) => {
+  try {
+    // Obtener fechas para el filtro
+    const { fechaInicio, fechaFin, usarZonaHoraria } = obtenerFechasFiltro(filtros);
+    
+    console.log('Filtros para ingresos servicios:', filtros);
+    console.log('Fecha inicio:', fechaInicio);
+    console.log('Fecha fin:', fechaFin);
+    
+    const fechaInicioStr = formatDateToSQL(fechaInicio);
+    const fechaFinStr = formatDateToSQL(fechaFin);
+    
+    let whereClause = usarZonaHoraria 
+      ? "WHERE (ra.fecha AT TIME ZONE 'UTC' AT TIME ZONE 'America/La_Paz') BETWEEN $1 AND $2"
+      : "WHERE ra.fecha BETWEEN $1 AND $2";
+    
+    whereClause += " AND ra.tipo_persona = 'cliente' AND ra.estado = 'exitoso'";
+    
+    let params = [fechaInicioStr, fechaFinStr];
+    let paramCount = 2;
+    
+    if (filtros.sucursalId && filtros.sucursalId !== 'all') {
+      paramCount++;
+      whereClause += ` AND ra.sucursal_id = $${paramCount}`;
+      params.push(filtros.sucursalId);
+    }
+    
+    const queryText = `
+      SELECT 
+        s.nombre,
+        COUNT(ra.id) as ingresos,
+        COALESCE(SUM(s.precio), 0) as total_ingresos
+      FROM servicios s
+      JOIN registros_acceso ra ON s.id = ra.servicio_id
+      ${whereClause}
+      GROUP BY s.id, s.nombre
+      ORDER BY ingresos DESC
+      LIMIT 6
+    `;
+    
+    const result = await query(queryText, params);
+    
+    // Colores para los gráficos
+    const colores = ["#8B5CF6", "#06B6D4", "#10B981", "#F59E0B", "#EF4444", "#6366F1"];
+    
+    return result.rows.map((row, index) => ({
+      nombre: row.nombre,
+      ingresos: parseFloat(row.total_ingresos),
+      color: colores[index] || colores[0]
+    }));
+  } catch (error) {
+    console.error("Error obteniendo ingresos por servicio:", error);
+    throw error;
+  }
+};
 
 module.exports = {
   obtenerReportes,
-  obtenerSucursales
+  obtenerSucursales,
+  obtenerIngresosServicios
 };

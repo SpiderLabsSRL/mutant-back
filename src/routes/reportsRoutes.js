@@ -8,4 +8,7 @@ router.get("/", reportsController.getReportes);
 // Ruta para obtener sucursales
 router.get("/sucursales", reportsController.getSucursales);
 
+// Nueva ruta para obtener ingresos por servicio
+router.get('/ingresos-servicios', reportsController.getIngresosServicios);
+
 module.exports = router;
