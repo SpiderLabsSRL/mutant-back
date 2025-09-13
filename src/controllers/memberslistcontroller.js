@@ -167,6 +167,15 @@ const editMember = async (req, res) => {
   } catch (error) {
     console.error("Error en editMember controller:", error);
     
+    // Manejar específicamente el error de CI duplicado
+    if (error.message.includes("La persona ya existe")) {
+      return res.status(409).json({
+        success: false,
+        message: error.message,
+        existingPerson: error.existingPerson
+      });
+    }
+    
     if (error.message.includes("no encontrado")) {
       return res.status(404).json({
         success: false,
@@ -212,6 +221,7 @@ const deleteMember = async (req, res) => {
     });
   }
 };
+
 // Obtener servicios disponibles
 const getAvailableServices = async (req, res) => {
   try {
@@ -227,6 +237,7 @@ const getAvailableServices = async (req, res) => {
     });
   }
 };
+
 const getAvailableBranches = async (req, res) => {
   try {
     const branches = await membersListService.getAvailableBranches();

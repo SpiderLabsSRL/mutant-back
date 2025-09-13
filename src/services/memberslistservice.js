@@ -328,12 +328,16 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
   try {
     // Verificar si el CI ya existe en otro miembro
     const checkCiQuery = `
-      SELECT id FROM personas WHERE ci = $1 AND id != $2
+      SELECT id, nombres, apellidos, ci, telefono, fecha_nacimiento
+      FROM personas WHERE ci = $1 AND id != $2
     `;
     const ciResult = await query(checkCiQuery, [ci, id]);
 
     if (ciResult.rows.length > 0) {
-      throw new Error("La cédula de identidad ya existe para otro miembro");
+      const existingPerson = ciResult.rows[0];
+      const error = new Error("La persona ya existe con este número de cédula");
+      error.existingPerson = existingPerson;
+      throw error;
     }
 
     const updateQuery = `
@@ -368,6 +372,12 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
     return result.rows[0];
   } catch (error) {
     console.error("Error en editMember service:", error);
+    
+    // Si ya es un error personalizado, re-lanzarlo
+    if (error.message.includes("La persona ya existe")) {
+      throw error;
+    }
+    
     throw new Error(
       `Error al editar miembro en la base de datos: ${error.message}`
     );
