@@ -684,13 +684,13 @@ const obtenerIngresosServicios = async (filtros) => {
     const queryText = `
       SELECT 
         s.nombre,
-        COUNT(ra.id) as ingresos,
-        COALESCE(SUM(s.precio), 0) as total_ingresos
+        COUNT(ra.id) as cantidad_accesos,  -- Cambiado de total_ingresos a cantidad
+        COALESCE(SUM(s.precio), 0) as total_ingresos  -- Mantenemos esto por si acaso
       FROM servicios s
       JOIN registros_acceso ra ON s.id = ra.servicio_id
       ${whereClause}
       GROUP BY s.id, s.nombre
-      ORDER BY ingresos DESC
+      ORDER BY cantidad_accesos DESC  -- Ordenar por cantidad en lugar de ingresos
       LIMIT 6
     `;
     
@@ -701,7 +701,8 @@ const obtenerIngresosServicios = async (filtros) => {
     
     return result.rows.map((row, index) => ({
       nombre: row.nombre,
-      ingresos: parseFloat(row.total_ingresos),
+      ingresos: parseInt(row.cantidad_accesos),  // Ahora ingresos representa la cantidad
+      cantidad: parseInt(row.cantidad_accesos),  // Nueva propiedad para claridad
       color: colores[index] || colores[0]
     }));
   } catch (error) {
