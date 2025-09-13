@@ -165,6 +165,7 @@ const obtenerFechasFiltro = (filtros) => {
 };
 
 // Función para obtener el resumen general
+// Función para obtener el resumen general
 const obtenerResumen = async (fechaInicio, fechaFin, sucursalId) => {
   try {
     // Formatear fechas para SQL
@@ -213,23 +214,19 @@ const obtenerResumen = async (fechaInicio, fechaFin, sucursalId) => {
       ${sucursalId && sucursalId !== 'all' ? `AND vp.sucursal_id = $${paramCount}` : ''}
     `;
     
-    // Consulta para minutos de atraso
+    // CONSULTA MODIFICADA PARA ATRASOS
     const atrasosQuery = `
-      SELECT COALESCE(SUM(
-        EXTRACT(EPOCH FROM (ra.fecha - make_time(
-          EXTRACT(HOUR FROM e.hora_ingreso)::integer,
-          EXTRACT(MINUTE FROM e.hora_ingreso)::integer,
-          0
-        ))) / 60
-      ), 0) as minutos
-      FROM registros_acceso ra
-      JOIN usuarios u ON ra.usuario_registro_id = u.id
-      JOIN empleados e ON u.empleado_id = e.id
-      WHERE ra.fecha BETWEEN $1 AND $2
-      AND ra.tipo_persona = 'empleado'
-      AND ra.estado = 'exitoso'
-      AND ra.fecha::time > e.hora_ingreso
-      ${sucursalId && sucursalId !== 'all' ? `AND ra.sucursal_id = $${paramCount}` : ''}
+      SELECT 
+        COALESCE(SUM(
+          CAST(
+            COALESCE(NULLIF(regexp_replace(detalle, '\\D', '', 'g'), ''), '0') AS INTEGER
+          )
+        ), 0) AS minutos_atraso_total
+      FROM registros_acceso
+      WHERE fecha::date BETWEEN $1 AND $2
+        AND tipo_persona = 'empleado'
+        AND estado = 'exitoso'
+        AND sucursal_id = ${sucursalId && sucursalId !== 'all' ? `$${paramCount}` : '1'}
     `;
     
     // Ejecutar todas las consultas en paralelo
@@ -254,7 +251,7 @@ const obtenerResumen = async (fechaInicio, fechaFin, sucursalId) => {
         servicios: parseInt(serviciosResult.rows[0]?.count) || 0,
         productos: parseInt(productosResult.rows[0]?.count) || 0,
         ingresos: parseFloat(ingresosResult.rows[0]?.total) || 0,
-        atrasos: parseInt(atrasosResult.rows[0]?.minutos) || 0
+        atrasos: parseInt(atrasosResult.rows[0]?.minutos_atraso_total) || 0
       }
     );
     
@@ -262,7 +259,7 @@ const obtenerResumen = async (fechaInicio, fechaFin, sucursalId) => {
       serviciosVendidos: parseInt(serviciosResult.rows[0]?.count) || 0,
       productosVendidos: parseInt(productosResult.rows[0]?.count) || 0,
       ingresosTotales: parseFloat(ingresosResult.rows[0]?.total) || 0,
-      minutosAtraso: parseInt(atrasosResult.rows[0]?.minutos) || 0,
+      minutosAtraso: parseInt(atrasosResult.rows[0]?.minutos_atraso_total) || 0,
       tendenciaServicios: tendencias.servicios,
       tendenciaProductos: tendencias.productos,
       tendenciaIngresos: tendencias.ingresos,
