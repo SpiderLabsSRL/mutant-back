@@ -22,12 +22,12 @@ const authenticateUser = async (username, password) => {
         p.nombres,
         p.apellidos,
         ec.caja_id as idcaja,
-        s.nombre as sucursalNombre
+        s.nombre as sucursalNombre 
       FROM usuarios u
       INNER JOIN empleados e ON u.empleado_id = e.id
       INNER JOIN personas p ON e.persona_id = p.id
       LEFT JOIN empleado_caja ec ON e.id = ec.empleado_id AND ec.estado = 1
-      LEFT JOIN sucursales s ON e.sucursal_id = s.id
+      LEFT JOIN sucursales s ON e.sucursal_id = s.id 
       WHERE u.username = $1`,
       [username]
     );
@@ -60,10 +60,23 @@ const authenticateUser = async (username, password) => {
     } else {
       user = result.rows[0];
       user.userType = 'empleado';
+      
+      // Asegurarnos de que tenemos el nombre de la sucursal
+      if (!user.sucursalNombre && user.idsucursal) {
+        // Si no viene el nombre de sucursal pero tenemos el ID, buscarlo
+        const sucursalResult = await query(
+          "SELECT nombre FROM sucursales WHERE id = $1",
+          [user.idsucursal]
+        );
+        if (sucursalResult.rows.length > 0) {
+          user.sucursalNombre = sucursalResult.rows[0].nombre;
+        }
+      }
     }
 
-    console.log("Usuario encontrado:", user.username, "Tipo:", userType);
+    console.log("Usuario encontrado:", user.username, "Tipo:", userType, "Sucursal:", user.sucursalNombre);
 
+    // Resto del código sin cambios...
     // Verificar si el usuario está inactivo (solo para empleados)
     if (user.userType === 'empleado' && user.estado_empleado !== 1) {
       console.log("Usuario inactivo");
