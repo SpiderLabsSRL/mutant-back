@@ -53,32 +53,55 @@ exports.createTransaction = async ({ tipo, descripcion, monto, idCaja, idUsuario
     
     // Obtener el último estado de caja para el monto inicial
     const lastCashStatus = await client.query(`
-      SELECT id as estado_caja_id, monto_final 
+      SELECT id as estado_caja_id, monto_final, estado
       FROM estado_caja 
       WHERE caja_id = $1 
       ORDER BY id DESC 
       LIMIT 1
     `, [idCaja]);
     
-    const montoInicial = lastCashStatus.rows.length > 0 ? lastCashStatus.rows[0].monto_final : 0;
+    let montoInicial = 0;
+    let montoFinal = 0;
     const estadoCajaIdExistente = lastCashStatus.rows.length > 0 ? lastCashStatus.rows[0].estado_caja_id : null;
+    const estadoActual = lastCashStatus.rows.length > 0 ? lastCashStatus.rows[0].estado : 'cerrada';
     
     // Calcular el nuevo monto final según el tipo de transacción
-    let montoFinal = parseFloat(montoInicial);
-    if (tipo === 'ingreso' || tipo === 'apertura') {
-      montoFinal += parseFloat(monto);
-    } else if (tipo === 'egreso') {
-      montoFinal -= parseFloat(monto);
-    } else if (tipo === 'cierre') {
+    if (tipo === 'apertura') {
+      // Para apertura, el monto inicial es el monto proporcionado
+      montoInicial = parseFloat(monto);
       montoFinal = parseFloat(monto);
+    } else if (tipo === 'cierre') {
+      // Para cierre, el monto final es el monto proporcionado
+      montoInicial = lastCashStatus.rows.length > 0 ? parseFloat(lastCashStatus.rows[0].monto_final) : 0;
+      montoFinal = parseFloat(monto);
+    } else {
+      // Para ingresos y egresos, usar el monto final anterior como inicial
+      montoInicial = lastCashStatus.rows.length > 0 ? parseFloat(lastCashStatus.rows[0].monto_final) : 0;
+      montoFinal = montoInicial;
+      
+      if (tipo === 'ingreso') {
+        montoFinal += parseFloat(monto);
+      } else if (tipo === 'egreso') {
+        montoFinal -= parseFloat(monto);
+      }
+    }
+    
+    // Determinar el nuevo estado de la caja
+    let nuevoEstado = 'abierta';
+    if (tipo === 'cierre') {
+      nuevoEstado = 'cerrada';
+    } else if (tipo === 'apertura') {
+      nuevoEstado = 'abierta';
+    } else {
+      nuevoEstado = estadoActual; // Mantener el estado actual para otros tipos
     }
     
     // Crear nuevo estado de caja
     const estadoCajaResult = await client.query(`
       INSERT INTO estado_caja (caja_id, estado, monto_inicial, monto_final, usuario_id)
-      VALUES ($1, 'abierta', $2, $3, $4)
+      VALUES ($1, $2, $3, $4, $5)
       RETURNING id
-    `, [idCaja, montoInicial, montoFinal, idUsuario]);
+    `, [idCaja, nuevoEstado, montoInicial, montoFinal, idUsuario]);
     
     const nuevoEstadoCajaId = estadoCajaResult.rows[0].id;
     
@@ -89,8 +112,8 @@ exports.createTransaction = async ({ tipo, descripcion, monto, idCaja, idUsuario
       RETURNING id
     `, [idCaja, nuevoEstadoCajaId, tipo, descripcion, monto, idUsuario]);
     
-    // Si había un estado de caja anterior, actualizarlo a cerrado
-    if (estadoCajaIdExistente) {
+    // Si había un estado de caja anterior y es una transacción de cierre o apertura, actualizarlo
+    if (estadoCajaIdExistente && (tipo === 'cierre' || tipo === 'apertura')) {
       await client.query(`
         UPDATE estado_caja SET estado = 'cerrada' WHERE id = $1
       `, [estadoCajaIdExistente]);
