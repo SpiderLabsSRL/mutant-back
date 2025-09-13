@@ -3,10 +3,21 @@ const { query } = require("../../db");
 // Función para obtener la fecha actual en zona horaria de Bolivia (UTC-4)
 const getBoliviaDate = () => {
   const now = new Date();
-  // Ajustar a UTC-4 (horario de Bolivia)
-  const boliviaOffset = -4 * 60;
-  const localOffset = now.getTimezoneOffset();
-  return new Date(now.getTime() + (localOffset - boliviaOffset) * 60 * 1000);
+  // Convertir a hora de Bolivia (UTC-4)
+  const boliviaTime = new Date(now.getTime() - (4 * 60 * 60 * 1000));
+  return boliviaTime;
+};
+
+// Función para formatear fecha a formato SQL YYYY-MM-DD HH:MM:SS
+const formatDateToSQL = (date) => {
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, '0');
+  const day = String(date.getUTCDate()).padStart(2, '0');
+  const hours = String(date.getUTCHours()).padStart(2, '0');
+  const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+  const seconds = String(date.getUTCSeconds()).padStart(2, '0');
+  
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 };
 
 // Función para obtener todas las sucursales
@@ -31,12 +42,11 @@ const obtenerSucursales = async () => {
 const obtenerReportes = async (filtros) => {
   try {
     // Obtener fechas para el filtro
-    const { fechaInicio, fechaFin, usarZonaHoraria } = obtenerFechasFiltro(filtros);
+    const { fechaInicio, fechaFin } = obtenerFechasFiltro(filtros);
     
     console.log('Filtros recibidos:', filtros);
     console.log('Fecha inicio:', fechaInicio);
     console.log('Fecha fin:', fechaFin);
-    console.log('Usar zona horaria:', usarZonaHoraria);
     
     // Obtener todos los datos en paralelo
     const [
@@ -47,12 +57,12 @@ const obtenerReportes = async (filtros) => {
       tendencias,
       ingresosServicios
     ] = await Promise.all([
-      obtenerResumen(fechaInicio, fechaFin, filtros.sucursalId, usarZonaHoraria),
-      obtenerServiciosMasVendidos(fechaInicio, fechaFin, filtros.sucursalId, usarZonaHoraria),
-      obtenerProductosMasVendidos(fechaInicio, fechaFin, filtros.sucursalId, usarZonaHoraria),
-      obtenerAtrasosTrabajadores(fechaInicio, fechaFin, filtros.sucursalId, usarZonaHoraria),
-      obtenerTendenciasMensuales(fechaInicio, fechaFin, filtros.sucursalId, usarZonaHoraria),
-      obtenerIngresosServicios(filtros) // Nueva llamada
+      obtenerResumen(fechaInicio, fechaFin, filtros.sucursalId),
+      obtenerServiciosMasVendidos(fechaInicio, fechaFin, filtros.sucursalId),
+      obtenerProductosMasVendidos(fechaInicio, fechaFin, filtros.sucursalId),
+      obtenerAtrasosTrabajadores(fechaInicio, fechaFin, filtros.sucursalId),
+      obtenerTendenciasMensuales(fechaInicio, fechaFin, filtros.sucursalId),
+      obtenerIngresosServicios(fechaInicio, fechaFin, filtros.sucursalId)
     ]);
 
     return {
@@ -61,7 +71,7 @@ const obtenerReportes = async (filtros) => {
       productos,
       atrasos,
       tendencias,
-      ingresosServicios // Agregar al resultado
+      ingresosServicios
     };
   } catch (error) {
     console.error("Error en reportsService:", error);
@@ -69,108 +79,99 @@ const obtenerReportes = async (filtros) => {
   }
 };
 
-// Función para determinar las fechas según el filtro
+// Función para determinar las fechas según el filtro - CORREGIDA
 const obtenerFechasFiltro = (filtros) => {
   let fechaInicio, fechaFin;
-  let usarZonaHoraria = false;
+  
+  const hoyBolivia = getBoliviaDate();
   
   switch (filtros.tipoFiltro) {
     case 'today':
-      const hoy = getBoliviaDate();
-      fechaInicio = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate());
-      fechaFin = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate(), 23, 59, 59, 999);
-      usarZonaHoraria = true;
+      fechaInicio = new Date(Date.UTC(hoyBolivia.getUTCFullYear(), hoyBolivia.getUTCMonth(), hoyBolivia.getUTCDate(), 0, 0, 0));
+      fechaFin = new Date(Date.UTC(hoyBolivia.getUTCFullYear(), hoyBolivia.getUTCMonth(), hoyBolivia.getUTCDate(), 23, 59, 59));
       break;
     
     case 'yesterday':
-      const ayer = new Date(getBoliviaDate());
-      ayer.setDate(ayer.getDate() - 1);
-      fechaInicio = new Date(ayer.getFullYear(), ayer.getMonth(), ayer.getDate());
-      fechaFin = new Date(ayer.getFullYear(), ayer.getMonth(), ayer.getDate(), 23, 59, 59, 999);
-      usarZonaHoraria = true;
+      const ayer = new Date(hoyBolivia);
+      ayer.setUTCDate(ayer.getUTCDate() - 1);
+      fechaInicio = new Date(Date.UTC(ayer.getUTCFullYear(), ayer.getUTCMonth(), ayer.getUTCDate(), 0, 0, 0));
+      fechaFin = new Date(Date.UTC(ayer.getUTCFullYear(), ayer.getUTCMonth(), ayer.getUTCDate(), 23, 59, 59));
       break;
     
     case 'thisWeek':
-      const inicioSemana = new Date(getBoliviaDate());
-      // Domingo es el día 0, así que restamos el día actual para llegar al domingo
-      inicioSemana.setDate(inicioSemana.getDate() - inicioSemana.getDay());
-      fechaInicio = new Date(inicioSemana.getFullYear(), inicioSemana.getMonth(), inicioSemana.getDate());
-      fechaFin = new Date(getBoliviaDate());
-      fechaFin.setHours(23, 59, 59, 999);
-      usarZonaHoraria = true;
+      const inicioSemana = new Date(hoyBolivia);
+      // Lunes es el primer día de la semana (día 1)
+      const diaSemana = inicioSemana.getUTCDay();
+      const diff = diaSemana === 0 ? 6 : diaSemana - 1; // Si es domingo (0), retrocede 6 días
+      inicioSemana.setUTCDate(inicioSemana.getUTCDate() - diff);
+      fechaInicio = new Date(Date.UTC(inicioSemana.getUTCFullYear(), inicioSemana.getUTCMonth(), inicioSemana.getUTCDate(), 0, 0, 0));
+      fechaFin = new Date(Date.UTC(hoyBolivia.getUTCFullYear(), hoyBolivia.getUTCMonth(), hoyBolivia.getUTCDate(), 23, 59, 59));
       break;
     
     case 'lastWeek':
-      const semanaPasada = new Date(getBoliviaDate());
-      semanaPasada.setDate(semanaPasada.getDate() - 7 - semanaPasada.getDay());
-      fechaInicio = new Date(semanaPasada.getFullYear(), semanaPasada.getMonth(), semanaPasada.getDate());
+      const semanaPasada = new Date(hoyBolivia);
+      semanaPasada.setUTCDate(semanaPasada.getUTCDate() - 7);
+      const diaSemanaPasada = semanaPasada.getUTCDay();
+      const diffPasada = diaSemanaPasada === 0 ? 6 : diaSemanaPasada - 1;
+      semanaPasada.setUTCDate(semanaPasada.getUTCDate() - diffPasada);
+      fechaInicio = new Date(Date.UTC(semanaPasada.getUTCFullYear(), semanaPasada.getUTCMonth(), semanaPasada.getUTCDate(), 0, 0, 0));
       const finSemanaPasada = new Date(semanaPasada);
-      finSemanaPasada.setDate(semanaPasada.getDate() + 6);
-      fechaFin = new Date(finSemanaPasada.getFullYear(), finSemanaPasada.getMonth(), finSemanaPasada.getDate(), 23, 59, 59, 999);
-      usarZonaHoraria = true;
+      finSemanaPasada.setUTCDate(semanaPasada.getUTCDate() + 6);
+      fechaFin = new Date(Date.UTC(finSemanaPasada.getUTCFullYear(), finSemanaPasada.getUTCMonth(), finSemanaPasada.getUTCDate(), 23, 59, 59));
       break;
     
     case 'thisMonth':
-      const ahora = getBoliviaDate();
-      fechaInicio = new Date(ahora.getFullYear(), ahora.getMonth(), 1);
-      fechaFin = new Date(ahora.getFullYear(), ahora.getMonth(), ahora.getDate(), 23, 59, 59, 999);
-      usarZonaHoraria = true;
+      fechaInicio = new Date(Date.UTC(hoyBolivia.getUTCFullYear(), hoyBolivia.getUTCMonth(), 1, 0, 0, 0));
+      fechaFin = new Date(Date.UTC(hoyBolivia.getUTCFullYear(), hoyBolivia.getUTCMonth(), hoyBolivia.getUTCDate(), 23, 59, 59));
       break;
     
     case 'lastMonth':
-      const mesPasado = new Date(getBoliviaDate());
-      mesPasado.setMonth(mesPasado.getMonth() - 1);
-      fechaInicio = new Date(mesPasado.getFullYear(), mesPasado.getMonth(), 1);
-      fechaFin = new Date(mesPasado.getFullYear(), mesPasado.getMonth() + 1, 0, 23, 59, 59, 999);
-      usarZonaHoraria = true;
+      const mesPasado = new Date(hoyBolivia);
+      mesPasado.setUTCMonth(mesPasado.getUTCMonth() - 1);
+      fechaInicio = new Date(Date.UTC(mesPasado.getUTCFullYear(), mesPasado.getUTCMonth(), 1, 0, 0, 0));
+      fechaFin = new Date(Date.UTC(mesPasado.getUTCFullYear(), mesPasado.getUTCMonth() + 1, 0, 23, 59, 59));
       break;
     
     case 'specific':
       if (filtros.fechaEspecifica) {
         const fecha = new Date(filtros.fechaEspecifica);
-        fechaInicio = new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate());
-        fechaFin = new Date(fecha.getFullYear(), fecha.getMonth(), fecha.getDate(), 23, 59, 59, 999);
-        // Para fechas específicas, usar la fecha tal cual sin conversión de zona horaria
-        usarZonaHoraria = false;
+        fechaInicio = new Date(Date.UTC(fecha.getUTCFullYear(), fecha.getUTCMonth(), fecha.getUTCDate(), 0, 0, 0));
+        fechaFin = new Date(Date.UTC(fecha.getUTCFullYear(), fecha.getUTCMonth(), fecha.getUTCDate(), 23, 59, 59));
       }
       break;
     
     case 'range':
       if (filtros.fechaInicio) {
         fechaInicio = new Date(filtros.fechaInicio);
+        fechaInicio.setUTCHours(0, 0, 0, 0);
       }
       if (filtros.fechaFin) {
         fechaFin = new Date(filtros.fechaFin);
-        fechaFin.setHours(23, 59, 59, 999);
+        fechaFin.setUTCHours(23, 59, 59, 999);
       }
-      // Para rangos de fechas, usar las fechas tal cual sin conversión de zona horaria
-      usarZonaHoraria = false;
       break;
     
     default: // 'all' - todos los datos
       fechaInicio = new Date(0); // Fecha mínima
       fechaFin = new Date(); // Fecha actual
-      fechaFin.setHours(23, 59, 59, 999);
-      usarZonaHoraria = false;
+      fechaFin.setUTCHours(23, 59, 59, 999);
   }
   
   // Si no se definieron fechas, usar valores por defecto
   if (!fechaInicio) fechaInicio = new Date(0);
   if (!fechaFin) fechaFin = new Date();
   
-  return { fechaInicio, fechaFin, usarZonaHoraria };
+  return { fechaInicio, fechaFin };
 };
 
 // Función para obtener el resumen general
-const obtenerResumen = async (fechaInicio, fechaFin, sucursalId, usarZonaHoraria) => {
+const obtenerResumen = async (fechaInicio, fechaFin, sucursalId) => {
   try {
-    // Formatear fechas según si necesitan zona horaria o no
+    // Formatear fechas para SQL
     const fechaInicioStr = formatDateToSQL(fechaInicio);
     const fechaFinStr = formatDateToSQL(fechaFin);
     
-    let whereClause = usarZonaHoraria 
-      ? "WHERE (vs.fecha AT TIME ZONE 'UTC' AT TIME ZONE 'America/La_Paz') BETWEEN $1 AND $2"
-      : "WHERE vs.fecha BETWEEN $1 AND $2";
+    let whereClause = "WHERE vs.fecha BETWEEN $1 AND $2";
     
     let params = [fechaInicioStr, fechaFinStr];
     let paramCount = 2;
@@ -190,39 +191,29 @@ const obtenerResumen = async (fechaInicio, fechaFin, sucursalId, usarZonaHoraria
     `;
     
     // Consulta para ingresos totales (servicios + productos)
-    const ingresosWhereClause = usarZonaHoraria 
-      ? "WHERE (fecha AT TIME ZONE 'UTC' AT TIME ZONE 'America/La_Paz') BETWEEN $1 AND $2"
-      : "WHERE fecha BETWEEN $1 AND $2";
-    
     const ingresosQuery = `
       SELECT COALESCE(SUM(total), 0) as total 
       FROM (
-        SELECT total FROM ventas_servicios ${ingresosWhereClause}
+        SELECT total FROM ventas_servicios 
+        WHERE fecha BETWEEN $1 AND $2
         ${sucursalId && sucursalId !== 'all' ? `AND sucursal_id = $${paramCount}` : ''}
         UNION ALL
-        SELECT total FROM ventas_productos ${ingresosWhereClause}
+        SELECT total FROM ventas_productos 
+        WHERE fecha BETWEEN $1 AND $2
         ${sucursalId && sucursalId !== 'all' ? `AND sucursal_id = $${paramCount}` : ''}
       ) as ventas_totales
     `;
     
     // Consulta para productos vendidos
-    const productosWhereClause = usarZonaHoraria 
-      ? "WHERE (vp.fecha AT TIME ZONE 'UTC' AT TIME ZONE 'America/La_Paz') BETWEEN $1 AND $2"
-      : "WHERE vp.fecha BETWEEN $1 AND $2";
-    
     const productosQuery = `
       SELECT COALESCE(SUM(dvp.cantidad), 0) as count 
       FROM detalle_venta_productos dvp
       JOIN ventas_productos vp ON dvp.venta_producto_id = vp.id
-      ${productosWhereClause}
+      WHERE vp.fecha BETWEEN $1 AND $2
       ${sucursalId && sucursalId !== 'all' ? `AND vp.sucursal_id = $${paramCount}` : ''}
     `;
     
     // Consulta para minutos de atraso
-    const atrasosWhereClause = usarZonaHoraria 
-      ? "WHERE (ra.fecha AT TIME ZONE 'UTC' AT TIME ZONE 'America/La_Paz') BETWEEN $1 AND $2"
-      : "WHERE ra.fecha BETWEEN $1 AND $2";
-    
     const atrasosQuery = `
       SELECT COALESCE(SUM(
         EXTRACT(EPOCH FROM (ra.fecha - make_time(
@@ -234,7 +225,7 @@ const obtenerResumen = async (fechaInicio, fechaFin, sucursalId, usarZonaHoraria
       FROM registros_acceso ra
       JOIN usuarios u ON ra.usuario_registro_id = u.id
       JOIN empleados e ON u.empleado_id = e.id
-      ${atrasosWhereClause}
+      WHERE ra.fecha BETWEEN $1 AND $2
       AND ra.tipo_persona = 'empleado'
       AND ra.estado = 'exitoso'
       AND ra.fecha::time > e.hora_ingreso
@@ -259,7 +250,6 @@ const obtenerResumen = async (fechaInicio, fechaFin, sucursalId, usarZonaHoraria
       fechaInicio, 
       fechaFin, 
       sucursalId,
-      usarZonaHoraria,
       {
         servicios: parseInt(serviciosResult.rows[0]?.count) || 0,
         productos: parseInt(productosResult.rows[0]?.count) || 0,
@@ -284,20 +274,8 @@ const obtenerResumen = async (fechaInicio, fechaFin, sucursalId, usarZonaHoraria
   }
 };
 
-// Función para formatear fecha a formato SQL YYYY-MM-DD HH:MM:SS
-const formatDateToSQL = (date) => {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  const hours = String(date.getHours()).padStart(2, '0');
-  const minutes = String(date.getMinutes()).padStart(2, '0');
-  const seconds = String(date.getSeconds()).padStart(2, '0');
-  
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
-};
-
 // Función para calcular tendencias comparando con el período anterior
-const calcularTendencias = async (fechaInicio, fechaFin, sucursalId, usarZonaHoraria, datosActuales) => {
+const calcularTendencias = async (fechaInicio, fechaFin, sucursalId, datosActuales) => {
   try {
     // Calcular la duración del período actual
     const duracion = fechaFin - fechaInicio;
@@ -317,49 +295,35 @@ const calcularTendencias = async (fechaInicio, fechaFin, sucursalId, usarZonaHor
       paramsAnterior.push(sucursalId);
     }
     
-    // Consultas para el período anterior (siempre usar zona horaria para comparaciones)
-    const serviciosWhereClause = usarZonaHoraria 
-      ? "WHERE (vs.fecha AT TIME ZONE 'UTC' AT TIME ZONE 'America/La_Paz') BETWEEN $1 AND $2"
-      : "WHERE vs.fecha BETWEEN $1 AND $2";
-    
+    // Consultas para el período anterior
     const serviciosQueryAnterior = `
       SELECT COUNT(*) as count 
       FROM detalle_venta_servicios dvs
       JOIN ventas_servicios vs ON dvs.venta_servicio_id = vs.id
-      ${serviciosWhereClause}
+      WHERE vs.fecha BETWEEN $1 AND $2
       ${sucursalId && sucursalId !== 'all' ? `AND vs.sucursal_id = $${paramCount}` : ''}
     `;
-    
-    const ingresosWhereClause = usarZonaHoraria 
-      ? "WHERE (fecha AT TIME ZONE 'UTC' AT TIME ZONE 'America/La_Paz') BETWEEN $1 AND $2"
-      : "WHERE fecha BETWEEN $1 AND $2";
     
     const ingresosQueryAnterior = `
       SELECT COALESCE(SUM(total), 0) as total 
       FROM (
-        SELECT total FROM ventas_servicios ${ingresosWhereClause}
+        SELECT total FROM ventas_servicios 
+        WHERE fecha BETWEEN $1 AND $2
         ${sucursalId && sucursalId !== 'all' ? `AND sucursal_id = $${paramCount}` : ''}
         UNION ALL
-        SELECT total FROM ventas_productos ${ingresosWhereClause}
+        SELECT total FROM ventas_productos 
+        WHERE fecha BETWEEN $1 AND $2
         ${sucursalId && sucursalId !== 'all' ? `AND sucursal_id = $${paramCount}` : ''}
       ) as ventas_totales
     `;
-    
-    const productosWhereClause = usarZonaHoraria 
-      ? "WHERE (vp.fecha AT TIME ZONE 'UTC' AT TIME ZONE 'America/La_Paz') BETWEEN $1 AND $2"
-      : "WHERE vp.fecha BETWEEN $1 AND $2";
     
     const productosQueryAnterior = `
       SELECT COALESCE(SUM(dvp.cantidad), 0) as count 
       FROM detalle_venta_productos dvp
       JOIN ventas_productos vp ON dvp.venta_producto_id = vp.id
-      ${productosWhereClause}
+      WHERE vp.fecha BETWEEN $1 AND $2
       ${sucursalId && sucursalId !== 'all' ? `AND vp.sucursal_id = $${paramCount}` : ''}
     `;
-    
-    const atrasosWhereClause = usarZonaHoraria 
-      ? "WHERE (ra.fecha AT TIME ZONE 'UTC' AT TIME ZONE 'America/La_Paz') BETWEEN $1 AND $2"
-      : "WHERE ra.fecha BETWEEN $1 AND $2";
     
     const atrasosQueryAnterior = `
       SELECT COALESCE(SUM(
@@ -372,7 +336,7 @@ const calcularTendencias = async (fechaInicio, fechaFin, sucursalId, usarZonaHor
       FROM registros_acceso ra
       JOIN usuarios u ON ra.usuario_registro_id = u.id
       JOIN empleados e ON u.empleado_id = e.id
-      ${atrasosWhereClause}
+      WHERE ra.fecha BETWEEN $1 AND $2
       AND ra.tipo_persona = 'empleado'
       AND ra.estado = 'exitoso'
       AND ra.fecha::time > e.hora_ingreso
@@ -422,15 +386,13 @@ const calcularTendencias = async (fechaInicio, fechaFin, sucursalId, usarZonaHor
   }
 };
 
-// Función para obtener servicios más vendidos - AJUSTADA
-const obtenerServiciosMasVendidos = async (fechaInicio, fechaFin, sucursalId, usarZonaHoraria) => {
+// Función para obtener servicios más vendidos
+const obtenerServiciosMasVendidos = async (fechaInicio, fechaFin, sucursalId) => {
   try {
     const fechaInicioStr = formatDateToSQL(fechaInicio);
     const fechaFinStr = formatDateToSQL(fechaFin);
     
-    let whereClause = usarZonaHoraria 
-      ? "WHERE (vs.fecha AT TIME ZONE 'UTC' AT TIME ZONE 'America/La_Paz') BETWEEN $1 AND $2"
-      : "WHERE vs.fecha BETWEEN $1 AND $2";
+    let whereClause = "WHERE vs.fecha BETWEEN $1 AND $2";
     
     let params = [fechaInicioStr, fechaFinStr];
     let paramCount = 2;
@@ -473,15 +435,13 @@ const obtenerServiciosMasVendidos = async (fechaInicio, fechaFin, sucursalId, us
   }
 };
 
-// Función para obtener productos más vendidos - AJUSTADA
-const obtenerProductosMasVendidos = async (fechaInicio, fechaFin, sucursalId, usarZonaHoraria) => {
+// Función para obtener productos más vendidos
+const obtenerProductosMasVendidos = async (fechaInicio, fechaFin, sucursalId) => {
   try {
     const fechaInicioStr = formatDateToSQL(fechaInicio);
     const fechaFinStr = formatDateToSQL(fechaFin);
     
-    let whereClause = usarZonaHoraria 
-      ? "WHERE (vp.fecha AT TIME ZONE 'UTC' AT TIME ZONE 'America/La_Paz') BETWEEN $1 AND $2"
-      : "WHERE vp.fecha BETWEEN $1 AND $2";
+    let whereClause = "WHERE vp.fecha BETWEEN $1 AND $2";
     
     let params = [fechaInicioStr, fechaFinStr];
     let paramCount = 2;
@@ -523,16 +483,13 @@ const obtenerProductosMasVendidos = async (fechaInicio, fechaFin, sucursalId, us
   }
 };
 
-// Función para obtener atrasos de trabajadores - AJUSTADA
-const obtenerAtrasosTrabajadores = async (fechaInicio, fechaFin, sucursalId, usarZonaHoraria) => {
+// Función para obtener atrasos de trabajadores
+const obtenerAtrasosTrabajadores = async (fechaInicio, fechaFin, sucursalId) => {
   try {
     const fechaInicioStr = formatDateToSQL(fechaInicio);
     const fechaFinStr = formatDateToSQL(fechaFin);
     
-    let whereClause = usarZonaHoraria 
-      ? "WHERE (ra.fecha AT TIME ZONE 'UTC' AT TIME ZONE 'America/La_Paz') BETWEEN $1 AND $2"
-      : "WHERE ra.fecha BETWEEN $1 AND $2";
-    
+    let whereClause = "WHERE ra.fecha BETWEEN $1 AND $2";
     whereClause += " AND ra.tipo_persona = 'empleado' AND ra.estado = 'exitoso'";
     
     let params = [fechaInicioStr, fechaFinStr];
@@ -582,7 +539,7 @@ const obtenerAtrasosTrabajadores = async (fechaInicio, fechaFin, sucursalId, usa
 };
 
 // Función para obtener tendencias mensuales
-const obtenerTendenciasMensuales = async (fechaInicio, fechaFin, sucursalId, usarZonaHoraria) => {
+const obtenerTendenciasMensuales = async (fechaInicio, fechaFin, sucursalId) => {
   try {
     const meses = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
     const tendencias = [];
@@ -590,9 +547,9 @@ const obtenerTendenciasMensuales = async (fechaInicio, fechaFin, sucursalId, usa
     // Obtener los últimos 6 meses
     const fechaActual = getBoliviaDate();
     for (let i = 5; i >= 0; i--) {
-      const mes = new Date(fechaActual.getFullYear(), fechaActual.getMonth() - i, 1);
-      const mesSiguiente = new Date(fechaActual.getFullYear(), fechaActual.getMonth() - i + 1, 0);
-      const nombreMes = meses[mes.getMonth()];
+      const mes = new Date(Date.UTC(fechaActual.getUTCFullYear(), fechaActual.getUTCMonth() - i, 1));
+      const mesSiguiente = new Date(Date.UTC(fechaActual.getUTCFullYear(), fechaActual.getUTCMonth() - i + 1, 0));
+      const nombreMes = meses[mes.getUTCMonth()];
       
       const fechaInicioMesStr = formatDateToSQL(mes);
       const fechaFinMesStr = formatDateToSQL(mesSiguiente);
@@ -600,9 +557,7 @@ const obtenerTendenciasMensuales = async (fechaInicio, fechaFin, sucursalId, usa
       let params = [fechaInicioMesStr, fechaFinMesStr];
       let paramCount = 2;
       
-      let whereClause = usarZonaHoraria 
-        ? "WHERE (fecha AT TIME ZONE 'UTC' AT TIME ZONE 'America/La_Paz') BETWEEN $1 AND $2"
-        : "WHERE fecha BETWEEN $1 AND $2";
+      let whereClause = "WHERE fecha BETWEEN $1 AND $2";
       
       if (sucursalId && sucursalId !== 'all') {
         paramCount++;
@@ -654,43 +609,34 @@ const obtenerTendenciasMensuales = async (fechaInicio, fechaFin, sucursalId, usa
     }));
   }
 };
-const obtenerIngresosServicios = async (filtros) => {
+
+const obtenerIngresosServicios = async (fechaInicio, fechaFin, sucursalId) => {
   try {
-    // Obtener fechas para el filtro
-    const { fechaInicio, fechaFin, usarZonaHoraria } = obtenerFechasFiltro(filtros);
-    
-    console.log('Filtros para ingresos servicios:', filtros);
-    console.log('Fecha inicio:', fechaInicio);
-    console.log('Fecha fin:', fechaFin);
-    
     const fechaInicioStr = formatDateToSQL(fechaInicio);
     const fechaFinStr = formatDateToSQL(fechaFin);
     
-    let whereClause = usarZonaHoraria 
-      ? "WHERE (ra.fecha AT TIME ZONE 'UTC' AT TIME ZONE 'America/La_Paz') BETWEEN $1 AND $2"
-      : "WHERE ra.fecha BETWEEN $1 AND $2";
-    
+    let whereClause = "WHERE ra.fecha BETWEEN $1 AND $2";
     whereClause += " AND ra.tipo_persona = 'cliente' AND ra.estado = 'exitoso'";
     
     let params = [fechaInicioStr, fechaFinStr];
     let paramCount = 2;
     
-    if (filtros.sucursalId && filtros.sucursalId !== 'all') {
+    if (sucursalId && sucursalId !== 'all') {
       paramCount++;
       whereClause += ` AND ra.sucursal_id = $${paramCount}`;
-      params.push(filtros.sucursalId);
+      params.push(sucursalId);
     }
     
     const queryText = `
       SELECT 
         s.nombre,
-        COUNT(ra.id) as cantidad_accesos,  -- Cambiado de total_ingresos a cantidad
-        COALESCE(SUM(s.precio), 0) as total_ingresos  -- Mantenemos esto por si acaso
+        COUNT(ra.id) as cantidad_accesos,
+        COALESCE(SUM(s.precio), 0) as total_ingresos
       FROM servicios s
       JOIN registros_acceso ra ON s.id = ra.servicio_id
       ${whereClause}
       GROUP BY s.id, s.nombre
-      ORDER BY cantidad_accesos DESC  -- Ordenar por cantidad en lugar de ingresos
+      ORDER BY cantidad_accesos DESC
       LIMIT 6
     `;
     
@@ -701,8 +647,8 @@ const obtenerIngresosServicios = async (filtros) => {
     
     return result.rows.map((row, index) => ({
       nombre: row.nombre,
-      ingresos: parseInt(row.cantidad_accesos),  // Ahora ingresos representa la cantidad
-      cantidad: parseInt(row.cantidad_accesos),  // Nueva propiedad para claridad
+      ingresos: parseInt(row.cantidad_accesos),
+      cantidad: parseInt(row.cantidad_accesos),
       color: colores[index] || colores[0]
     }));
   } catch (error) {
