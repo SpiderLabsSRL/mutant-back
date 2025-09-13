@@ -104,8 +104,8 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
 
   // Buscar clientes si el filtro es 'all' o 'cliente'
   if (typeFilter === "all" || typeFilter === "cliente") {
-    const clientParams = [searchParam, branchId];
-    const clientSql = `
+    const clientParams = [searchParam];
+    let clientSql = `
       WITH ultimas_inscripciones AS (
         SELECT DISTINCT ON (i.persona_id, i.servicio_id)
           i.persona_id,
@@ -121,7 +121,6 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id
         WHERE i.estado = 1
-        AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)
         ORDER BY i.servicio_id, i.persona_id, i.fecha_inicio DESC
       )
       SELECT 
@@ -151,9 +150,15 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       FROM personas p
       LEFT JOIN ultimas_inscripciones ui ON p.id = ui.persona_id
       WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
-      GROUP BY p.id
-      HAVING COUNT(ui.idinscripcion) > 0
     `;
+
+    // Filtrar por sucursal si se proporciona
+    if (branchId) {
+      clientSql += ` AND (ui.sucursal_id = $2 OR ui.multisucursal = TRUE)`;
+      clientParams.push(branchId);
+    }
+
+    clientSql += ` GROUP BY p.id HAVING COUNT(ui.idinscripcion) > 0`;
 
     try {
       const clientResult = await query(clientSql, clientParams);
@@ -182,8 +187,8 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
 
   // Buscar empleados si el filtro es 'all' o 'empleado'
   if (typeFilter === "all" || typeFilter === "empleado") {
-    const employeeParams = [searchParam, branchId];
-    const employeeSql = `
+    const employeeParams = [searchParam];
+    let employeeSql = `
       SELECT 
         p.id as idpersona,
         p.nombres,
@@ -234,8 +239,13 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       INNER JOIN empleados e ON p.id = e.persona_id
       WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
       AND e.estado = 1
-      AND e.sucursal_id = $2
     `;
+
+    // Filtrar por sucursal si se proporciona
+    if (branchId) {
+      employeeSql += ` AND e.sucursal_id = $2`;
+      employeeParams.push(branchId);
+    }
 
     try {
       const employeeResult = await query(employeeSql, employeeParams);
