@@ -2,8 +2,9 @@ const remindersService = require("../services/remindersservice");
 
 const getNewMembers = async (req, res) => {
   try {
-    console.log("Solicitud recibida para /api/reminders/new-members");
-    const newMembers = await remindersService.getNewMembers();
+    const sucursalId = req.params.sucursalId;
+    console.log("Solicitud recibida para /api/reminders/new-members/", sucursalId);
+    const newMembers = await remindersService.getNewMembers(sucursalId);
     console.log("Nuevos miembros encontrados:", newMembers.length);
     res.json(newMembers);
   } catch (error) {
@@ -17,8 +18,9 @@ const getNewMembers = async (req, res) => {
 
 const getExpiringMembers = async (req, res) => {
   try {
-    console.log("Solicitud recibida para /api/reminders/expiring-members");
-    const expiringMembers = await remindersService.getExpiringMembers();
+    const sucursalId = req.params.sucursalId;
+    console.log("Solicitud recibida para /api/reminders/expiring-members/", sucursalId);
+    const expiringMembers = await remindersService.getExpiringMembers(sucursalId);
     console.log("Miembros próximos a vencer encontrados:", expiringMembers.length);
     res.json(expiringMembers);
   } catch (error) {
@@ -32,8 +34,9 @@ const getExpiringMembers = async (req, res) => {
 
 const getBirthdayMembers = async (req, res) => {
   try {
-    console.log("Solicitud recibida para /api/reminders/birthday-members");
-    const birthdayMembers = await remindersService.getBirthdayMembers();
+    const sucursalId = req.params.sucursalId;
+    console.log("Solicitud recibida para /api/reminders/birthday-members/", sucursalId);
+    const birthdayMembers = await remindersService.getBirthdayMembers(sucursalId);
     console.log("Cumpleañeros encontrados:", birthdayMembers.length);
     res.json(birthdayMembers);
   } catch (error) {

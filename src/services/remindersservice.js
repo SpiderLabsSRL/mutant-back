@@ -1,9 +1,10 @@
 const { query } = require("../../db");
 
-const getNewMembers = async () => {
+const getNewMembers = async (sucursalId) => {
   try {
-    // Obtener miembros que se registraron hoy
-    const today = new Date().toISOString().split('T')[0];
+    // Obtener miembros que se registraron hoy en la sucursal específica
+    // Usando CURRENT_DATE directamente en PostgreSQL
+    console.log("Buscando nuevos miembros para hoy en sucursal:", sucursalId);
     
     const result = await query(`
       SELECT 
@@ -20,11 +21,34 @@ const getNewMembers = async () => {
       FROM personas p
       INNER JOIN inscripciones i ON p.id = i.persona_id
       INNER JOIN servicios s ON i.servicio_id = s.id
-      WHERE DATE(i.fecha_inicio) = $1
+      WHERE i.fecha_inicio::date = CURRENT_DATE
       AND i.estado = 1
+      AND i.sucursal_id = $1
       ORDER BY i.fecha_inicio DESC
-    `, [today]);
+    `, [sucursalId]);
 
+    console.log("Nuevos miembros encontrados:", result.rows.length);
+    
+    if (result.rows.length === 0) {
+      // Si no encontramos resultados, hacemos una consulta de prueba
+      // para verificar qué datos existen en la tabla
+      const testResult = await query(`
+        SELECT 
+          p.id,
+          CONCAT(p.nombres, ' ', p.apellidos) as nombre,
+          i.fecha_inicio,
+          i.sucursal_id,
+          i.estado
+        FROM personas p
+        INNER JOIN inscripciones i ON p.id = i.persona_id
+        WHERE i.fecha_inicio >= CURRENT_DATE - INTERVAL '7 days'
+        ORDER BY i.fecha_inicio DESC
+        LIMIT 10
+      `);
+      
+      console.log("Datos de prueba (últimos 7 días):", testResult.rows);
+    }
+    
     return result.rows.map(row => ({
       id: row.id.toString(),
       nombre: row.nombre,
@@ -39,9 +63,11 @@ const getNewMembers = async () => {
   }
 };
 
-const getExpiringMembers = async () => {
+const getExpiringMembers = async (sucursalId) => {
   try {
-    // Obtener miembros cuyas membresías vencen en los próximos 7 días
+    // Obtener miembros cuyas membresías vencen en los próximos 3 días en la sucursal específica
+    console.log("Buscando miembros próximos a vencer en sucursal:", sucursalId);
+    
     const result = await query(`
       SELECT 
         p.id,
@@ -61,9 +87,12 @@ const getExpiringMembers = async () => {
       INNER JOIN servicios s ON i.servicio_id = s.id
       WHERE i.fecha_vencimiento BETWEEN CURRENT_DATE AND (CURRENT_DATE + INTERVAL '3 days')
       AND i.estado = 1
+      AND i.sucursal_id = $1
       ORDER BY i.fecha_vencimiento ASC
-    `);
+    `, [sucursalId]);
 
+    console.log("Miembros próximos a vencer encontrados:", result.rows.length);
+    
     return result.rows.map(row => ({
       id: row.id.toString(),
       nombre: row.nombre,
@@ -79,12 +108,14 @@ const getExpiringMembers = async () => {
   }
 };
 
-const getBirthdayMembers = async () => {
+const getBirthdayMembers = async (sucursalId) => {
   try {
-    // Obtener miembros que cumplen años hoy
+    // Obtener miembros que cumplen años hoy en la sucursal específica
     const today = new Date();
     const day = today.getDate();
     const month = today.getMonth() + 1;
+    
+    console.log("Buscando cumpleañeros para el día:", day, "mes:", month, "en sucursal:", sucursalId);
     
     const result = await query(`
       SELECT 
@@ -105,9 +136,12 @@ const getBirthdayMembers = async () => {
       WHERE EXTRACT(MONTH FROM p.fecha_nacimiento) = $1
       AND EXTRACT(DAY FROM p.fecha_nacimiento) = $2
       AND i.estado = 1
+      AND i.sucursal_id = $3
       ORDER BY p.nombres ASC
-    `, [month, day]);
+    `, [month, day, sucursalId]);
 
+    console.log("Cumpleañeros encontrados:", result.rows.length);
+    
     return result.rows.map(row => ({
       id: row.id.toString(),
       nombre: row.nombre,
