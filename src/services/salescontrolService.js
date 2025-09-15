@@ -1,6 +1,4 @@
-// src/services/salescontrolService.js
 const { query } = require("../../db");
-const bcrypt = require("bcrypt");
 
 const getSales = async (filters = {}) => {
   try {
@@ -26,21 +24,7 @@ const getSales = async (filters = {}) => {
         vp.descuento::text,
         vp.total::text,
         vp.forma_pago AS "formaPago",
-        CASE 
-          WHEN vp.forma_pago = 'efectivo' THEN vp.total::text
-          WHEN vp.forma_pago = 'qr' THEN NULL
-          ELSE NULL
-        END AS efectivo,
-        CASE 
-          WHEN vp.forma_pago = 'qr' THEN vp.total::text
-          WHEN vp.forma_pago = 'efectivo' THEN NULL
-          ELSE NULL
-        END AS qr,
-        CASE 
-          WHEN vp.forma_pago = 'mixto' THEN 
-            SPLIT_PART(vp.detalle_pago, '|', 1) || ' | ' || SPLIT_PART(vp.detalle_pago, '|', 2)
-          ELSE NULL
-        END AS "detallePago",
+        vp.detalle_pago AS "detallePago",
         vp.descripcion_descuento AS "justificacionDescuento"
       FROM ventas_productos vp
       JOIN sucursales s ON vp.sucursal_id = s.id
@@ -64,21 +48,7 @@ const getSales = async (filters = {}) => {
         vs.descuento::text,
         vs.total::text,
         vs.forma_pago AS "formaPago",
-        CASE 
-          WHEN vs.forma_pago = 'efectivo' THEN vs.total::text
-          WHEN vs.forma_pago = 'qr' THEN NULL
-          ELSE NULL
-        END AS efectivo,
-        CASE 
-          WHEN vs.forma_pago = 'qr' THEN vs.total::text
-          WHEN vs.forma_pago = 'efectivo' THEN NULL
-          ELSE NULL
-        END AS qr,
-        CASE 
-          WHEN vs.forma_pago = 'mixto' THEN 
-            SPLIT_PART(vs.detalle_pago, '|', 1) || ' | ' || SPLIT_PART(vs.detalle_pago, '|', 2)
-          ELSE NULL
-        END AS "detallePago",
+        vs.detalle_pago AS "detallePago",
         vs.descripcion_descuento AS "justificacionDescuento"
       FROM ventas_servicios vs
       JOIN sucursales s ON vs.sucursal_id = s.id
@@ -140,19 +110,76 @@ const getSales = async (filters = {}) => {
     // Combinar resultados
     const allSales = [...productSales.rows, ...serviceSales.rows];
     
+    // Función para parsear montos de pago mixto
+    const parseMixedPayment = (detallePago) => {
+      let efectivo = 0;
+      let qr = 0;
+      
+      if (!detallePago) return { efectivo, qr };
+      
+      try {
+        // DEBUG: Mostrar el formato que estamos procesando
+        console.log("Procesando detalle_pago:", detallePago);
+        
+        // Diferentes formatos posibles:
+        // 1. "Efectivo: Bs. 100.00 | QR: Bs. 0.00"
+        // 2. "Efectivo: Bs. 20, QR: Bs. 20" 
+        // 3. "Efectivo: 100, QR: 200"
+        
+        // Buscar efectivo
+        const efectivoRegex = /Efectivo:\s*(?:Bs\.\s*)?([\d.,]+)/i;
+        const efectivoMatch = detallePago.match(efectivoRegex);
+        if (efectivoMatch && efectivoMatch[1]) {
+          efectivo = parseFloat(efectivoMatch[1].replace(',', ''));
+        }
+        
+        // Buscar QR
+        const qrRegex = /QR:\s*(?:Bs\.\s*)?([\d.,]+)/i;
+        const qrMatch = detallePago.match(qrRegex);
+        if (qrMatch && qrMatch[1]) {
+          qr = parseFloat(qrMatch[1].replace(',', ''));
+        }
+        
+        // DEBUG: Mostrar resultados del parseo
+        console.log("Parseo resultado - Efectivo:", efectivo, "QR:", qr);
+        
+      } catch (error) {
+        console.error("Error parsing mixed payment:", error);
+      }
+      
+      return { efectivo, qr };
+    };
+    
     // Procesar pagos mixtos
     return allSales.map(sale => {
-      if (sale.formaPago === 'mixto' && sale.detallePago) {
-        const [efectivoPart, qrPart] = sale.detallePago.split('|');
-        const efectivoMatch = efectivoPart.match(/Efectivo:\s*Bs\.\s*([\d.]+)/);
-        const qrMatch = qrPart.match(/QR:\s*Bs\.\s*([\d.]+)/);
-        
-        if (efectivoMatch && qrMatch) {
-          sale.efectivo = parseFloat(efectivoMatch[1]).toFixed(2);
-          sale.qr = parseFloat(qrMatch[1]).toFixed(2);
-        }
+      // Convertir valores numéricos
+      const processedSale = {
+        id: sale.id,
+        fecha: sale.fecha,
+        cliente: sale.cliente,
+        empleado: sale.empleado,
+        sucursal: sale.sucursal,
+        tipo: sale.tipo,
+        detalle: sale.detalle,
+        subtotal: parseFloat(sale.subtotal),
+        descuento: parseFloat(sale.descuento),
+        total: parseFloat(sale.total),
+        formaPago: sale.formaPago,
+        justificacionDescuento: sale.justificacionDescuento
+      };
+      
+      // Procesar pagos según el tipo
+      if (sale.formaPago === 'mixto') {
+        const { efectivo, qr } = parseMixedPayment(sale.detallePago);
+        processedSale.efectivo = efectivo;
+        processedSale.qr = qr;
+      } else if (sale.formaPago === 'efectivo') {
+        processedSale.efectivo = parseFloat(sale.total);
+      } else if (sale.formaPago === 'qr') {
+        processedSale.qr = parseFloat(sale.total);
       }
-      return sale;
+      
+      return processedSale;
     });
     
   } catch (error) {

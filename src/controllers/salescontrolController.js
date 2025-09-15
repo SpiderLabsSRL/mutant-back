@@ -1,4 +1,3 @@
-// src/controllers/salescontrolController.js
 const salesService = require("../services/salescontrolService");
 
 const getSales = async (req, res) => {
