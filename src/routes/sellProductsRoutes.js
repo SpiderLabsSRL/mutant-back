@@ -6,6 +6,9 @@ const sellProductsController = require("../controllers/sellProductsController");
 // Ruta para obtener productos disponibles
 router.get("/products", sellProductsController.getProducts);
 
+// Ruta para obtener estado de caja
+router.get("/cash-register-status", sellProductsController.getCashRegisterStatus);
+
 // Ruta para procesar una venta
 router.post("/process-sale", sellProductsController.processSale);
 

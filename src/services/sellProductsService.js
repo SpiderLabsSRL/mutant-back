@@ -42,6 +42,56 @@ const getProducts = async (userId) => {
   }
 };
 
+const getCashRegisterStatus = async (userId) => {
+  try {
+    // Obtener información del empleado y sucursal
+    const userQuery = `
+      SELECT 
+        e.sucursal_id,
+        c.id as caja_id
+      FROM empleados e
+      JOIN usuarios u ON e.id = u.empleado_id
+      LEFT JOIN cajas c ON e.sucursal_id = c.sucursal_id AND c.estado = 1 -- 1 = activa
+      WHERE u.id = $1
+      LIMIT 1
+    `;
+    
+    const userResult = await query(userQuery, [userId]);
+    
+    if (userResult.rows.length === 0) {
+      throw new Error("Usuario no encontrado o no es un empleado");
+    }
+    
+    const { caja_id } = userResult.rows[0];
+    
+    if (!caja_id) {
+      throw new Error("No hay caja activa para esta sucursal");
+    }
+    
+    // Obtener el último estado de caja
+    const estadoCajaQuery = `
+      SELECT ec.id as estado_caja_id, c.id as caja_id, ec.estado, 
+             ec.monto_inicial, ec.monto_final, ec.usuario_id
+      FROM cajas c
+      INNER JOIN estado_caja ec ON c.id = ec.caja_id
+      WHERE c.id = $1
+      ORDER BY ec.id DESC
+      LIMIT 1
+    `;
+    
+    const estadoCajaResult = await query(estadoCajaQuery, [caja_id]);
+    
+    if (estadoCajaResult.rows.length === 0) {
+      return { estado: 'cerrada' };
+    }
+    
+    return estadoCajaResult.rows[0];
+  } catch (error) {
+    console.error("Error en getCashRegisterStatus service:", error);
+    throw new Error("Error al obtener el estado de la caja");
+  }
+};
+
 const processSale = async (userId, saleData) => {
   const client = await pool.connect();
   
@@ -73,7 +123,7 @@ const processSale = async (userId, saleData) => {
       throw new Error("No hay caja activa para esta sucursal");
     }
     
-    // 2. Obtener el último estado de caja abierto
+    // 2. Verificar que la caja esté abierta
     const estadoCajaQuery = `
       SELECT id, monto_final, estado
       FROM estado_caja 
@@ -201,5 +251,6 @@ const processSale = async (userId, saleData) => {
 
 module.exports = {
   getProducts,
+  getCashRegisterStatus,
   processSale
 };

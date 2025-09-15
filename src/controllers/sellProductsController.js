@@ -20,6 +20,25 @@ const getProducts = async (req, res) => {
   }
 };
 
+const getCashRegisterStatus = async (req, res) => {
+  try {
+    const userId = parseInt(req.query.userId);
+    if (!userId) {
+      return res.status(400).json({ 
+        error: "ID de usuario requerido" 
+      });
+    }
+    
+    const status = await sellProductsService.getCashRegisterStatus(userId);
+    res.json(status);
+  } catch (error) {
+    console.error("Error en getCashRegisterStatus:", error);
+    res.status(500).json({ 
+      error: error.message || "Error interno del servidor" 
+    });
+  }
+};
+
 const processSale = async (req, res) => {
   try {
     const userId = parseInt(req.query.userId);
@@ -42,5 +61,6 @@ const processSale = async (req, res) => {
 
 module.exports = {
   getProducts,
+  getCashRegisterStatus,
   processSale
 };
