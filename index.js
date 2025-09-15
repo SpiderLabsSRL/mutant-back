@@ -22,8 +22,8 @@ const sellProductsRoutes = require("./src/routes/sellProductsRoutes");
 
 const allowedOrigins = [
   "http://localhost:8080",
-  "https://libreriamaite.netlify.app",//front en linea
-  "https://libreriamaiteback.onrender.com",//back en linea
+  "https://mutantgym.netlify.app",//front en linea
+  "https://mutant-back.onrender.com",//back en linea
 ];
 
 // Opciones de configuración CORS
