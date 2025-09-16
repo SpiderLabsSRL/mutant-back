@@ -218,7 +218,7 @@ exports.registerMember = async (registrationData) => {
         persona_id, empleado_id, subtotal, descuento, descripcion_descuento, 
         total, forma_pago, detalle_pago, sucursal_id, caja_id, fecha
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,TIMEZONE('America/La_Paz', NOW()))
       RETURNING id
     `, [
       personaId,
@@ -275,7 +275,7 @@ exports.registerMember = async (registrationData) => {
       // Registrar transacción de caja (solo para efectivo) con referencia al estado_caja
       await client.query(`
         INSERT INTO transacciones_caja (caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id)
-        VALUES ($1, $2, 'ingreso', 'Venta de servicio', $3, NOW(), $4)
+        VALUES ($1, $2, 'ingreso', 'Venta de servicio', $3, TIMEZONE('America/La_Paz', NOW()), $4)
       `, [registrationData.cajaId, nuevoEstadoCajaId, montoEfectivo, registrationData.empleadoId]);
       
       // Si había un estado de caja anterior, actualizarlo a cerrado
