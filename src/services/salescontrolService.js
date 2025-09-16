@@ -65,11 +65,17 @@ const getSales = async (filters = {}) => {
     const queryParams = [];
     let paramCount = 0;
     
-    // Filtro de fecha
-    if (dateFilterType === 'specific' && specificDate) {
+    // Por defecto, si no hay filtros específicos, mostrar solo el día actual
+    if ((!dateFilterType || dateFilterType === 'specific') && !specificDate && !startDate && !endDate) {
+      whereConditions.push(`DATE(fecha) = CURRENT_DATE`);
+    } 
+    // Filtro de fecha específica
+    else if (dateFilterType === 'specific' && specificDate) {
       whereConditions.push(`DATE(fecha) = $${++paramCount}`);
       queryParams.push(specificDate);
-    } else if (dateFilterType === 'range' && startDate && endDate) {
+    } 
+    // Filtro de rango de fechas
+    else if (dateFilterType === 'range' && startDate && endDate) {
       whereConditions.push(`DATE(fecha) BETWEEN $${++paramCount} AND $${++paramCount}`);
       queryParams.push(startDate, endDate);
     }
@@ -118,14 +124,6 @@ const getSales = async (filters = {}) => {
       if (!detallePago) return { efectivo, qr };
       
       try {
-        // DEBUG: Mostrar el formato que estamos procesando
-        console.log("Procesando detalle_pago:", detallePago);
-        
-        // Diferentes formatos posibles:
-        // 1. "Efectivo: Bs. 100.00 | QR: Bs. 0.00"
-        // 2. "Efectivo: Bs. 20, QR: Bs. 20" 
-        // 3. "Efectivo: 100, QR: 200"
-        
         // Buscar efectivo
         const efectivoRegex = /Efectivo:\s*(?:Bs\.\s*)?([\d.,]+)/i;
         const efectivoMatch = detallePago.match(efectivoRegex);
@@ -139,9 +137,6 @@ const getSales = async (filters = {}) => {
         if (qrMatch && qrMatch[1]) {
           qr = parseFloat(qrMatch[1].replace(',', ''));
         }
-        
-        // DEBUG: Mostrar resultados del parseo
-        console.log("Parseo resultado - Efectivo:", efectivo, "QR:", qr);
         
       } catch (error) {
         console.error("Error parsing mixed payment:", error);
