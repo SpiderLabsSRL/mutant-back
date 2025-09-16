@@ -1,8 +1,7 @@
 const { query } = require("../../db");
 
-exports.getTransactions = async (userId) => {
-  const result = await query(
-    `
+exports.getTransactions = async () => {
+  const result = await query(`
     SELECT 
       tc.id as idtransaccion,
       tc.tipo,
@@ -18,15 +17,12 @@ exports.getTransactions = async (userId) => {
     INNER JOIN usuarios u ON tc.usuario_id = u.id
     INNER JOIN empleados e ON u.empleado_id = e.id
     INNER JOIN personas p ON e.persona_id = p.id
-    WHERE tc.usuario_id = $1
     ORDER BY tc.fecha DESC
-  `,
-    [userId]
-  );
+  `);
   return result.rows;
 };
 
-exports.getTransactionsByCashRegister = async (idCaja, userId) => {
+exports.getTransactionsByCashRegister = async (idCaja) => {
   const result = await query(
     `
     SELECT 
@@ -44,10 +40,10 @@ exports.getTransactionsByCashRegister = async (idCaja, userId) => {
     INNER JOIN usuarios u ON tc.usuario_id = u.id
     INNER JOIN empleados e ON u.empleado_id = e.id
     INNER JOIN personas p ON e.persona_id = p.id
-    WHERE tc.caja_id = $1 AND tc.usuario_id = $2
+    WHERE tc.caja_id = $1
     ORDER BY tc.fecha DESC
   `,
-    [idCaja, userId]
+    [idCaja]
   );
   return result.rows;
 };
@@ -86,15 +82,15 @@ exports.createTransaction = async ({
     INNER JOIN usuarios u ON tc.usuario_id = u.id
     INNER JOIN empleados e ON u.empleado_id = e.id
     INNER JOIN personas p ON e.persona_id = p.id
-    WHERE tc.id = $1 AND tc.usuario_id = $2
+    WHERE tc.id = $1
   `,
-    [result.rows[0].id, idUsuario]
+    [result.rows[0].id]
   );
 
   return transactionResult.rows[0];
 };
 
-exports.getCashRegisterStatus = async (idCaja, userId) => {
+exports.getCashRegisterStatus = async (idCaja) => {
   const result = await query(
     `
     SELECT 
@@ -107,11 +103,11 @@ exports.getCashRegisterStatus = async (idCaja, userId) => {
       c.nombre as nombre_caja
     FROM estado_caja ec
     INNER JOIN cajas c ON ec.caja_id = c.id
-    WHERE ec.caja_id = $1 AND ec.usuario_id = $2
+    WHERE ec.caja_id = $1
     ORDER BY ec.id DESC
     LIMIT 1
   `,
-    [idCaja, userId]
+    [idCaja]
   );
 
   if (result.rows.length === 0) {
