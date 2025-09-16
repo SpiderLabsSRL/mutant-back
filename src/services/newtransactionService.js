@@ -1,7 +1,8 @@
-const { query, pool } = require("../../db");
+const { query } = require("../../db");
 
-exports.getTransactions = async () => {
-  const result = await query(`
+exports.getTransactions = async (userId) => {
+  const result = await query(
+    `
     SELECT 
       tc.id as idtransaccion,
       tc.tipo,
@@ -17,13 +18,17 @@ exports.getTransactions = async () => {
     INNER JOIN usuarios u ON tc.usuario_id = u.id
     INNER JOIN empleados e ON u.empleado_id = e.id
     INNER JOIN personas p ON e.persona_id = p.id
+    WHERE tc.usuario_id = $1
     ORDER BY tc.fecha DESC
-  `);
+  `,
+    [userId]
+  );
   return result.rows;
 };
 
-exports.getTransactionsByCashRegister = async (idCaja) => {
-  const result = await query(`
+exports.getTransactionsByCashRegister = async (idCaja, userId) => {
+  const result = await query(
+    `
     SELECT 
       tc.id as idtransaccion,
       tc.tipo,
@@ -39,120 +44,59 @@ exports.getTransactionsByCashRegister = async (idCaja) => {
     INNER JOIN usuarios u ON tc.usuario_id = u.id
     INNER JOIN empleados e ON u.empleado_id = e.id
     INNER JOIN personas p ON e.persona_id = p.id
-    WHERE tc.caja_id = $1
+    WHERE tc.caja_id = $1 AND tc.usuario_id = $2
     ORDER BY tc.fecha DESC
-  `, [idCaja]);
+  `,
+    [idCaja, userId]
+  );
   return result.rows;
 };
 
-exports.createTransaction = async ({ tipo, descripcion, monto, idCaja, idUsuario }) => {
-  const client = await pool.connect();
-  
-  try {
-    await client.query('BEGIN');
-    
-    // Obtener el último estado de caja para el monto inicial
-    const lastCashStatus = await client.query(`
-      SELECT id as estado_caja_id, monto_final, estado
-      FROM estado_caja 
-      WHERE caja_id = $1 
-      ORDER BY id DESC 
-      LIMIT 1
-    `, [idCaja]);
-    
-    let montoInicial = 0;
-    let montoFinal = 0;
-    const estadoCajaIdExistente = lastCashStatus.rows.length > 0 ? lastCashStatus.rows[0].estado_caja_id : null;
-    const estadoActual = lastCashStatus.rows.length > 0 ? lastCashStatus.rows[0].estado : 'cerrada';
-    
-    // Calcular el nuevo monto final según el tipo de transacción
-    if (tipo === 'apertura') {
-      // Para apertura, el monto inicial es el monto proporcionado
-      montoInicial = parseFloat(monto);
-      montoFinal = parseFloat(monto);
-    } else if (tipo === 'cierre') {
-      // Para cierre, el monto final es el monto proporcionado
-      montoInicial = lastCashStatus.rows.length > 0 ? parseFloat(lastCashStatus.rows[0].monto_final) : 0;
-      montoFinal = parseFloat(monto);
-    } else {
-      // Para ingresos y egresos, usar el monto final anterior como inicial
-      montoInicial = lastCashStatus.rows.length > 0 ? parseFloat(lastCashStatus.rows[0].monto_final) : 0;
-      montoFinal = montoInicial;
-      
-      if (tipo === 'ingreso') {
-        montoFinal += parseFloat(monto);
-      } else if (tipo === 'egreso') {
-        montoFinal -= parseFloat(monto);
-      }
-    }
-    
-    // Determinar el nuevo estado de la caja
-    let nuevoEstado = 'abierta';
-    if (tipo === 'cierre') {
-      nuevoEstado = 'cerrada';
-    } else if (tipo === 'apertura') {
-      nuevoEstado = 'abierta';
-    } else {
-      nuevoEstado = estadoActual; // Mantener el estado actual para otros tipos
-    }
-    
-    // Crear nuevo estado de caja
-    const estadoCajaResult = await client.query(`
-      INSERT INTO estado_caja (caja_id, estado, monto_inicial, monto_final, usuario_id)
-      VALUES ($1, $2, $3, $4, $5)
-      RETURNING id
-    `, [idCaja, nuevoEstado, montoInicial, montoFinal, idUsuario]);
-    
-    const nuevoEstadoCajaId = estadoCajaResult.rows[0].id;
-    
-    // Registrar transacción de caja con referencia al estado_caja
-    const transactionResult = await client.query(`
-      INSERT INTO transacciones_caja (caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id)
-      VALUES ($1, $2, $3, $4, $5, NOW(), $6)
-      RETURNING id
-    `, [idCaja, nuevoEstadoCajaId, tipo, descripcion, monto, idUsuario]);
-    
-    // Si había un estado de caja anterior y es una transacción de cierre o apertura, actualizarlo
-    if (estadoCajaIdExistente && (tipo === 'cierre' || tipo === 'apertura')) {
-      await client.query(`
-        UPDATE estado_caja SET estado = 'cerrada' WHERE id = $1
-      `, [estadoCajaIdExistente]);
-    }
-    
-    // Obtener información completa de la transacción
-    const completeTransactionResult = await client.query(`
-      SELECT 
-        tc.id as idtransaccion,
-        tc.tipo,
-        tc.descripcion,
-        tc.monto,
-        tc.fecha,
-        tc.caja_id as idcaja,
-        tc.usuario_id as idusuario,
-        c.nombre as nombre_caja,
-        CONCAT(p.nombres, ' ', p.apellidos) as nombre_usuario
-      FROM transacciones_caja tc
-      INNER JOIN cajas c ON tc.caja_id = c.id
-      INNER JOIN usuarios u ON tc.usuario_id = u.id
-      INNER JOIN empleados e ON u.empleado_id = e.id
-      INNER JOIN personas p ON e.persona_id = p.id
-      WHERE tc.id = $1
-    `, [transactionResult.rows[0].id]);
-    
-    await client.query('COMMIT');
-    
-    return completeTransactionResult.rows[0];
-  } catch (error) {
-    await client.query('ROLLBACK');
-    console.error("Error in createTransaction service:", error);
-    throw new Error(error.message || "Error al crear la transacción");
-  } finally {
-    client.release();
-  }
+exports.createTransaction = async ({
+  tipo,
+  descripcion,
+  monto,
+  idCaja,
+  idUsuario,
+}) => {
+  const result = await query(
+    `
+    INSERT INTO transacciones_caja (tipo, descripcion, monto, fecha, caja_id, usuario_id)
+    VALUES ($1, $2, $3, NOW(), $4, $5)
+    RETURNING *
+  `,
+    [tipo, descripcion, monto, idCaja, idUsuario]
+  );
+
+  // Obtener información completa de la transacción
+  const transactionResult = await query(
+    `
+    SELECT 
+      tc.id as idtransaccion,
+      tc.tipo,
+      tc.descripcion,
+      tc.monto,
+      tc.fecha,
+      tc.caja_id as idcaja,
+      tc.usuario_id as idusuario,
+      c.nombre as nombre_caja,
+      CONCAT(p.nombres, ' ', p.apellidos) as nombre_usuario
+    FROM transacciones_caja tc
+    INNER JOIN cajas c ON tc.caja_id = c.id
+    INNER JOIN usuarios u ON tc.usuario_id = u.id
+    INNER JOIN empleados e ON u.empleado_id = e.id
+    INNER JOIN personas p ON e.persona_id = p.id
+    WHERE tc.id = $1 AND tc.usuario_id = $2
+  `,
+    [result.rows[0].id, idUsuario]
+  );
+
+  return transactionResult.rows[0];
 };
 
-exports.getCashRegisterStatus = async (idCaja) => {
-  const result = await query(`
+exports.getCashRegisterStatus = async (idCaja, userId) => {
+  const result = await query(
+    `
     SELECT 
       ec.id as idestado_caja,
       ec.caja_id as idcaja,
@@ -163,43 +107,51 @@ exports.getCashRegisterStatus = async (idCaja) => {
       c.nombre as nombre_caja
     FROM estado_caja ec
     INNER JOIN cajas c ON ec.caja_id = c.id
-    WHERE ec.caja_id = $1
+    WHERE ec.caja_id = $1 AND ec.usuario_id = $2
     ORDER BY ec.id DESC
     LIMIT 1
-  `, [idCaja]);
-  
+  `,
+    [idCaja, userId]
+  );
+
   if (result.rows.length === 0) {
     return null;
   }
-  
+
   return result.rows[0];
 };
 
 exports.getAssignedCashRegister = async (idUsuario) => {
   try {
     // Obtener el empleado_id del usuario
-    const userResult = await query(`
+    const userResult = await query(
+      `
       SELECT empleado_id FROM usuarios WHERE id = $1
-    `, [idUsuario]);
-    
+    `,
+      [idUsuario]
+    );
+
     if (userResult.rows.length === 0) {
       throw new Error("Usuario no encontrado");
     }
-    
+
     const empleadoId = userResult.rows[0].empleado_id;
-    
+
     // Obtener la caja asignada al empleado
-    const cashRegisterResult = await query(`
+    const cashRegisterResult = await query(
+      `
       SELECT caja_id 
       FROM empleado_caja 
       WHERE empleado_id = $1 AND estado = 1
       LIMIT 1
-    `, [empleadoId]);
-    
+    `,
+      [empleadoId]
+    );
+
     if (cashRegisterResult.rows.length === 0) {
       throw new Error("No se encontró caja asignada para el empleado");
     }
-    
+
     return cashRegisterResult.rows[0].caja_id;
   } catch (error) {
     console.error("Error in getAssignedCashRegister:", error);
