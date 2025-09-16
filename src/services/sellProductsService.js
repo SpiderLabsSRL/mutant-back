@@ -151,7 +151,7 @@ const processSale = async (userId, saleData) => {
       INSERT INTO ventas_productos (
         subtotal, descuento, descripcion_descuento, total, 
         forma_pago, detalle_pago, sucursal_id, empleado_id, caja_id, fecha
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, TIMEZONE('America/La_Paz', NOW())
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,TIMEZONE('America/La_Paz', NOW()))
       RETURNING id
     `;
     
@@ -210,7 +210,7 @@ const processSale = async (userId, saleData) => {
         const insertTransactionQuery = `
           INSERT INTO transacciones_caja (
             caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id
-          ) VALUES ($1, $2, 'ingreso', 'Venta de productos', $3,TIMEZONE('America/La_Paz', NOW(), $4)
+          ) VALUES ($1, $2, 'ingreso', 'Venta de productos', $3,TIMEZONE('America/La_Paz', NOW()), $4)
         `;
         
         await client.query(insertTransactionQuery, [
