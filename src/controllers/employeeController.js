@@ -9,6 +9,15 @@ exports.getBranches = async (req, res) => {
   }
 };
 
+exports.getBoxes = async (req, res) => {
+  try {
+    const boxes = await employeeService.getBoxes();
+    res.json(boxes);
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
 exports.getEmployees = async (req, res) => {
   try {
     const employees = await employeeService.getEmployees();
@@ -38,11 +47,21 @@ exports.createEmployee = async (req, res) => {
       if (!employeeData.password && req.method === 'POST') {
         return res.status(400).json({ message: "Contraseña es obligatoria para este cargo" });
       }
+      
+      // Validar caja para roles administrativos
+      if (!employeeData.caja_id) {
+        return res.status(400).json({ message: "Caja es obligatoria para este cargo" });
+      }
     }
 
     const newEmployee = await employeeService.createEmployee(employeeData);
     res.status(201).json(newEmployee);
   } catch (error) {
+    if (error.message.includes('duplicate key value violates unique constraint "personas_ci_key"')) {
+      return res.status(400).json({ message: "ci_unique" });
+    } else if (error.message.includes('duplicate key value violates unique constraint "usuarios_username_key"')) {
+      return res.status(400).json({ message: "username_unique" });
+    }
     res.status(400).json({ message: error.message });
   }
 };
@@ -60,13 +79,25 @@ exports.updateEmployee = async (req, res) => {
     }
 
     // Validar usuario para roles administrativos
-    if (['admin', 'recepcionista'].includes(employeeData.cargo) && !employeeData.username) {
-      return res.status(400).json({ message: "Usuario es obligatorio para este cargo" });
+    if (['admin', 'recepcionista'].includes(employeeData.cargo)) {
+      if (!employeeData.username) {
+        return res.status(400).json({ message: "Usuario es obligatorio para este cargo" });
+      }
+      
+      // Validar caja para roles administrativos
+      if (!employeeData.caja_id) {
+        return res.status(400).json({ message: "Caja es obligatoria para este cargo" });
+      }
     }
 
     const updatedEmployee = await employeeService.updateEmployee(id, employeeData);
     res.json(updatedEmployee);
   } catch (error) {
+    if (error.message.includes('duplicate key value violates unique constraint "personas_ci_key"')) {
+      return res.status(400).json({ message: "ci_unique" });
+    } else if (error.message.includes('duplicate key value violates unique constraint "usuarios_username_key"')) {
+      return res.status(400).json({ message: "username_unique" });
+    }
     res.status(400).json({ message: error.message });
   }
 };

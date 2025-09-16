@@ -5,6 +5,9 @@ const employeeController = require("../controllers/employeeController");
 // Rutas para sucursales
 router.get("/branches", employeeController.getBranches);
 
+// Rutas para cajas
+router.get("/boxes", employeeController.getBoxes);
+
 // Rutas para empleados
 router.get("/", employeeController.getEmployees);
 router.post("/", employeeController.createEmployee);

@@ -8,6 +8,13 @@ exports.getBranches = async () => {
   return result.rows;
 };
 
+exports.getBoxes = async () => {
+  const result = await query(
+    "SELECT id, nombre, sucursal_id, estado FROM cajas WHERE estado = 1 ORDER BY nombre"
+  );
+  return result.rows;
+};
+
 exports.getEmployees = async () => {
   const result = await query(`
     SELECT 
@@ -20,6 +27,8 @@ exports.getEmployees = async () => {
       e.rol,
       e.sucursal_id,
       s.nombre as sucursal_nombre,
+      ec.caja_id,
+      c.nombre as caja_nombre,
       e.hora_ingreso,
       e.hora_salida,
       e.estado,
@@ -28,6 +37,8 @@ exports.getEmployees = async () => {
     FROM empleados e
     INNER JOIN personas p ON e.persona_id = p.id
     INNER JOIN sucursales s ON e.sucursal_id = s.id
+    LEFT JOIN empleado_caja ec ON e.id = ec.empleado_id AND ec.estado = 1
+    LEFT JOIN cajas c ON ec.caja_id = c.id
     LEFT JOIN usuarios u ON e.id = u.empleado_id
     WHERE e.estado IN (0, 1)
     ORDER BY p.nombres, p.apellidos
@@ -43,6 +54,7 @@ exports.createEmployee = async (employeeData) => {
     telefono,
     cargo,
     sucursal_id,
+    caja_id,
     horarioIngreso,
     horarioSalida,
     username,
@@ -70,7 +82,16 @@ exports.createEmployee = async (employeeData) => {
     );
     const empleadoId = empleadoResult.rows[0].id;
 
-    // 3. Crear usuario si es necesario
+    // 3. Asignar caja si es necesario
+    if (caja_id && ['admin', 'recepcionista'].includes(cargo)) {
+      await client.query(
+        `INSERT INTO empleado_caja (empleado_id, caja_id, estado) 
+         VALUES ($1, $2, 1)`,
+        [empleadoId, caja_id]
+      );
+    }
+
+    // 4. Crear usuario si es necesario
     if (username && password && ['admin', 'recepcionista'].includes(cargo)) {
       const hashedPassword = await bcrypt.hash(password, 10);
       await client.query(
@@ -100,6 +121,7 @@ exports.updateEmployee = async (id, employeeData) => {
     telefono,
     cargo,
     sucursal_id,
+    caja_id,
     horarioIngreso,
     horarioSalida,
     username,
@@ -137,7 +159,37 @@ exports.updateEmployee = async (id, employeeData) => {
       [cargo, sucursal_id, horarioIngreso, horarioSalida, id]
     );
 
-    // 4. Manejar usuario
+    // 4. Manejar asignación de caja
+    if (['admin', 'recepcionista'].includes(cargo) && caja_id) {
+      // Verificar si ya existe una asignación
+      const asignacionExistente = await client.query(
+        'SELECT id FROM empleado_caja WHERE empleado_id = $1 AND estado = 1',
+        [id]
+      );
+
+      if (asignacionExistente.rows.length > 0) {
+        // Actualizar asignación existente
+        await client.query(
+          'UPDATE empleado_caja SET caja_id = $1 WHERE empleado_id = $2 AND estado = 1',
+          [caja_id, id]
+        );
+      } else {
+        // Crear nueva asignación
+        await client.query(
+          `INSERT INTO empleado_caja (empleado_id, caja_id, estado) 
+           VALUES ($1, $2, 1)`,
+          [id, caja_id]
+        );
+      }
+    } else {
+      // Eliminar asignación de caja si el cargo ya no requiere acceso
+      await client.query(
+        'UPDATE empleado_caja SET estado = 0 WHERE empleado_id = $1',
+        [id]
+      );
+    }
+
+    // 5. Manejar usuario
     if (['admin', 'recepcionista'].includes(cargo)) {
       // Verificar si ya existe un usuario
       const usuarioExistente = await client.query(
@@ -248,6 +300,8 @@ exports.getEmployeeById = async (id) => {
       e.rol,
       e.sucursal_id,
       s.nombre as sucursal_nombre,
+      ec.caja_id,
+      c.nombre as caja_nombre,
       e.hora_ingreso,
       e.hora_salida,
       e.estado,
@@ -256,6 +310,8 @@ exports.getEmployeeById = async (id) => {
     FROM empleados e
     INNER JOIN personas p ON e.persona_id = p.id
     INNER JOIN sucursales s ON e.sucursal_id = s.id
+    LEFT JOIN empleado_caja ec ON e.id = ec.empleado_id AND ec.estado = 1
+    LEFT JOIN cajas c ON ec.caja_id = c.id
     LEFT JOIN usuarios u ON e.id = u.empleado_id
     WHERE e.id = $1
   `, [id]);
