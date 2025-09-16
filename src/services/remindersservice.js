@@ -3,7 +3,7 @@ const { query } = require("../../db");
 const getNewMembers = async (sucursalId) => {
   try {
     // Obtener miembros que se registraron hoy en la sucursal específica
-    // Usando CURRENT_DATE directamente en PostgreSQL
+    // Usando la zona horaria de Bolivia (America/La_Paz)
     console.log("Buscando nuevos miembros para hoy en sucursal:", sucursalId);
     
     const result = await query(`
@@ -21,7 +21,7 @@ const getNewMembers = async (sucursalId) => {
       FROM personas p
       INNER JOIN inscripciones i ON p.id = i.persona_id
       INNER JOIN servicios s ON i.servicio_id = s.id
-      WHERE i.fecha_inicio::date = CURRENT_DATE
+      WHERE i.fecha_inicio::date = CURRENT_DATE AT TIME ZONE 'America/La_Paz'
       AND i.estado = 1
       AND i.sucursal_id = $1
       ORDER BY i.fecha_inicio DESC
@@ -41,7 +41,7 @@ const getNewMembers = async (sucursalId) => {
           i.estado
         FROM personas p
         INNER JOIN inscripciones i ON p.id = i.persona_id
-        WHERE i.fecha_inicio >= CURRENT_DATE - INTERVAL '7 days'
+        WHERE i.fecha_inicio >= (CURRENT_DATE AT TIME ZONE 'America/La_Paz') - INTERVAL '7 days'
         ORDER BY i.fecha_inicio DESC
         LIMIT 10
       `);
@@ -75,7 +75,7 @@ const getExpiringMembers = async (sucursalId) => {
         p.telefono,
         s.nombre as servicio,
         i.fecha_vencimiento as "fechaVencimiento",
-        (i.fecha_vencimiento - CURRENT_DATE) as dias_restantes,
+        (i.fecha_vencimiento - (CURRENT_DATE AT TIME ZONE 'America/La_Paz')) as dias_restantes,
         CONCAT(
           '¡Hola ', p.nombres, '! 👋 ',
           'Tu membresía ', s.nombre, ' en MUTANT GYM vence el ', 
@@ -85,7 +85,8 @@ const getExpiringMembers = async (sucursalId) => {
       FROM personas p
       INNER JOIN inscripciones i ON p.id = i.persona_id
       INNER JOIN servicios s ON i.servicio_id = s.id
-      WHERE i.fecha_vencimiento BETWEEN CURRENT_DATE AND (CURRENT_DATE + INTERVAL '3 days')
+      WHERE i.fecha_vencimiento BETWEEN (CURRENT_DATE AT TIME ZONE 'America/La_Paz') 
+        AND ((CURRENT_DATE AT TIME ZONE 'America/La_Paz') + INTERVAL '3 days')
       AND i.estado = 1
       AND i.sucursal_id = $1
       ORDER BY i.fecha_vencimiento ASC
@@ -111,9 +112,10 @@ const getExpiringMembers = async (sucursalId) => {
 const getBirthdayMembers = async (sucursalId) => {
   try {
     // Obtener miembros que cumplen años hoy en la sucursal específica
-    const today = new Date();
-    const day = today.getDate();
-    const month = today.getMonth() + 1;
+    // Usando la fecha actual en la zona horaria de Bolivia
+    const now = new Date(new Date().toLocaleString("en-US", {timeZone: "America/La_Paz"}));
+    const day = now.getDate();
+    const month = now.getMonth() + 1;
     
     console.log("Buscando cumpleañeros para el día:", day, "mes:", month, "en sucursal:", sucursalId);
     
