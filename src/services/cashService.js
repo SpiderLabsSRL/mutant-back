@@ -40,10 +40,21 @@ exports.getCashBoxStatus = async (cashBoxId) => {
 
 exports.getTransactionsByCashBox = async (cashBoxId) => {
   const result = await query(
-    `SELECT id, caja_id, tipo, descripcion, monto, fecha, usuario_id 
-     FROM transacciones_caja 
-     WHERE caja_id = $1 
-     ORDER BY fecha DESC`,
+    `SELECT 
+      tc.id, 
+      tc.caja_id, 
+      tc.tipo, 
+      tc.descripcion, 
+      tc.monto, 
+      tc.fecha, 
+      tc.usuario_id,
+      CONCAT(p.nombres, ' ', p.apellidos) as empleado_nombre
+     FROM transacciones_caja tc
+     JOIN usuarios u ON tc.usuario_id = u.id
+     JOIN empleados e ON u.empleado_id = e.id
+     JOIN personas p ON e.persona_id = p.id
+     WHERE tc.caja_id = $1 
+     ORDER BY tc.fecha DESC`,
     [cashBoxId]
   );
   return result.rows;
@@ -51,9 +62,20 @@ exports.getTransactionsByCashBox = async (cashBoxId) => {
 
 exports.getLactobarTransactionsByBranch = async (branchId) => {
   const result = await query(
-    `SELECT tc.id, tc.caja_id, tc.tipo, tc.descripcion, tc.monto, tc.fecha, tc.usuario_id 
+    `SELECT 
+      tc.id, 
+      tc.caja_id, 
+      tc.tipo, 
+      tc.descripcion, 
+      tc.monto, 
+      tc.fecha, 
+      tc.usuario_id,
+      CONCAT(p.nombres, ' ', p.apellidos) as empleado_nombre
      FROM transacciones_caja tc
      JOIN cajas c ON tc.caja_id = c.id
+     JOIN usuarios u ON tc.usuario_id = u.id
+     JOIN empleados e ON u.empleado_id = e.id
+     JOIN personas p ON e.persona_id = p.id
      WHERE c.sucursal_id = $1 AND c.nombre ILIKE '%lactobar%'
      ORDER BY tc.fecha DESC`,
     [branchId]
