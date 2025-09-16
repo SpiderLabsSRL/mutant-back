@@ -8,23 +8,23 @@ const getNewMembers = async (sucursalId) => {
     
     const result = await query(`
       SELECT 
-        p.id,
-        CONCAT(p.nombres, ' ', p.apellidos) as nombre,
-        p.telefono,
-        s.nombre as servicio,
-        i.fecha_inicio as "fechaRegistro",
-        CONCAT(
-          '¡Bienvenido/a a MUTANT GYM ', p.nombres, '! 🏋️‍♂️ ',
-          'Estamos emocionados de tenerte en nuestra familia fitness. ',
-          'Tu membresía ', s.nombre, ' está activa. ¡Comencemos a entrenar! 🔥'
-        ) as mensaje
-      FROM personas p
-      INNER JOIN inscripciones i ON p.id = i.persona_id
-      INNER JOIN servicios s ON i.servicio_id = s.id
-      WHERE i.fecha_inicio::date = CURRENT_DATE AT TIME ZONE 'America/La_Paz'
-      AND i.estado = 1
-      AND i.sucursal_id = $1
-      ORDER BY i.fecha_inicio DESC
+    p.id,
+    CONCAT(p.nombres, ' ', p.apellidos) AS nombre,
+    p.telefono,
+    s.nombre AS servicio,
+    i.fecha_inicio AS "fechaRegistro",
+    CONCAT(
+        '¡Bienvenido/a a MUTANT GYM ', p.nombres, '! 🏋️‍♂️ ',
+        'Estamos emocionados de tenerte en nuestra familia fitness. ',
+        'Tu membresía ', s.nombre, ' está activa. ¡Comencemos a entrenar! 🔥'
+    ) AS mensaje
+FROM personas p
+INNER JOIN inscripciones i ON p.id = i.persona_id
+INNER JOIN servicios s ON i.servicio_id = s.id
+WHERE i.fecha_inicio::date = (NOW() AT TIME ZONE 'America/La_Paz')::date
+  AND i.estado = 1
+  AND i.sucursal_id = 1
+ORDER BY i.fecha_inicio DESC;
     `, [sucursalId]);
 
     console.log("Nuevos miembros encontrados:", result.rows.length);
