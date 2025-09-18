@@ -4,7 +4,7 @@ const newtransactionController = require("../controllers/newtransactionControlle
 
 // Rutas para transacciones
 router.get("/transactions/transactions", newtransactionController.getTransactions);
-router.get("/transactions/transactions/caja/:idCaja", newtransactionController.getTransactionsByCashRegister);
+router.get("/transactions/transactions/caja/:idCaja", newtransactionController.getTransactionsByCashRegisterAndUser);
 router.post("/transactions/transactions", newtransactionController.createTransaction);
 
 // Rutas para estado de caja

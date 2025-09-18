@@ -10,13 +10,22 @@ exports.getTransactions = async (req, res) => {
   }
 };
 
-exports.getTransactionsByCashRegister = async (req, res) => {
+exports.getTransactionsByCashRegisterAndUser = async (req, res) => {
   try {
     const { idCaja } = req.params;
-    const transactions = await newtransactionService.getTransactionsByCashRegister(parseInt(idCaja));
+    const { idUsuario } = req.query;
+    
+    if (!idUsuario) {
+      return res.status(400).json({ error: "ID de usuario requerido" });
+    }
+    
+    const transactions = await newtransactionService.getTransactionsByCashRegisterAndUser(
+      parseInt(idCaja),
+      parseInt(idUsuario)
+    );
     res.json(transactions);
   } catch (error) {
-    console.error("Error in getTransactionsByCashRegister:", error);
+    console.error("Error in getTransactionsByCashRegisterAndUser:", error);
     res.status(500).json({ error: error.message });
   }
 };

@@ -22,7 +22,7 @@ exports.getTransactions = async () => {
   return result.rows;
 };
 
-exports.getTransactionsByCashRegister = async (idCaja) => {
+exports.getTransactionsByCashRegisterAndUser = async (idCaja, idUsuario) => {
   const result = await query(
     `
     SELECT 
@@ -40,10 +40,12 @@ exports.getTransactionsByCashRegister = async (idCaja) => {
     INNER JOIN usuarios u ON tc.usuario_id = u.id
     INNER JOIN empleados e ON u.empleado_id = e.id
     INNER JOIN personas p ON e.persona_id = p.id
-    WHERE tc.caja_id = $1
+    WHERE tc.caja_id = $1 
+      AND tc.usuario_id = $2
+      AND tc.fecha::date = (NOW() AT TIME ZONE 'America/La_Paz')::date
     ORDER BY tc.fecha DESC
   `,
-    [idCaja]
+    [idCaja, idUsuario]
   );
   return result.rows;
 };
@@ -77,11 +79,11 @@ exports.createTransaction = async ({ tipo, descripcion, monto, idCaja, idUsuario
     
     const estado_caja_id = estadoCajaActual.id;
     
-    // 2. Insertar transacción
+    // 2. Insertar transacción con zona horaria
     const result = await client.query(
       `
       INSERT INTO transacciones_caja (tipo, descripcion, monto, fecha, caja_id, estado_caja_id, usuario_id)
-      VALUES ($1, $2, $3, NOW(), $4, $5, $6)
+      VALUES ($1, $2, $3, TIMEZONE('America/La_Paz', NOW()), $4, $5, $6)
       RETURNING *
       `,
       [tipo, descripcion, monto, idCaja, estado_caja_id, idUsuario]
@@ -219,7 +221,7 @@ exports.openCashRegister = async (caja_id, monto_inicial, usuario_id) => {
       throw new Error("La caja ya está abierta");
     }
     
-    // Crear nuevo estado de caja
+    // Crear nuevo estado de caja con zona horaria
     const estadoCajaResult = await client.query(
       `
       INSERT INTO estado_caja (caja_id, estado, monto_inicial, monto_final, usuario_id)
@@ -231,11 +233,11 @@ exports.openCashRegister = async (caja_id, monto_inicial, usuario_id) => {
     
     const estado_caja_id = estadoCajaResult.rows[0].id;
     
-    // Crear transacción de apertura
+    // Crear transacción de apertura con zona horaria
     await client.query(
       `
       INSERT INTO transacciones_caja (caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id)
-      VALUES ($1, $2, 'apertura', 'Apertura de caja', $3, NOW(), $4)
+      VALUES ($1, $2, 'apertura', 'Apertura de caja', $3, TIMEZONE('America/La_Paz', NOW()), $4)
       `,
       [caja_id, estado_caja_id, monto_inicial, usuario_id]
     );
@@ -294,11 +296,11 @@ exports.closeCashRegister = async (caja_id, monto_final, usuario_id) => {
       [monto_final, estado_caja_id]
     );
     
-    // Crear transacción de cierre
+    // Crear transacción de cierre con zona horaria
     await client.query(
       `
       INSERT INTO transacciones_caja (caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id)
-      VALUES ($1, $2, 'cierre', 'Cierre de caja', $3, NOW(), $4)
+      VALUES ($1, $2, 'cierre', 'Cierre de caja', $3, TIMEZONE('America/La_Paz', NOW()), $4)
       `,
       [caja_id, estado_caja_id, monto_final, usuario_id]
     );
