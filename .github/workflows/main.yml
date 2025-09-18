@@ -1,0 +1,20 @@
+name: Keep-alive Render (Bolivia Time)
+on:
+  schedule:
+    # Programa en HORARIO UTC (Bolivia UTC-4 → UTC = Bolivia +4)
+    # 5:00 AM - 11:30 PM Bolivia Time = 9:00 AM - 3:30 AM UTC (día siguiente)
+    - cron: '*/13 9-23 * * *'    # De 9:00 UTC a 23:59 UTC (5:00 AM a 7:59 PM Bolivia)
+    - cron: '*/13 0-3 * * *'     # De 0:00 UTC a 3:30 UTC (8:00 PM a 11:30 PM Bolivia)
+  workflow_dispatch:  # Permite ejecutarlo manualmente
+
+jobs:
+  ping-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hacer ping al backend
+        run: |
+          curl -s -o /dev/null -w "Status: %{http_code}\n" https://mutant-back.onrender.com/api/products/products
+      - name: Registrar hora de ejecución
+        run: |
+          echo "Ping ejecutado a $(date -u) UTC"
+          echo "Que corresponde a $(TZ='America/La_Paz' date) Bolivia Time"
