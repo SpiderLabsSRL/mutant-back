@@ -23,9 +23,9 @@ exports.getTransactionsByCashRegister = async (req, res) => {
 
 exports.createTransaction = async (req, res) => {
   try {
-    const { tipo, descripcion, monto, id_caja, id_usuario } = req.body;
+    const { tipo, descripcion, monto, caja_id, usuario_id } = req.body;
     
-    if (!id_usuario) {
+    if (!usuario_id) {
       return res.status(400).json({ error: "ID de usuario requerido" });
     }
     
@@ -33,8 +33,8 @@ exports.createTransaction = async (req, res) => {
       tipo,
       descripcion,
       monto: parseFloat(monto),
-      idCaja: parseInt(id_caja),
-      idUsuario: parseInt(id_usuario)
+      idCaja: parseInt(caja_id),
+      idUsuario: parseInt(usuario_id)
     });
     
     res.status(201).json(transaction);
@@ -71,5 +71,47 @@ exports.getAssignedCashRegister = async (req, res) => {
       error: error.message,
       details: "El usuario no tiene una caja asignada o ocurrió un error interno"
     });
+  }
+};
+
+exports.openCashRegister = async (req, res) => {
+  try {
+    const { caja_id, monto_inicial, usuario_id } = req.body;
+    
+    if (!caja_id || !monto_inicial || !usuario_id) {
+      return res.status(400).json({ error: "Datos incompletos para abrir la caja" });
+    }
+    
+    const result = await newtransactionService.openCashRegister(
+      parseInt(caja_id),
+      parseFloat(monto_inicial),
+      parseInt(usuario_id)
+    );
+    
+    res.status(201).json(result);
+  } catch (error) {
+    console.error("Error in openCashRegister:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.closeCashRegister = async (req, res) => {
+  try {
+    const { caja_id, monto_final, usuario_id } = req.body;
+    
+    if (!caja_id || !monto_final || !usuario_id) {
+      return res.status(400).json({ error: "Datos incompletos para cerrar la caja" });
+    }
+    
+    const result = await newtransactionService.closeCashRegister(
+      parseInt(caja_id),
+      parseFloat(monto_final),
+      parseInt(usuario_id)
+    );
+    
+    res.status(200).json(result);
+  } catch (error) {
+    console.error("Error in closeCashRegister:", error);
+    res.status(500).json({ error: error.message });
   }
 };
