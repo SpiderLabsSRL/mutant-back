@@ -7,7 +7,8 @@ const getSales = async (req, res) => {
       specificDate, 
       startDate, 
       endDate, 
-      sucursal 
+      sucursal,
+      empleadoId
     } = req.query;
     
     const filters = {
@@ -15,7 +16,8 @@ const getSales = async (req, res) => {
       specificDate,
       startDate,
       endDate,
-      sucursal
+      sucursal,
+      empleadoId
     };
     
     const sales = await salesService.getSales(filters);

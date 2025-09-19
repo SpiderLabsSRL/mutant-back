@@ -7,7 +7,8 @@ const getSales = async (filters = {}) => {
       specificDate, 
       startDate, 
       endDate, 
-      sucursal 
+      sucursal,
+      empleadoId
     } = filters;
     
     // Obtener ventas de productos
@@ -84,6 +85,12 @@ const getSales = async (filters = {}) => {
     if (sucursal && sucursal !== 'all') {
       whereConditions.push(`s.id = $${++paramCount}`);
       queryParams.push(parseInt(sucursal));
+    }
+    
+    // Filtro de empleado (para recepcionistas)
+    if (empleadoId) {
+      whereConditions.push(`e.id = $${++paramCount}`);
+      queryParams.push(parseInt(empleadoId));
     }
     
     // Añadir condiciones WHERE si existen
