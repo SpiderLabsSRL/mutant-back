@@ -320,6 +320,7 @@ exports.registerClientAccess = async (
 };
 
 // Registrar entrada de empleado
+// Registrar entrada de empleado
 exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   const employee = await query(
     `
@@ -337,24 +338,57 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
+  // Obtener la hora actual en Bolivia
   const currentTimeResult = await query(
-    `SELECT EXTRACT(HOUR FROM TIMEZONE('America/La_Paz', NOW())) as hora_actual, 
-            EXTRACT(MINUTE FROM TIMEZONE('America/La_Paz', NOW())) as minuto_actual`
+    `SELECT 
+      EXTRACT(HOUR FROM TIMEZONE('America/La_Paz', NOW())) as hora_actual, 
+      EXTRACT(MINUTE FROM TIMEZONE('America/La_Paz', NOW())) as minuto_actual,
+      EXTRACT(SECOND FROM TIMEZONE('America/La_Paz', NOW())) as segundo_actual`
   );
 
   const horaActual = currentTimeResult.rows[0].hora_actual;
   const minutoActual = currentTimeResult.rows[0].minuto_actual;
-  const currentTotalMinutes = horaActual * 60 + minutoActual;
+  const segundoActual = currentTimeResult.rows[0].segundo_actual;
+  
+  // Convertir a minutos totales con decimales para mayor precisión
+  const currentTotalMinutes = horaActual * 60 + minutoActual + segundoActual / 60;
 
+  // Parsear la hora de ingreso del empleado
   const [shiftHours, shiftMinutes] = emp.hora_ingreso.split(':').map(Number);
   const shiftTotalMinutes = shiftHours * 60 + shiftMinutes;
 
+  // Calcular diferencia en minutos
   const diffMinutes = currentTotalMinutes - shiftTotalMinutes;
-  const isLate = diffMinutes > 0;
 
   let detail = `Entrada: A tiempo`;
-  if (isLate) {
-    detail = `Entrada: ${diffMinutes} minutos tarde`;
+  let isLate = false;
+  
+  if (diffMinutes > 0) {
+    // Está tarde
+    isLate = true;
+    const minutosEnteros = Math.floor(diffMinutes);
+    const segundos = Math.round((diffMinutes - minutosEnteros) * 60);
+    
+    if (minutosEnteros === 0 && segundos > 0) {
+      detail = `Entrada: ${segundos} segundos tarde`;
+    } else if (minutosEnteros > 0 && segundos === 0) {
+      detail = `Entrada: ${minutosEnteros} minuto${minutosEnteros !== 1 ? 's' : ''} tarde`;
+    } else {
+      detail = `Entrada: ${minutosEnteros} minuto${minutosEnteros !== 1 ? 's' : ''} y ${segundos} segundo${segundos !== 1 ? 's' : ''} tarde`;
+    }
+  } else if (diffMinutes < 0) {
+    // Está temprano (no se considera tardanza)
+    const minutosAbsolutos = Math.abs(diffMinutes);
+    const minutosEnteros = Math.floor(minutosAbsolutos);
+    const segundos = Math.round((minutosAbsolutos - minutosEnteros) * 60);
+    
+    if (minutosEnteros === 0 && segundos > 0) {
+      detail = `Entrada: ${segundos} segundos antes`;
+    } else if (minutosEnteros > 0 && segundos === 0) {
+      detail = `Entrada: ${minutosEnteros} minuto${minutosEnteros !== 1 ? 's' : ''} antes`;
+    } else {
+      detail = `Entrada: ${minutosEnteros} minuto${minutosEnteros !== 1 ? 's' : ''} y ${segundos} segundo${segundos !== 1 ? 's' : ''} antes`;
+    }
   }
 
   await query(
@@ -392,26 +426,57 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
+  // Obtener la hora actual en Bolivia
   const currentTimeResult = await query(
-    `SELECT EXTRACT(HOUR FROM TIMEZONE('America/La_Paz', NOW())) as hora_actual, 
-            EXTRACT(MINUTE FROM TIMEZONE('America/La_Paz', NOW())) as minuto_actual`
+    `SELECT 
+      EXTRACT(HOUR FROM TIMEZONE('America/La_Paz', NOW())) as hora_actual, 
+      EXTRACT(MINUTE FROM TIMEZONE('America/La_Paz', NOW())) as minuto_actual,
+      EXTRACT(SECOND FROM TIMEZONE('America/La_Paz', NOW())) as segundo_actual`
   );
 
   const horaActual = currentTimeResult.rows[0].hora_actual;
   const minutoActual = currentTimeResult.rows[0].minuto_actual;
-  const currentTotalMinutes = horaActual * 60 + minutoActual;
+  const segundoActual = currentTimeResult.rows[0].segundo_actual;
+  
+  // Convertir a minutos totales con decimales para mayor precisión
+  const currentTotalMinutes = horaActual * 60 + minutoActual + segundoActual / 60;
 
+  // Parsear la hora de salida del empleado
   const [shiftHours, shiftMinutes] = emp.hora_salida.split(':').map(Number);
   const shiftTotalMinutes = shiftHours * 60 + shiftMinutes;
 
+  // Calcular diferencia en minutos
   const diffMinutes = currentTotalMinutes - shiftTotalMinutes;
-  const isEarly = diffMinutes < 0;
 
   let detail = `Salida: A tiempo`;
-  if (isEarly) {
-    detail = `Salida: ${Math.abs(diffMinutes)} minutos antes`;
+  let isEarly = false;
+  
+  if (diffMinutes < 0) {
+    // Está saliendo temprano
+    isEarly = true;
+    const minutosAbsolutos = Math.abs(diffMinutes);
+    const minutosEnteros = Math.floor(minutosAbsolutos);
+    const segundos = Math.round((minutosAbsolutos - minutosEnteros) * 60);
+    
+    if (minutosEnteros === 0 && segundos > 0) {
+      detail = `Salida: ${segundos} segundos antes`;
+    } else if (minutosEnteros > 0 && segundos === 0) {
+      detail = `Salida: ${minutosEnteros} minuto${minutosEnteros !== 1 ? 's' : ''} antes`;
+    } else {
+      detail = `Salida: ${minutosEnteros} minuto${minutosEnteros !== 1 ? 's' : ''} y ${segundos} segundo${segundos !== 1 ? 's' : ''} antes`;
+    }
   } else if (diffMinutes > 0) {
-    detail = `Salida: ${diffMinutes} minutos después`;
+    // Está saliendo después de la hora (no se considera temprano)
+    const minutosEnteros = Math.floor(diffMinutes);
+    const segundos = Math.round((diffMinutes - minutosEnteros) * 60);
+    
+    if (minutosEnteros === 0 && segundos > 0) {
+      detail = `Salida: ${segundos} segundos después`;
+    } else if (minutosEnteros > 0 && segundos === 0) {
+      detail = `Salida: ${minutosEnteros} minuto${minutosEnteros !== 1 ? 's' : ''} después`;
+    } else {
+      detail = `Salida: ${minutosEnteros} minuto${minutosEnteros !== 1 ? 's' : ''} y ${segundos} segundo${segundos !== 1 ? 's' : ''} después`;
+    }
   }
 
   await query(
