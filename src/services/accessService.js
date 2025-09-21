@@ -38,36 +38,38 @@ exports.getAccessLogs = async (
     params.push(branchId);
   }
 
-  // Filtrar por fecha - por defecto solo mostrar registros del día actual en Bolivia
+  // Filtrar por fecha
   if (!startDate && !endDate) {
-    // Si no se proporcionan fechas, filtrar por hoy en zona horaria de Bolivia
-    whereClauses.push(`ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date`);
+    // ✅ Filtrar por el día actual en Bolivia
+    whereClauses.push(`
+      DATE(ra.fecha AT TIME ZONE 'America/La_Paz') = TIMEZONE('America/La_Paz', NOW())::date
+    `);
   } else {
-    // Si se proporcionan fechas, usar los filtros proporcionados
     if (startDate) {
-      whereClauses.push(`ra.fecha::date >= $${params.length + 1}`);
+      whereClauses.push(`DATE(ra.fecha AT TIME ZONE 'America/La_Paz') >= $${params.length + 1}`);
       params.push(startDate);
     }
     if (endDate) {
-      whereClauses.push(`ra.fecha::date <= $${params.length + 1}`);
+      whereClauses.push(`DATE(ra.fecha AT TIME ZONE 'America/La_Paz') <= $${params.length + 1}`);
       params.push(endDate);
     }
   }
 
+  // Buscar por nombre, apellido o CI
   if (searchTerm) {
     whereClauses.push(
-      `(p.nombres ILIKE $${params.length + 1} OR p.apellidos ILIKE $${
-        params.length + 1
-      } OR p.ci ILIKE $${params.length + 1})`
+      `(p.nombres ILIKE $${params.length + 1} OR p.apellidos ILIKE $${params.length + 1} OR p.ci ILIKE $${params.length + 1})`
     );
     params.push(`%${searchTerm}%`);
   }
 
+  // Filtro por tipo de persona
   if (typeFilter && typeFilter !== "all") {
     whereClauses.push(`ra.tipo_persona = $${params.length + 1}`);
     params.push(typeFilter);
   }
 
+  // Construir cláusula WHERE
   if (whereClauses.length > 0) {
     sql += ` WHERE ${whereClauses.join(" AND ")}`;
   }
@@ -78,6 +80,7 @@ exports.getAccessLogs = async (
   const result = await query(sql, params);
   return result.rows;
 };
+
 // Buscar miembros (clientes y empleados)
 exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
   const searchParam = `%${searchTerm}%`;
