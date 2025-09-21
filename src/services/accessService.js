@@ -58,7 +58,6 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
   return result.rows;
 };
 
-
 // Buscar miembros (clientes y empleados)
 exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
   const searchParam = `%${searchTerm}%`;

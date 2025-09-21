@@ -4,6 +4,9 @@ exports.getAccessLogs = async (req, res) => {
   try {
     const { search, type, limit, startDate, endDate, branchId } = req.query;
     
+    // Convertir branchId a número si existe
+    const parsedBranchId = branchId ? parseInt(branchId) : undefined;
+    
     // Por defecto, mostrar solo los registros del día actual
     const defaultStartDate = startDate || new Date().toISOString().split('T')[0];
     
@@ -11,9 +14,7 @@ exports.getAccessLogs = async (req, res) => {
       search, 
       type, 
       limit ? parseInt(limit) : 100,
-      defaultStartDate,
-      endDate,
-      branchId
+      parsedBranchId
     );
     res.json(logs);
   } catch (error) {
@@ -29,7 +30,10 @@ exports.searchMembers = async (req, res) => {
       return res.status(400).json({ message: "Término de búsqueda debe tener al menos 2 caracteres" });
     }
     
-    const members = await accessService.searchMembers(search, type, branchId);
+    // Convertir branchId a número si existe
+    const parsedBranchId = branchId ? parseInt(branchId) : undefined;
+    
+    const members = await accessService.searchMembers(search, type, parsedBranchId);
     res.json(members);
   } catch (error) {
     console.error("Error in searchMembers:", error);
