@@ -22,10 +22,9 @@ const getProductById = async (req, res) => {
 
 const createProduct = async (req, res) => {
   try {
-    const { nombre, precio_compra, precio_venta, proveedor, sucursales, stock_por_sucursal } = req.body;
+    const { nombre, precio_venta, proveedor, sucursales, stock_por_sucursal } = req.body;
     const newProduct = await productsService.createProduct(
       nombre,
-      precio_compra,
       precio_venta,
       proveedor,
       sucursales,
@@ -40,11 +39,10 @@ const createProduct = async (req, res) => {
 const updateProduct = async (req, res) => {
   try {
     const { id } = req.params;
-    const { nombre, precio_compra, precio_venta, proveedor, sucursales, stock_por_sucursal } = req.body;
+    const { nombre, precio_venta, proveedor, sucursales, stock_por_sucursal } = req.body;
     const updatedProduct = await productsService.updateProduct(
       id,
       nombre,
-      precio_compra,
       precio_venta,
       proveedor,
       sucursales,
