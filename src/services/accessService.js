@@ -75,7 +75,11 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
           i.estado,
           i.sucursal_id,
           s.nombre as nombre_servicio,
-          s.multisucursal
+          s.multisucursal,
+          CASE 
+            WHEN i.fecha_vencimiento::date < TIMEZONE('America/La_Paz', NOW())::date THEN 'vencido'
+            ELSE 'activo'
+          END as estado_servicio
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id
         WHERE i.estado = 1
@@ -100,7 +104,8 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
               'fecha_vencimiento', ui.fecha_vencimiento,
               'estado', ui.estado,
               'sucursal_id', ui.sucursal_id,
-              'multisucursal', ui.multisucursal
+              'multisucursal', ui.multisucursal,
+              'estado_servicio', ui.estado_servicio
             ) ORDER BY ui.fecha_vencimiento DESC
           ) FILTER (WHERE ui.idinscripcion IS NOT NULL),
           '[]'
