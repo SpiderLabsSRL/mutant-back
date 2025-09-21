@@ -165,7 +165,6 @@ const obtenerFechasFiltro = (filtros) => {
 };
 
 // Función para obtener el resumen general
-// Función para obtener el resumen general
 const obtenerResumen = async (fechaInicio, fechaFin, sucursalId) => {
   try {
     // Formatear fechas para SQL
@@ -480,7 +479,7 @@ const obtenerProductosMasVendidos = async (fechaInicio, fechaFin, sucursalId) =>
   }
 };
 
-// Función para obtener atrasos de trabajadores
+// Función para obtener atrasos de trabajadores (MODIFICADA - sin porcentaje de asistencia)
 const obtenerAtrasosTrabajadores = async (fechaInicio, fechaFin, sucursalId) => {
   try {
     const fechaInicioStr = formatDateToSQL(fechaInicio);
@@ -506,11 +505,7 @@ const obtenerAtrasosTrabajadores = async (fechaInicio, fechaFin, sucursalId) => 
           THEN EXTRACT(EPOCH FROM (ra.fecha::time - e.hora_ingreso)) / 60 
           ELSE 0 END
         ), 0) as minutos_acumulados,
-        COUNT(CASE WHEN ra.fecha::time > e.hora_ingreso THEN 1 END) as dias_atraso,
-        ROUND(
-          (COUNT(CASE WHEN ra.fecha::time <= e.hora_ingreso THEN 1 END) * 100.0 / 
-          NULLIF(COUNT(*), 0)), 2
-        ) as porcentaje_asistencia
+        COUNT(CASE WHEN ra.fecha::time > e.hora_ingreso THEN 1 END) as dias_atraso
       FROM registros_acceso ra
       JOIN usuarios u ON ra.usuario_registro_id = u.id
       JOIN empleados e ON u.empleado_id = e.id
@@ -526,8 +521,7 @@ const obtenerAtrasosTrabajadores = async (fechaInicio, fechaFin, sucursalId) => 
     return result.rows.map(row => ({
       trabajador: row.trabajador,
       minutosAcumulados: parseInt(row.minutos_acumulados),
-      diasAtraso: parseInt(row.dias_atraso),
-      porcentajeAsistencia: parseFloat(row.porcentaje_asistencia) || 100
+      diasAtraso: parseInt(row.dias_atraso)
     }));
   } catch (error) {
     console.error("Error obteniendo atrasos de trabajadores:", error);
