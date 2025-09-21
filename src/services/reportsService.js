@@ -217,15 +217,17 @@ const obtenerResumen = async (fechaInicio, fechaFin, sucursalId) => {
     const atrasosQuery = `
       SELECT 
         COALESCE(SUM(
-          CAST(
-            COALESCE(NULLIF(regexp_replace(detalle, '\\D', '', 'g'), ''), '0') AS INTEGER
-          )
+          CASE WHEN ra.detalle LIKE '%tarde%' 
+          THEN CAST(
+            COALESCE(NULLIF(regexp_replace(ra.detalle, '\\D', '', 'g'), ''), '0'
+          ) AS INTEGER)
+          ELSE 0 END
         ), 0) AS minutos_atraso_total
-      FROM registros_acceso
-      WHERE fecha::date BETWEEN $1 AND $2
-        AND tipo_persona = 'empleado'
-        AND estado = 'exitoso'
-        AND sucursal_id = ${sucursalId && sucursalId !== 'all' ? `$${paramCount}` : '1'}
+      FROM registros_acceso ra
+      WHERE ra.fecha BETWEEN $1 AND $2
+        AND ra.tipo_persona = 'empleado'
+        AND ra.estado = 'exitoso'
+        ${sucursalId && sucursalId !== 'all' ? `AND ra.sucursal_id = $${paramCount}` : ''}
     `;
     
     // Ejecutar todas las consultas en paralelo
@@ -322,21 +324,19 @@ const calcularTendencias = async (fechaInicio, fechaFin, sucursalId, datosActual
     `;
     
     const atrasosQueryAnterior = `
-      SELECT COALESCE(SUM(
-        EXTRACT(EPOCH FROM (ra.fecha - make_time(
-          EXTRACT(HOUR FROM e.hora_ingreso)::integer,
-          EXTRACT(MINUTE FROM e.hora_ingreso)::integer,
-          0
-        ))) / 60
-      ), 0) as minutos
+      SELECT 
+        COALESCE(SUM(
+          CASE WHEN ra.detalle LIKE '%tarde%' 
+          THEN CAST(
+            COALESCE(NULLIF(regexp_replace(ra.detalle, '\\D', '', 'g'), ''), '0'
+          ) AS INTEGER)
+          ELSE 0 END
+        ), 0) AS minutos_atraso_total
       FROM registros_acceso ra
-      JOIN usuarios u ON ra.usuario_registro_id = u.id
-      JOIN empleados e ON u.empleado_id = e.id
       WHERE ra.fecha BETWEEN $1 AND $2
-      AND ra.tipo_persona = 'empleado'
-      AND ra.estado = 'exitoso'
-      AND ra.fecha::time > e.hora_ingreso
-      ${sucursalId && sucursalId !== 'all' ? `AND ra.sucursal_id = $${paramCount}` : ''}
+        AND ra.tipo_persona = 'empleado'
+        AND ra.estado = 'exitoso'
+        ${sucursalId && sucursalId !== 'all' ? `AND ra.sucursal_id = $${paramCount}` : ''}
     `;
     
     // Ejecutar consultas del período anterior
@@ -362,7 +362,7 @@ const calcularTendencias = async (fechaInicio, fechaFin, sucursalId, datosActual
     const serviciosAnteriorVal = parseInt(serviciosAnterior.rows[0]?.count) || 0;
     const productosAnteriorVal = parseInt(productosAnterior.rows[0]?.count) || 0;
     const ingresosAnteriorVal = parseFloat(ingresosAnterior.rows[0]?.total) || 0;
-    const atrasosAnteriorVal = parseInt(atrasosAnterior.rows[0]?.minutos) || 0;
+    const atrasosAnteriorVal = parseInt(atrasosAnterior.rows[0]?.minutos_atraso_total) || 0;
     
     return {
       servicios: calcularPorcentaje(datosActuales.servicios, serviciosAnteriorVal),
@@ -479,7 +479,7 @@ const obtenerProductosMasVendidos = async (fechaInicio, fechaFin, sucursalId) =>
   }
 };
 
-// Función para obtener atrasos de trabajadores (MODIFICADA - sin porcentaje de asistencia)
+// Función para obtener atrasos de trabajadores (CORREGIDA - cuenta días distintos con atraso)
 const obtenerAtrasosTrabajadores = async (fechaInicio, fechaFin, sucursalId) => {
   try {
     const fechaInicioStr = formatDateToSQL(fechaInicio);
@@ -501,17 +501,23 @@ const obtenerAtrasosTrabajadores = async (fechaInicio, fechaFin, sucursalId) => 
       SELECT 
         CONCAT(p.nombres, ' ', p.apellidos) as trabajador,
         COALESCE(SUM(
-          CASE WHEN ra.fecha::time > e.hora_ingreso 
-          THEN EXTRACT(EPOCH FROM (ra.fecha::time - e.hora_ingreso)) / 60 
+          CASE WHEN ra.detalle LIKE '%tarde%' 
+          THEN CAST(
+            COALESCE(NULLIF(regexp_replace(ra.detalle, '\\D', '', 'g'), ''), '0'
+          ) AS INTEGER)
           ELSE 0 END
         ), 0) as minutos_acumulados,
-        COUNT(CASE WHEN ra.fecha::time > e.hora_ingreso THEN 1 END) as dias_atraso
+        COUNT(DISTINCT 
+          CASE WHEN ra.detalle LIKE '%tarde%' 
+          THEN DATE(ra.fecha) 
+          ELSE NULL END
+        ) as dias_atraso
       FROM registros_acceso ra
       JOIN usuarios u ON ra.usuario_registro_id = u.id
       JOIN empleados e ON u.empleado_id = e.id
       JOIN personas p ON e.persona_id = p.id
       ${whereClause}
-      GROUP BY p.id, p.nombres, p.apellidos, e.hora_ingreso
+      GROUP BY p.id, p.nombres, p.apellidos
       ORDER BY minutos_acumulados DESC
       LIMIT 6
     `;
