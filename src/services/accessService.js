@@ -1,12 +1,10 @@
 const { query } = require("../../db");
 
-// Obtener registros de acceso
+// Obtener registros de acceso del día de hoy (Bolivia)
 exports.getAccessLogs = async (
   searchTerm,
   typeFilter,
   limit = 100,
-  startDate,
-  endDate,
   branchId
 ) => {
   let sql = `
@@ -32,27 +30,14 @@ exports.getAccessLogs = async (
   const params = [];
   let whereClauses = [];
 
-  // Filtrar por sucursal
+  // Filtrar por sucursal si se proporciona
   if (branchId) {
     whereClauses.push(`ra.sucursal_id = $${params.length + 1}`);
     params.push(branchId);
   }
 
-  // Filtrar por fecha (solo hoy en Bolivia si no se pasa rango)
-  if (!startDate && !endDate) {
-    whereClauses.push(`
-      DATE(ra.fecha AT TIME ZONE 'America/La_Paz') = (TIMEZONE('America/La_Paz', NOW()))::date
-    `);
-  } else {
-    if (startDate) {
-      whereClauses.push(`DATE(ra.fecha AT TIME ZONE 'America/La_Paz') >= $${params.length + 1}`);
-      params.push(startDate);
-    }
-    if (endDate) {
-      whereClauses.push(`DATE(ra.fecha AT TIME ZONE 'America/La_Paz') <= $${params.length + 1}`);
-      params.push(endDate);
-    }
-  }
+  // Solo registros del día actual (Bolivia)
+  whereClauses.push(`ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date`);
 
   // Buscar por nombre, apellido o CI
   if (searchTerm) {
@@ -62,12 +47,13 @@ exports.getAccessLogs = async (
     params.push(`%${searchTerm}%`);
   }
 
-  // Filtro por tipo de persona
+  // Filtrar por tipo de persona si no es "all"
   if (typeFilter && typeFilter !== "all") {
     whereClauses.push(`ra.tipo_persona = $${params.length + 1}`);
     params.push(typeFilter);
   }
 
+  // Construir cláusula WHERE
   if (whereClauses.length > 0) {
     sql += ` WHERE ${whereClauses.join(" AND ")}`;
   }
@@ -78,6 +64,7 @@ exports.getAccessLogs = async (
   const result = await query(sql, params);
   return result.rows;
 };
+
 
 // Buscar miembros (clientes y empleados)
 exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
