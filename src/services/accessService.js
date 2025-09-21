@@ -79,7 +79,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
   const searchParam = `%${searchTerm}%`;
   const results = [];
 
-  // Buscar clientes si el filtro es 'all' o 'cliente'
+  // Buscar clientes si el filtro es 'all' or 'cliente'
   if (typeFilter === "all" || typeFilter === "cliente") {
     const clientParams = [searchParam];
     let clientSql = `
@@ -146,7 +146,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
     }
   }
 
-  // Buscar empleados si el filtro es 'all' o 'empleado'
+  // Buscar empleados si el filtro es 'all' or 'empleado'
   if (typeFilter === "all" || typeFilter === "empleado") {
     const employeeParams = [searchParam];
     let employeeSql = `
@@ -254,7 +254,7 @@ exports.registerClientAccess = async (
     `
     SELECT 
       CASE 
-        WHEN fecha_vencimiento::date < (NOW() AT TIME ZONE 'UTC-4')::date THEN true
+        WHEN fecha_vencimiento::date < TIMEZONE('America/La_Paz', NOW())::date THEN true
         ELSE false
       END as esta_vencido
     FROM inscripciones 
@@ -271,7 +271,7 @@ exports.registerClientAccess = async (
       `
       INSERT INTO registros_acceso 
       (persona_id, servicio_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
-      VALUES ($1, $2, $3, $4, $5, $6, NOW() AT TIME ZONE 'UTC-4', 'cliente')
+      VALUES ($1, $2, $3, $4, $5, $6, TIMEZONE('America/La_Paz', NOW()), 'cliente')
     `,
       [
         personId,
@@ -296,7 +296,7 @@ exports.registerClientAccess = async (
       `
       INSERT INTO registros_acceso 
       (persona_id, servicio_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
-      VALUES ($1, $2, $3, $4, $5, $6, NOW() AT TIME ZONE 'UTC-4', 'cliente')
+      VALUES ($1, $2, $3, $4, $5, $6, TIMEZONE('America/La_Paz', NOW()), 'cliente')
     `,
       [
         personId,
@@ -339,7 +339,7 @@ exports.registerClientAccess = async (
     `
     INSERT INTO registros_acceso 
     (persona_id, servicio_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
-    VALUES ($1, $2, $3, $4, $5, $6, NOW() AT TIME ZONE 'UTC-4', 'cliente')
+    VALUES ($1, $2, $3, $4, $5, $6, TIMEZONE('America/La_Paz', NOW()), 'cliente')
   `,
     [
       personId,
@@ -378,8 +378,8 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   
   // Obtener la hora actual de Bolivia
   const currentTimeResult = await query(
-    `SELECT EXTRACT(HOUR FROM (NOW() AT TIME ZONE 'UTC-4')) as hora_actual, 
-            EXTRACT(MINUTE FROM (NOW() AT TIME ZONE 'UTC-4')) as minuto_actual`
+    `SELECT EXTRACT(HOUR FROM TIMEZONE('America/La_Paz', NOW())) as hora_actual, 
+            EXTRACT(MINUTE FROM TIMEZONE('America/La_Paz', NOW())) as minuto_actual`
   );
   
   const horaActual = currentTimeResult.rows[0].hora_actual;
@@ -404,7 +404,7 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
     `
     INSERT INTO registros_acceso 
     (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
-    VALUES ($1, $2, $3, $4, $5, NOW() AT TIME ZONE 'UTC-4', 'empleado')
+    VALUES ($1, $2, $3, $4, $5, TIMEZONE('America/La_Paz', NOW()), 'empleado')
   `,
     [emp.persona_id, detail, "exitoso", branchId, userId]
   );
@@ -437,8 +437,8 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   
   // Obtener la hora actual de Bolivia
   const currentTimeResult = await query(
-    `SELECT EXTRACT(HOUR FROM (NOW() AT TIME ZONE 'UTC-4')) as hora_actual, 
-            EXTRACT(MINUTE FROM (NOW() AT TIME ZONE 'UTC-4')) as minuto_actual`
+    `SELECT EXTRACT(HOUR FROM TIMEZONE('America/La_Paz', NOW())) as hora_actual, 
+            EXTRACT(MINUTE FROM TIMEZONE('America/La_Paz', NOW())) as minuto_actual`
   );
   
   const horaActual = currentTimeResult.rows[0].hora_actual;
@@ -465,7 +465,7 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     `
     INSERT INTO registros_acceso 
     (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
-    VALUES ($1, $2, $3, $4, $5, NOW() AT TIME ZONE 'UTC-4', 'empleado')
+    VALUES ($1, $2, $3, $4, $5, TIMEZONE('America/La_Paz', NOW()), 'empleado')
   `,
     [emp.persona_id, detail, "exitoso", branchId, userId]
   );
