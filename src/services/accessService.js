@@ -30,8 +30,20 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
     params.push(branchId);
   }
 
-  // Solo registros del día actual en Bolivia
-  whereClauses.push(`ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date`);
+  // Filtro por fechas
+  if (!startDate && !endDate) {
+    whereClauses.push(`ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date`);
+  } else {
+    if (startDate) {
+      whereClauses.push(`ra.fecha::date >= $${params.length + 1}`);
+      params.push(startDate);
+    }
+    if (endDate) {
+      whereClauses.push(`ra.fecha::date <= $${params.length + 1}`);
+      params.push(endDate);
+    }
+  }
+
 
   // Filtro por búsqueda
   if (searchTerm) {
