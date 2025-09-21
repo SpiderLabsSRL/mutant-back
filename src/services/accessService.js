@@ -1,12 +1,6 @@
 const { query } = require("../../db");
 
-// Obtener registros de acceso del día de hoy (Bolivia)
-exports.getAccessLogs = async (
-  searchTerm,
-  typeFilter,
-  limit = 100,
-  branchId
-) => {
+exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) => {
   let sql = `
     SELECT 
       ra.id, 
@@ -28,18 +22,18 @@ exports.getAccessLogs = async (
   `;
 
   const params = [];
-  let whereClauses = [];
+  const whereClauses = [];
 
-  // Filtrar por sucursal si se proporciona
+  // Filtro por sucursal
   if (branchId) {
     whereClauses.push(`ra.sucursal_id = $${params.length + 1}`);
     params.push(branchId);
   }
 
-  // Solo registros del día actual (Bolivia)
+  // Registros del día de hoy en Bolivia (sin usar parámetros)
   whereClauses.push(`ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date`);
 
-  // Buscar por nombre, apellido o CI
+  // Filtro por búsqueda
   if (searchTerm) {
     whereClauses.push(
       `(p.nombres ILIKE $${params.length + 1} OR p.apellidos ILIKE $${params.length + 1} OR p.ci ILIKE $${params.length + 1})`
@@ -47,13 +41,12 @@ exports.getAccessLogs = async (
     params.push(`%${searchTerm}%`);
   }
 
-  // Filtrar por tipo de persona si no es "all"
+  // Filtro por tipo de persona
   if (typeFilter && typeFilter !== "all") {
     whereClauses.push(`ra.tipo_persona = $${params.length + 1}`);
     params.push(typeFilter);
   }
 
-  // Construir cláusula WHERE
   if (whereClauses.length > 0) {
     sql += ` WHERE ${whereClauses.join(" AND ")}`;
   }
