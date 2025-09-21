@@ -2,13 +2,10 @@ const accessService = require("../services/accessService");
 
 exports.getAccessLogs = async (req, res) => {
   try {
-    const { search, type, limit, startDate, endDate, branchId } = req.query;
+    const { search, type, limit, branchId } = req.query;
     
     // Convertir branchId a número si existe
     const parsedBranchId = branchId ? parseInt(branchId) : undefined;
-    
-    // Por defecto, mostrar solo los registros del día actual
-    const defaultStartDate = startDate || new Date().toISOString().split('T')[0];
     
     const logs = await accessService.getAccessLogs(
       search, 

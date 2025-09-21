@@ -4,7 +4,7 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
   let sql = `
     SELECT 
       ra.id, 
-      TO_CHAR(ra.fecha AT TIME ZONE 'America/La_Paz', 'YYYY-MM-DD HH24:MI') as fecha, 
+      TO_CHAR(ra.fecha, 'YYYY-MM-DD HH24:MI') as fecha, 
       ra.persona_id, 
       ra.servicio_id,
       ra.detalle, 
@@ -19,6 +19,7 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
     FROM registros_acceso ra
     INNER JOIN personas p ON ra.persona_id = p.id
     LEFT JOIN servicios s ON ra.servicio_id = s.id
+    WHERE ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
   `;
 
   const params = [];
@@ -28,9 +29,6 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
     whereClauses.push(`ra.sucursal_id = $${params.length + 1}`);
     params.push(branchId);
   }
-
-  // Registros del día de hoy en Bolivia
-  whereClauses.push(`ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date`);
 
   if (searchTerm) {
     whereClauses.push(
@@ -47,10 +45,9 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
   }
 
   if (whereClauses.length > 0) {
-    sql += ` WHERE ${whereClauses.join(' AND ')}`;
+    sql += ` AND ${whereClauses.join(' AND ')}`;
   }
 
-  // ✅ aquí ya no usamos placeholder para LIMIT
   const safeLimit = Number.isNaN(Number(limit)) ? 100 : Number(limit);
   sql += ` ORDER BY ra.fecha DESC LIMIT ${safeLimit}`;
 
