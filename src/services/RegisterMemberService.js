@@ -24,7 +24,6 @@ exports.searchPeople = async (searchTerm) => {
   return result.rows;
 };
 
-// MODIFICADO: Ahora acepta sucursalId como parámetro
 exports.getActiveSubscriptions = async (personaId, sucursalId) => {
   const result = await query(`
     SELECT i.id, i.servicio_id, i.sucursal_id, i.fecha_inicio, i.fecha_vencimiento, 
@@ -54,7 +53,6 @@ exports.getCashRegisterStatus = async (cajaId) => {
   return result.rows[0] || { estado: 'cerrada' };
 };
 
-// Función para verificar si una persona ya existe por CI
 const checkExistingPerson = async (client, ci) => {
   const existingPerson = await client.query(`
     SELECT id, nombres, apellidos, ci, telefono, fecha_nacimiento
@@ -77,16 +75,13 @@ exports.registerMember = async (registrationData) => {
     if (!personaId) {
       const { ci } = registrationData;
       
-      // Verificar si ya existe una persona con el mismo CI
       const existingPerson = await checkExistingPerson(client, ci);
       if (existingPerson) {
-        // Lanzar un error específico con los datos de la persona existente
         const error = new Error("La persona ya existe");
         error.existingPerson = existingPerson;
         throw error;
       }
       
-      // Si no existe, crear nueva persona
       const personaResult = await client.query(`
         INSERT INTO personas (nombres, apellidos, ci, telefono, fecha_nacimiento)
         VALUES ($1, $2, $3, $4, $5)
@@ -123,6 +118,12 @@ exports.registerMember = async (registrationData) => {
       });
     }
     
+    // Obtener fecha actual desde el servidor con zona horaria de Bolivia
+    const fechaActualResult = await client.query(`
+      SELECT TIMEZONE('America/La_Paz', NOW()) as fecha_actual
+    `);
+    const fechaActual = fechaActualResult.rows[0].fecha_actual;
+    
     // Crear inscripciones para cada servicio
     const inscripcionesIds = [];
     for (const servicio of serviciosInfo) {
@@ -139,9 +140,7 @@ exports.registerMember = async (registrationData) => {
       if (existingSubscription.rows.length > 0) {
         const existingSub = existingSubscription.rows[0];
         
-        // Si la suscripción existe pero no tiene ingresos disponibles, podemos actualizarla
         if (existingSub.ingresos_disponibles <= 0) {
-          // Actualizar inscripción existente (renovación)
           const updateResult = await client.query(`
             UPDATE inscripciones 
             SET fecha_inicio = $1, fecha_vencimiento = $2, ingresos_disponibles = $3
@@ -156,7 +155,6 @@ exports.registerMember = async (registrationData) => {
           
           inscripcionId = updateResult.rows[0].id;
         } else {
-          // Si todavía tiene ingresos disponibles, no permitir reinscripción
           throw new Error(`El cliente ya tiene una suscripción activa para este servicio con ingresos disponibles`);
         }
       } else {
@@ -212,13 +210,13 @@ exports.registerMember = async (registrationData) => {
       detallePago = `Efectivo: ${registrationData.montoEfectivo}, QR: ${registrationData.montoQr}`;
     }
     
-    // Registrar venta de servicios
+    // Registrar venta de servicios usando la fecha del servidor
     const ventaResult = await client.query(`
       INSERT INTO ventas_servicios (
         persona_id, empleado_id, subtotal, descuento, descripcion_descuento, 
         total, forma_pago, detalle_pago, sucursal_id, caja_id, fecha
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10,TIMEZONE('America/La_Paz', NOW()))
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, TIMEZONE('America/La_Paz', NOW()))
       RETURNING id
     `, [
       personaId,
@@ -286,8 +284,6 @@ exports.registerMember = async (registrationData) => {
       }
     }
     
-    // Los pagos QR (tanto puros como la parte QR del pago mixto) NO se registran en transacciones_caja ni estado_caja
-    
     await client.query('COMMIT');
     
     return {
@@ -298,7 +294,7 @@ exports.registerMember = async (registrationData) => {
   } catch (error) {
     await client.query('ROLLBACK');
     console.error("Error in registerMember service:", error);
-    throw error; // Re-lanzar el error para que el controller lo maneje
+    throw error;
   } finally {
     client.release();
   }

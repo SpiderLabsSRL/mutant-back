@@ -79,5 +79,5 @@ const getSucursales = async (req, res) => {
 module.exports = {
   getReportes,
   getSucursales,
-  getIngresosServicios // Exportar la nueva función
+  getIngresosServicios 
 };
