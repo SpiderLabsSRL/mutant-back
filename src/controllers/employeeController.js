@@ -33,8 +33,7 @@ exports.createEmployee = async (req, res) => {
     
     // Validaciones básicas
     if (!employeeData.nombres || !employeeData.apellidos || !employeeData.ci || 
-        !employeeData.telefono || !employeeData.cargo || !employeeData.sucursal_id ||
-        !employeeData.horarioIngreso || !employeeData.horarioSalida) {
+        !employeeData.telefono || !employeeData.cargo) {
       return res.status(400).json({ message: "Todos los campos son obligatorios" });
     }
 
@@ -47,11 +46,22 @@ exports.createEmployee = async (req, res) => {
       if (!employeeData.password && req.method === 'POST') {
         return res.status(400).json({ message: "Contraseña es obligatoria para este cargo" });
       }
-      
-      // Validar caja para roles administrativos
-      if (!employeeData.caja_id) {
-        return res.status(400).json({ message: "Caja es obligatoria para este cargo" });
+    }
+
+    // Validaciones específicas para roles que requieren sucursal y horario
+    if (employeeData.cargo !== 'admin') {
+      if (!employeeData.sucursal_id) {
+        return res.status(400).json({ message: "Sucursal es obligatoria para este cargo" });
       }
+      
+      if (!employeeData.horarioIngreso || !employeeData.horarioSalida) {
+        return res.status(400).json({ message: "Horario es obligatorio para este cargo" });
+      }
+    }
+
+    // Validar caja solo para recepcionista
+    if (employeeData.cargo === 'recepcionista' && !employeeData.caja_id) {
+      return res.status(400).json({ message: "Caja es obligatoria para este cargo" });
     }
 
     const newEmployee = await employeeService.createEmployee(employeeData);
@@ -73,8 +83,7 @@ exports.updateEmployee = async (req, res) => {
     
     // Validaciones básicas
     if (!employeeData.nombres || !employeeData.apellidos || !employeeData.ci || 
-        !employeeData.telefono || !employeeData.cargo || !employeeData.sucursal_id ||
-        !employeeData.horarioIngreso || !employeeData.horarioSalida) {
+        !employeeData.telefono || !employeeData.cargo) {
       return res.status(400).json({ message: "Todos los campos son obligatorios" });
     }
 
@@ -83,11 +92,22 @@ exports.updateEmployee = async (req, res) => {
       if (!employeeData.username) {
         return res.status(400).json({ message: "Usuario es obligatorio para este cargo" });
       }
-      
-      // Validar caja para roles administrativos
-      if (!employeeData.caja_id) {
-        return res.status(400).json({ message: "Caja es obligatoria para este cargo" });
+    }
+
+    // Validaciones específicas para roles que requieren sucursal y horario
+    if (employeeData.cargo !== 'admin') {
+      if (!employeeData.sucursal_id) {
+        return res.status(400).json({ message: "Sucursal es obligatoria para este cargo" });
       }
+      
+      if (!employeeData.horarioIngreso || !employeeData.horarioSalida) {
+        return res.status(400).json({ message: "Horario es obligatorio para este cargo" });
+      }
+    }
+
+    // Validar caja solo para recepcionista
+    if (employeeData.cargo === 'recepcionista' && !employeeData.caja_id) {
+      return res.status(400).json({ message: "Caja es obligatoria para este cargo" });
     }
 
     const updatedEmployee = await employeeService.updateEmployee(id, employeeData);
