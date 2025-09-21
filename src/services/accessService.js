@@ -1,7 +1,5 @@
 const { query } = require("../../db");
 
-const { query } = require("../../db");
-
 exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) => {
   let sql = `
     SELECT 
