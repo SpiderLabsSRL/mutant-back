@@ -25,11 +25,10 @@ exports.searchPeople = async (req, res) => {
   }
 };
 
-// MODIFICADO: Ahora acepta sucursalId como parámetro de consulta
 exports.getActiveSubscriptions = async (req, res) => {
   try {
     const { personaId } = req.params;
-    const { sucursalId } = req.query; // Nuevo parámetro
+    const { sucursalId } = req.query;
     
     if (!sucursalId) {
       return res.status(400).json({ message: "sucursalId es requerido" });
@@ -62,7 +61,6 @@ exports.registerMember = async (req, res) => {
   } catch (error) {
     console.error("Error in registerMember:", error);
     
-    // Manejar específicamente el error de persona existente
     if (error.message === "La persona ya existe") {
       return res.status(409).json({ 
         message: error.message,
