@@ -25,6 +25,18 @@ const getBoliviaNow = () => {
   return boliviaTime;
 };
 
+// Función para comparar solo fechas (sin horas)
+const isDateAfter = (date1, date2) => {
+  const d1 = new Date(date1);
+  const d2 = new Date(date2);
+  
+  // Normalizar fechas (establecer horas a 00:00:00)
+  d1.setHours(0, 0, 0, 0);
+  d2.setHours(0, 0, 0, 0);
+  
+  return d1 > d2;
+};
+
 // Obtener registros de acceso
 exports.getAccessLogs = async (
   searchTerm,
@@ -318,7 +330,10 @@ exports.registerClientAccess = async (
   const expirationDate = new Date(inscription.fecha_vencimiento);
 
   // Verificar si la inscripción está vencida (solo si es día posterior)
-  if (today > expirationDate) {
+  // Si hoy es 20 y vence el 20 → PERMITE
+  // Si hoy es 21 y vence el 20 → DENIEGA
+  // Si hoy es 19 y vence el 20 → PERMITE
+  if (isDateAfter(today, expirationDate)) {
     // Registrar acceso denegado
     await query(
       `
