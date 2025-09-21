@@ -24,51 +24,39 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
   const params = [];
   const whereClauses = [];
 
-  // Filtrar por sucursal
   if (branchId) {
     whereClauses.push(`ra.sucursal_id = $${params.length + 1}`);
     params.push(branchId);
   }
 
-  // Filtro por fechas
-  if (!startDate && !endDate) {
-    whereClauses.push(`ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date`);
-  } else {
-    if (startDate) {
-      whereClauses.push(`ra.fecha::date >= $${params.length + 1}`);
-      params.push(startDate);
-    }
-    if (endDate) {
-      whereClauses.push(`ra.fecha::date <= $${params.length + 1}`);
-      params.push(endDate);
-    }
-  }
+  // Registros del día de hoy en Bolivia
+  whereClauses.push(`ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date`);
 
-
-  // Filtro por búsqueda
   if (searchTerm) {
-    whereClauses.push(`(p.nombres ILIKE $${params.length + 1} OR p.apellidos ILIKE $${params.length + 1} OR p.ci ILIKE $${params.length + 1})`);
+    whereClauses.push(
+      `(p.nombres ILIKE $${params.length + 1} 
+        OR p.apellidos ILIKE $${params.length + 1} 
+        OR p.ci ILIKE $${params.length + 1})`
+    );
     params.push(`%${searchTerm}%`);
   }
 
-  // Filtro por tipo de persona
-  if (typeFilter && typeFilter !== "all") {
+  if (typeFilter && typeFilter !== 'all') {
     whereClauses.push(`ra.tipo_persona = $${params.length + 1}`);
     params.push(typeFilter);
   }
 
-  // Construir WHERE
   if (whereClauses.length > 0) {
-    sql += ` WHERE ${whereClauses.join(" AND ")}`;
+    sql += ` WHERE ${whereClauses.join(' AND ')}`;
   }
 
-  // ORDER y LIMIT
-  sql += ` ORDER BY ra.fecha DESC LIMIT ${parseInt(limit, 10)}`;
+  // ✅ aquí ya no usamos placeholder para LIMIT
+  const safeLimit = Number.isNaN(Number(limit)) ? 100 : Number(limit);
+  sql += ` ORDER BY ra.fecha DESC LIMIT ${safeLimit}`;
 
   const result = await query(sql, params);
   return result.rows;
 };
-
 
 
 // Buscar miembros (clientes y empleados)
