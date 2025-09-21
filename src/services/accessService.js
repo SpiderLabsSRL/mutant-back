@@ -38,11 +38,10 @@ exports.getAccessLogs = async (
     params.push(branchId);
   }
 
-  // Filtrar por fecha
+  // Filtrar por fecha (solo hoy en Bolivia si no se pasa rango)
   if (!startDate && !endDate) {
-    // ✅ Día actual en Bolivia
     whereClauses.push(`
-      DATE(ra.fecha AT TIME ZONE 'America/La_Paz') = TIMEZONE('America/La_Paz', NOW())::date
+      DATE(ra.fecha AT TIME ZONE 'America/La_Paz') = (TIMEZONE('America/La_Paz', NOW()))::date
     `);
   } else {
     if (startDate) {
@@ -69,7 +68,6 @@ exports.getAccessLogs = async (
     params.push(typeFilter);
   }
 
-  // Construir cláusula WHERE
   if (whereClauses.length > 0) {
     sql += ` WHERE ${whereClauses.join(" AND ")}`;
   }
@@ -86,7 +84,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
   const searchParam = `%${searchTerm}%`;
   const results = [];
 
-  // Buscar clientes si el filtro es 'all' or 'cliente'
+  // Clientes
   if (typeFilter === "all" || typeFilter === "cliente") {
     const clientParams = [searchParam];
     let clientSql = `
@@ -136,7 +134,6 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
     `;
 
-    // Filtrar por sucursal si se proporciona
     if (branchId) {
       clientSql += ` AND (ui.sucursal_id = $2 OR ui.multisucursal = TRUE)`;
       clientParams.push(branchId);
@@ -144,16 +141,11 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
 
     clientSql += ` GROUP BY p.id HAVING COUNT(ui.idinscripcion) > 0`;
 
-    try {
-      const clientResult = await query(clientSql, clientParams);
-      results.push(...clientResult.rows);
-    } catch (error) {
-      console.error("Error searching clients:", error);
-      throw error;
-    }
+    const clientResult = await query(clientSql, clientParams);
+    results.push(...clientResult.rows);
   }
 
-  // Buscar empleados si el filtro es 'all' or 'empleado'
+  // Empleados
   if (typeFilter === "all" || typeFilter === "empleado") {
     const employeeParams = [searchParam];
     let employeeSql = `
@@ -209,19 +201,13 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       AND e.estado = 1
     `;
 
-    // Filtrar por sucursal si se proporciona
     if (branchId) {
       employeeSql += ` AND e.sucursal_id = $2`;
       employeeParams.push(branchId);
     }
 
-    try {
-      const employeeResult = await query(employeeSql, employeeParams);
-      results.push(...employeeResult.rows);
-    } catch (error) {
-      console.error("Error searching employees:", error);
-      throw error;
-    }
+    const employeeResult = await query(employeeSql, employeeParams);
+    results.push(...employeeResult.rows);
   }
 
   return results;
@@ -234,7 +220,6 @@ exports.registerClientAccess = async (
   branchId,
   userId
 ) => {
-  // Primero obtenemos la información completa de la inscripción
   const client = await query(
     `
     SELECT 
@@ -255,8 +240,7 @@ exports.registerClientAccess = async (
   }
 
   const inscription = client.rows[0];
-  
-  // Verificar si la inscripción está vencida usando la fecha actual de Bolivia
+
   const checkExpiration = await query(
     `
     SELECT 
@@ -273,7 +257,6 @@ exports.registerClientAccess = async (
   const isExpired = checkExpiration.rows[0]?.esta_vencido || false;
 
   if (isExpired) {
-    // Registrar acceso denegado
     await query(
       `
       INSERT INTO registros_acceso 
@@ -296,9 +279,7 @@ exports.registerClientAccess = async (
     };
   }
 
-  // Verificar si hay ingresos disponibles
   if (inscription.ingresos_disponibles <= 0) {
-    // Registrar acceso denegado
     await query(
       `
       INSERT INTO registros_acceso 
@@ -321,7 +302,6 @@ exports.registerClientAccess = async (
     };
   }
 
-  // Reducir el número de ingresos disponibles
   await query(
     `
     UPDATE inscripciones 
@@ -331,7 +311,6 @@ exports.registerClientAccess = async (
     [serviceId]
   );
 
-  // Obtener el nuevo número de visitas disponibles
   const updatedInscription = await query(
     `
     SELECT ingresos_disponibles FROM inscripciones WHERE id = $1
@@ -341,7 +320,6 @@ exports.registerClientAccess = async (
 
   const remainingVisits = updatedInscription.rows[0]?.ingresos_disponibles || 0;
 
-  // Registrar acceso exitoso
   await query(
     `
     INSERT INTO registros_acceso 
@@ -382,22 +360,19 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   }
 
   const emp = employee.rows[0];
-  
-  // Obtener la hora actual de Bolivia
+
   const currentTimeResult = await query(
     `SELECT EXTRACT(HOUR FROM TIMEZONE('America/La_Paz', NOW())) as hora_actual, 
             EXTRACT(MINUTE FROM TIMEZONE('America/La_Paz', NOW())) as minuto_actual`
   );
-  
+
   const horaActual = currentTimeResult.rows[0].hora_actual;
   const minutoActual = currentTimeResult.rows[0].minuto_actual;
   const currentTotalMinutes = horaActual * 60 + minutoActual;
 
-  // Parsear la hora de ingreso del empleado (formato HH:MM)
   const [shiftHours, shiftMinutes] = emp.hora_ingreso.split(':').map(Number);
   const shiftTotalMinutes = shiftHours * 60 + shiftMinutes;
 
-  // Calcular diferencia de tiempo
   const diffMinutes = currentTotalMinutes - shiftTotalMinutes;
   const isLate = diffMinutes > 0;
 
@@ -406,7 +381,6 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
     detail = `Entrada: ${diffMinutes} minutos tarde`;
   }
 
-  // Registrar entrada
   await query(
     `
     INSERT INTO registros_acceso 
@@ -441,22 +415,19 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   }
 
   const emp = employee.rows[0];
-  
-  // Obtener la hora actual de Bolivia
+
   const currentTimeResult = await query(
     `SELECT EXTRACT(HOUR FROM TIMEZONE('America/La_Paz', NOW())) as hora_actual, 
             EXTRACT(MINUTE FROM TIMEZONE('America/La_Paz', NOW())) as minuto_actual`
   );
-  
+
   const horaActual = currentTimeResult.rows[0].hora_actual;
   const minutoActual = currentTimeResult.rows[0].minuto_actual;
   const currentTotalMinutes = horaActual * 60 + minutoActual;
 
-  // Parsear la hora de salida del empleado (formato HH:MM)
   const [shiftHours, shiftMinutes] = emp.hora_salida.split(':').map(Number);
   const shiftTotalMinutes = shiftHours * 60 + shiftMinutes;
 
-  // Calcular diferencia de tiempo
   const diffMinutes = currentTotalMinutes - shiftTotalMinutes;
   const isEarly = diffMinutes < 0;
 
@@ -467,7 +438,6 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     detail = `Salida: ${diffMinutes} minutos después`;
   }
 
-  // Registrar salida
   await query(
     `
     INSERT INTO registros_acceso 
