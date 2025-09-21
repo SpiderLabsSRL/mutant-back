@@ -40,17 +40,15 @@ exports.getAccessLogs = async (
 
   // Filtrar por fecha
   if (!startDate && !endDate) {
-    // ✅ Filtrar por el día actual en Bolivia
-    whereClauses.push(`
-      DATE(ra.fecha AT TIME ZONE 'America/La_Paz') = TIMEZONE('America/La_Paz', NOW())::date
-    `);
+    // ✅ Filtrar por el día actual en Bolivia (formato correcto)
+    whereClauses.push(`ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date`);
   } else {
     if (startDate) {
-      whereClauses.push(`DATE(ra.fecha AT TIME ZONE 'America/La_Paz') >= $${params.length + 1}`);
+      whereClauses.push(`ra.fecha::date >= $${params.length + 1}`);
       params.push(startDate);
     }
     if (endDate) {
-      whereClauses.push(`DATE(ra.fecha AT TIME ZONE 'America/La_Paz') <= $${params.length + 1}`);
+      whereClauses.push(`ra.fecha::date <= $${params.length + 1}`);
       params.push(endDate);
     }
   }
@@ -80,7 +78,6 @@ exports.getAccessLogs = async (
   const result = await query(sql, params);
   return result.rows;
 };
-
 // Buscar miembros (clientes y empleados)
 exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
   const searchParam = `%${searchTerm}%`;
