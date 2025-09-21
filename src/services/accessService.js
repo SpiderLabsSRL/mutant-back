@@ -30,33 +30,37 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
     params.push(branchId);
   }
 
-  // Registros del día de hoy en Bolivia (sin usar parámetros)
+  // Registros del día de hoy en Bolivia
   whereClauses.push(`ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date`);
 
   // Filtro por búsqueda
   if (searchTerm) {
     whereClauses.push(
-      `(p.nombres ILIKE $${params.length + 1} OR p.apellidos ILIKE $${params.length + 1} OR p.ci ILIKE $${params.length + 1})`
+      `(p.nombres ILIKE $${params.length + 1} 
+        OR p.apellidos ILIKE $${params.length + 1} 
+        OR p.ci ILIKE $${params.length + 1})`
     );
     params.push(`%${searchTerm}%`);
   }
 
   // Filtro por tipo de persona
-  if (typeFilter && typeFilter !== "all") {
+  if (typeFilter && typeFilter !== 'all') {
     whereClauses.push(`ra.tipo_persona = $${params.length + 1}`);
     params.push(typeFilter);
   }
 
+  // Añadir WHERE si hay condiciones
   if (whereClauses.length > 0) {
-    sql += ` WHERE ${whereClauses.join(" AND ")}`;
+    sql += ` WHERE ${whereClauses.join(' AND ')}`;
   }
 
-  sql += ` ORDER BY ra.fecha DESC LIMIT $${params.length + 1}`;
-  params.push(limit);
+  // OJO: LIMIT no admite parámetro. Se concatena el valor ya validado (es seguro porque limit es number).
+  sql += ` ORDER BY ra.fecha DESC LIMIT ${parseInt(limit, 10)}`;
 
   const result = await query(sql, params);
   return result.rows;
 };
+
 
 
 // Buscar miembros (clientes y empleados)
