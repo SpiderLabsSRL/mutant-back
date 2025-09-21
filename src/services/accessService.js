@@ -1,41 +1,4 @@
 const { query } = require("../../db");
-const bcrypt = require("bcrypt");
-
-// Función para formatear fecha y hora en zona horaria de Bolivia (UTC-4)
-const formatBoliviaDateTime = (date) => {
-  if (!date) return null;
-  // Ajustar a zona horaria de Bolivia (UTC-4)
-  const boliviaOffset = -4 * 60; // UTC-4 en minutos
-  const localDate = new Date(date);
-  const utc = localDate.getTime() + localDate.getTimezoneOffset() * 60000;
-  const boliviaTime = new Date(utc + 60000 * boliviaOffset);
-
-  return boliviaTime
-    .toISOString()
-    .replace("T", " ")
-    .replace(/\.\d{3}Z$/, "");
-};
-
-// Obtener la hora actual en zona horaria de Bolivia
-const getBoliviaNow = () => {
-  const now = new Date();
-  const boliviaOffset = -4 * 60; // UTC-4 en minutos
-  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
-  const boliviaTime = new Date(utc + 60000 * boliviaOffset);
-  return boliviaTime;
-};
-
-// Función para comparar solo fechas (sin horas)
-const isDateAfter = (date1, date2) => {
-  const d1 = new Date(date1);
-  const d2 = new Date(date2);
-  
-  // Normalizar fechas (establecer horas a 00:00:00)
-  d1.setHours(0, 0, 0, 0);
-  d2.setHours(0, 0, 0, 0);
-  
-  return d1 > d2;
-};
 
 // Obtener registros de acceso
 exports.getAccessLogs = async (
@@ -108,14 +71,7 @@ exports.getAccessLogs = async (
   params.push(limit);
 
   const result = await query(sql, params);
-
-  // Formatear fechas en zona horaria de Bolivia
-  const formattedResults = result.rows.map((row) => ({
-    ...row,
-    fecha: formatBoliviaDateTime(row.fecha),
-  }));
-
-  return formattedResults;
+  return result.rows;
 };
 
 // Buscar miembros (clientes y empleados)
@@ -183,23 +139,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
 
     try {
       const clientResult = await query(clientSql, clientParams);
-
-      // Formatear fechas de últimos registros
-      const formattedClientResults = clientResult.rows.map((row) => {
-        if (row.servicios && row.servicios.length > 0) {
-          const servicios = row.servicios.map((servicio) => ({
-            ...servicio,
-            fecha_inicio: formatBoliviaDateTime(servicio.fecha_inicio),
-            fecha_vencimiento: formatBoliviaDateTime(
-              servicio.fecha_vencimiento
-            ),
-          }));
-          return { ...row, servicios };
-        }
-        return row;
-      });
-
-      results.push(...formattedClientResults);
+      results.push(...clientResult.rows);
     } catch (error) {
       console.error("Error searching clients:", error);
       throw error;
@@ -270,25 +210,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
 
     try {
       const employeeResult = await query(employeeSql, employeeParams);
-
-      // Formatear fechas de últimos registros
-      const formattedEmployeeResults = employeeResult.rows.map((row) => {
-        if (row.empleado_info) {
-          const empleadoInfo = {
-            ...row.empleado_info,
-            ultimo_registro_entrada: row.empleado_info.ultimo_registro_entrada
-              ? formatBoliviaDateTime(row.empleado_info.ultimo_registro_entrada)
-              : null,
-            ultimo_registro_salida: row.empleado_info.ultimo_registro_salida
-              ? formatBoliviaDateTime(row.empleado_info.ultimo_registro_salida)
-              : null,
-          };
-          return { ...row, empleado_info: empleadoInfo };
-        }
-        return row;
-      });
-
-      results.push(...formattedEmployeeResults);
+      results.push(...employeeResult.rows);
     } catch (error) {
       console.error("Error searching employees:", error);
       throw error;
@@ -326,14 +248,24 @@ exports.registerClientAccess = async (
   }
 
   const inscription = client.rows[0];
-  const today = getBoliviaNow();
-  const expirationDate = new Date(inscription.fecha_vencimiento);
+  
+  // Verificar si la inscripción está vencida usando la fecha actual de Bolivia
+  const checkExpiration = await query(
+    `
+    SELECT 
+      CASE 
+        WHEN fecha_vencimiento::date < (NOW() AT TIME ZONE 'UTC-4')::date THEN true
+        ELSE false
+      END as esta_vencido
+    FROM inscripciones 
+    WHERE id = $1
+  `,
+    [serviceId]
+  );
 
-  // Verificar si la inscripción está vencida (solo si es día posterior)
-  // Si hoy es 20 y vence el 20 → PERMITE
-  // Si hoy es 21 y vence el 20 → DENIEGA
-  // Si hoy es 19 y vence el 20 → PERMITE
-  if (isDateAfter(today, expirationDate)) {
+  const isExpired = checkExpiration.rows[0]?.esta_vencido || false;
+
+  if (isExpired) {
     // Registrar acceso denegado
     await query(
       `
@@ -443,12 +375,16 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   }
 
   const emp = employee.rows[0];
-  const currentTime = getBoliviaNow();
   
-  // Obtener solo la hora actual (sin fecha)
-  const currentHours = currentTime.getHours();
-  const currentMinutes = currentTime.getMinutes();
-  const currentTotalMinutes = currentHours * 60 + currentMinutes;
+  // Obtener la hora actual de Bolivia
+  const currentTimeResult = await query(
+    `SELECT EXTRACT(HOUR FROM (NOW() AT TIME ZONE 'UTC-4')) as hora_actual, 
+            EXTRACT(MINUTE FROM (NOW() AT TIME ZONE 'UTC-4')) as minuto_actual`
+  );
+  
+  const horaActual = currentTimeResult.rows[0].hora_actual;
+  const minutoActual = currentTimeResult.rows[0].minuto_actual;
+  const currentTotalMinutes = horaActual * 60 + minutoActual;
 
   // Parsear la hora de ingreso del empleado (formato HH:MM)
   const [shiftHours, shiftMinutes] = emp.hora_ingreso.split(':').map(Number);
@@ -498,12 +434,16 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   }
 
   const emp = employee.rows[0];
-  const currentTime = getBoliviaNow();
   
-  // Obtener solo la hora actual (sin fecha)
-  const currentHours = currentTime.getHours();
-  const currentMinutes = currentTime.getMinutes();
-  const currentTotalMinutes = currentHours * 60 + currentMinutes;
+  // Obtener la hora actual de Bolivia
+  const currentTimeResult = await query(
+    `SELECT EXTRACT(HOUR FROM (NOW() AT TIME ZONE 'UTC-4')) as hora_actual, 
+            EXTRACT(MINUTE FROM (NOW() AT TIME ZONE 'UTC-4')) as minuto_actual`
+  );
+  
+  const horaActual = currentTimeResult.rows[0].hora_actual;
+  const minutoActual = currentTimeResult.rows[0].minuto_actual;
+  const currentTotalMinutes = horaActual * 60 + minutoActual;
 
   // Parsear la hora de salida del empleado (formato HH:MM)
   const [shiftHours, shiftMinutes] = emp.hora_salida.split(':').map(Number);
