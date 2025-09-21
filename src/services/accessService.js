@@ -16,6 +16,15 @@ const formatBoliviaDateTime = (date) => {
     .replace(/\.\d{3}Z$/, "");
 };
 
+// Obtener la hora actual en zona horaria de Bolivia
+const getBoliviaNow = () => {
+  const now = new Date();
+  const boliviaOffset = -4 * 60; // UTC-4 en minutos
+  const utc = now.getTime() + now.getTimezoneOffset() * 60000;
+  const boliviaTime = new Date(utc + 60000 * boliviaOffset);
+  return boliviaTime;
+};
+
 // Obtener registros de acceso
 exports.getAccessLogs = async (
   searchTerm,
@@ -305,21 +314,21 @@ exports.registerClientAccess = async (
   }
 
   const inscription = client.rows[0];
-  const today = new Date();
+  const today = getBoliviaNow();
   const expirationDate = new Date(inscription.fecha_vencimiento);
 
-  // Verificar si la inscripción está vencida
-  if (expirationDate < today) {
+  // Verificar si la inscripción está vencida (solo si es día posterior)
+  if (today > expirationDate) {
     // Registrar acceso denegado
     await query(
       `
       INSERT INTO registros_acceso 
       (persona_id, servicio_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
-      VALUES ($1, $2, $3, $4, $5, $6, NOW(), 'cliente')
+      VALUES ($1, $2, $3, $4, $5, $6, NOW() AT TIME ZONE 'UTC-4', 'cliente')
     `,
       [
         personId,
-        inscription.servicio_real_id, // Usar el ID real del servicio
+        inscription.servicio_real_id,
         `Acceso denegado - Servicio ${inscription.servicio_nombre} vencido`,
         "denegado",
         branchId,
@@ -340,11 +349,11 @@ exports.registerClientAccess = async (
       `
       INSERT INTO registros_acceso 
       (persona_id, servicio_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
-      VALUES ($1, $2, $3, $4, $5, $6, NOW(), 'cliente')
+      VALUES ($1, $2, $3, $4, $5, $6, NOW() AT TIME ZONE 'UTC-4', 'cliente')
     `,
       [
         personId,
-        inscription.servicio_real_id, // Usar el ID real del servicio
+        inscription.servicio_real_id,
         `Acceso denegado - Sin visitas disponibles para ${inscription.servicio_nombre}`,
         "denegado",
         branchId,
@@ -383,11 +392,11 @@ exports.registerClientAccess = async (
     `
     INSERT INTO registros_acceso 
     (persona_id, servicio_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
-    VALUES ($1, $2, $3, $4, $5, $6, NOW(), 'cliente')
+    VALUES ($1, $2, $3, $4, $5, $6, NOW() AT TIME ZONE 'UTC-4', 'cliente')
   `,
     [
       personId,
-      inscription.servicio_real_id, // Usar el ID real del servicio
+      inscription.servicio_real_id,
       `Servicio: ${inscription.servicio_nombre} - Visitas restantes: ${remainingVisits}`,
       "exitoso",
       branchId,
@@ -419,18 +428,18 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   }
 
   const emp = employee.rows[0];
-  const currentTime = new Date();
-  const shiftStartTime = new Date(`2024-01-01 ${emp.hora_ingreso}`);
-
-  // Calcular diferencia de tiempo
+  const currentTime = getBoliviaNow();
+  
+  // Obtener solo la hora actual (sin fecha)
   const currentHours = currentTime.getHours();
   const currentMinutes = currentTime.getMinutes();
-  const shiftHours = shiftStartTime.getHours();
-  const shiftMinutes = shiftStartTime.getMinutes();
-
   const currentTotalMinutes = currentHours * 60 + currentMinutes;
+
+  // Parsear la hora de ingreso del empleado (formato HH:MM)
+  const [shiftHours, shiftMinutes] = emp.hora_ingreso.split(':').map(Number);
   const shiftTotalMinutes = shiftHours * 60 + shiftMinutes;
 
+  // Calcular diferencia de tiempo
   const diffMinutes = currentTotalMinutes - shiftTotalMinutes;
   const isLate = diffMinutes > 0;
 
@@ -444,7 +453,7 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
     `
     INSERT INTO registros_acceso 
     (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
-    VALUES ($1, $2, $3, $4, $5, NOW(), 'empleado')
+    VALUES ($1, $2, $3, $4, $5, NOW() AT TIME ZONE 'UTC-4', 'empleado')
   `,
     [emp.persona_id, detail, "exitoso", branchId, userId]
   );
@@ -474,18 +483,18 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   }
 
   const emp = employee.rows[0];
-  const currentTime = new Date();
-  const shiftEndTime = new Date(`2024-01-01 ${emp.hora_salida}`);
-
-  // Calcular diferencia de tiempo
+  const currentTime = getBoliviaNow();
+  
+  // Obtener solo la hora actual (sin fecha)
   const currentHours = currentTime.getHours();
   const currentMinutes = currentTime.getMinutes();
-  const shiftHours = shiftEndTime.getHours();
-  const shiftMinutes = shiftEndTime.getMinutes();
-
   const currentTotalMinutes = currentHours * 60 + currentMinutes;
+
+  // Parsear la hora de salida del empleado (formato HH:MM)
+  const [shiftHours, shiftMinutes] = emp.hora_salida.split(':').map(Number);
   const shiftTotalMinutes = shiftHours * 60 + shiftMinutes;
 
+  // Calcular diferencia de tiempo
   const diffMinutes = currentTotalMinutes - shiftTotalMinutes;
   const isEarly = diffMinutes < 0;
 
@@ -501,7 +510,7 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     `
     INSERT INTO registros_acceso 
     (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
-    VALUES ($1, $2, $3, $4, $5, NOW(), 'empleado')
+    VALUES ($1, $2, $3, $4, $5, NOW() AT TIME ZONE 'UTC-4', 'empleado')
   `,
     [emp.persona_id, detail, "exitoso", branchId, userId]
   );
