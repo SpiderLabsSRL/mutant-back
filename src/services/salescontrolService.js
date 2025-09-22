@@ -190,6 +190,123 @@ const getSales = async (filters = {}) => {
   }
 };
 
+const getSaleDetails = async (saleId, saleType) => {
+  try {
+    let details = {};
+    
+    if (saleType === 'producto') {
+      // Obtener detalles de venta de productos
+      const productId = saleId.replace('P-', '');
+      
+      // Consulta para obtener información general de la venta
+      const saleQuery = `
+        SELECT 
+          vp.*,
+          s.nombre as sucursal_nombre,
+          CONCAT(pe.nombres, ' ', pe.apellidos) as empleado_nombre,
+          vp.descripcion_descuento as "descripcionDescuento"
+        FROM ventas_productos vp
+        JOIN sucursales s ON vp.sucursal_id = s.id
+        JOIN empleados e ON vp.empleado_id = e.id
+        JOIN personas pe ON e.persona_id = pe.id
+        WHERE vp.id = $1
+      `;
+      
+      // Consulta para obtener los productos vendidos
+      const productsQuery = `
+        SELECT 
+          p.nombre,
+          dvp.cantidad,
+          dvp.precio_unitario,
+          dvp.subtotal
+        FROM detalle_venta_productos dvp
+        JOIN productos p ON dvp.producto_id = p.id
+        WHERE dvp.venta_producto_id = $1
+      `;
+      
+      const [saleResult, productsResult] = await Promise.all([
+        query(saleQuery, [productId]),
+        query(productsQuery, [productId])
+      ]);
+      
+      if (saleResult.rows.length > 0) {
+        const saleData = saleResult.rows[0];
+        details = {
+          descripcionDescuento: saleData.descripcionDescuento,
+          items: productsResult.rows.map(row => ({
+            nombre: row.nombre,
+            cantidad: parseInt(row.cantidad) || 1,
+            precio_unitario: parseFloat(row.precio_unitario) || 0,
+            subtotal: parseFloat(row.subtotal) || 0
+          })),
+          additionalInfo: {
+            'Caja ID': saleData.caja_id,
+            'Sucursal ID': saleData.sucursal_id,
+            'Empleado ID': saleData.empleado_id
+          }
+        };
+      }
+      
+    } else if (saleType === 'servicio') {
+      // Obtener detalles de venta de servicios
+      const serviceId = saleId.replace('S-', '');
+      
+      // Consulta para obtener información general de la venta
+      const saleQuery = `
+        SELECT 
+          vs.*,
+          s.nombre as sucursal_nombre,
+          CONCAT(pe.nombres, ' ', pe.apellidos) as empleado_nombre,
+          CONCAT(pc.nombres, ' ', pc.apellidos) as cliente_nombre,
+          vs.descripcion_descuento as "descripcionDescuento"
+        FROM ventas_servicios vs
+        JOIN sucursales s ON vs.sucursal_id = s.id
+        JOIN empleados e ON vs.empleado_id = e.id
+        JOIN personas pe ON e.persona_id = pe.id
+        JOIN personas pc ON vs.persona_id = pc.id
+        WHERE vs.id = $1
+      `;
+      
+      // Consulta para obtener los servicios vendidos
+      const servicesQuery = `
+        SELECT 
+          se.nombre,
+          i.fecha_inicio,
+          i.fecha_vencimiento,
+          dvs.precio
+        FROM detalle_venta_servicios dvs
+        JOIN inscripciones i ON dvs.inscripcion_id = i.id
+        JOIN servicios se ON i.servicio_id = se.id
+        WHERE dvs.venta_servicio_id = $1
+      `;
+      
+      const [saleResult, servicesResult] = await Promise.all([
+        query(saleQuery, [serviceId]),
+        query(servicesQuery, [serviceId])
+      ]);
+      
+      if (saleResult.rows.length > 0) {
+        const saleData = saleResult.rows[0];
+        details = {
+          descripcionDescuento: saleData.descripcionDescuento,
+          items: servicesResult.rows.map(row => ({
+            nombre: row.nombre,
+            fecha_inicio: row.fecha_inicio,
+            fecha_vencimiento: row.fecha_vencimiento,
+            precio: parseFloat(row.precio) || 0
+          })),
+        };
+      }
+    }
+    
+    return details;
+    
+  } catch (error) {
+    console.error("Error in getSaleDetails service:", error);
+    throw new Error("Error al obtener los detalles de la venta");
+  }
+};
+
 const getSucursales = async () => {
   try {
     const result = await query(`
@@ -211,5 +328,6 @@ const getSucursales = async () => {
 
 module.exports = {
   getSales,
+  getSaleDetails,
   getSucursales
 };

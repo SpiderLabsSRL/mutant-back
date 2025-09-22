@@ -28,6 +28,19 @@ const getSales = async (req, res) => {
   }
 };
 
+const getSaleDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type } = req.query;
+    
+    const details = await salesService.getSaleDetails(id, type);
+    res.json(details);
+  } catch (error) {
+    console.error("Error in getSaleDetails controller:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
 const getSucursales = async (req, res) => {
   try {
     const sucursales = await salesService.getSucursales();
@@ -40,5 +53,6 @@ const getSucursales = async (req, res) => {
 
 module.exports = {
   getSales,
+  getSaleDetails,
   getSucursales
 };
