@@ -65,11 +65,11 @@ const getMembers = async (
     if (statusFilter && statusFilter !== "all") {
       if (statusFilter === "active") {
         whereConditions.push(
-          `i.fecha_vencimiento >= CURRENT_DATE AND i.ingresos_disponibles > 0`
+          `i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date AND i.ingresos_disponibles > 0`
         );
       } else if (statusFilter === "inactive") {
         whereConditions.push(
-          `(i.fecha_vencimiento < CURRENT_DATE OR i.ingresos_disponibles = 0)`
+          `(i.fecha_vencimiento < TIMEZONE('America/La_Paz', NOW())::date OR i.ingresos_disponibles = 0)`
         );
       }
     }
@@ -93,7 +93,7 @@ const getMembers = async (
         s.nombre as servicio_nombre,
         TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
         CASE 
-          WHEN i.fecha_vencimiento >= CURRENT_DATE AND i.ingresos_disponibles > 0 THEN 'active'
+          WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date AND i.ingresos_disponibles > 0 THEN 'active'
           ELSE 'inactive'
         END as servicio_status,
         TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') as registrationDate,
@@ -102,7 +102,7 @@ const getMembers = async (
             SELECT 1 FROM inscripciones i2 
             WHERE i2.persona_id = p.id 
             AND i2.sucursal_id = i.sucursal_id
-            AND i2.fecha_vencimiento >= CURRENT_DATE 
+            AND i2.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
             AND i2.ingresos_disponibles > 0
           ) THEN 'active'
           ELSE 'inactive'
@@ -229,11 +229,11 @@ const getAllMembers = async (
     if (statusFilter && statusFilter !== "all") {
       if (statusFilter === "active") {
         whereConditions.push(
-          `i.fecha_vencimiento >= CURRENT_DATE AND i.ingresos_disponibles > 0`
+          `i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date AND i.ingresos_disponibles > 0`
         );
       } else if (statusFilter === "inactive") {
         whereConditions.push(
-          `(i.fecha_vencimiento < CURRENT_DATE OR i.ingresos_disponibles = 0)`
+          `(i.fecha_vencimiento < TIMEZONE('America/La_Paz', NOW())::date OR i.ingresos_disponibles = 0)`
         );
       }
     }
@@ -256,7 +256,7 @@ const getAllMembers = async (
         s.nombre as servicio_nombre,
         TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
         CASE 
-          WHEN i.fecha_vencimiento >= CURRENT_DATE AND i.ingresos_disponibles > 0 THEN 'active'
+          WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date AND i.ingresos_disponibles > 0 THEN 'active'
           ELSE 'inactive'
         END as servicio_status,
         TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') as registrationDate,
@@ -265,7 +265,7 @@ const getAllMembers = async (
             SELECT 1 FROM inscripciones i2 
             WHERE i2.persona_id = p.id 
             AND i2.sucursal_id = i.sucursal_id
-            AND i2.fecha_vencimiento >= CURRENT_DATE 
+            AND i2.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
             AND i2.ingresos_disponibles > 0
           ) THEN 'active'
           ELSE 'inactive'
