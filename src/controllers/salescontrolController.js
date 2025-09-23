@@ -1,3 +1,4 @@
+// backend/controllers/salescontrolController.js
 const salesService = require("../services/salescontrolService");
 
 const getSales = async (req, res) => {
@@ -16,9 +17,11 @@ const getSales = async (req, res) => {
       specificDate,
       startDate,
       endDate,
-      sucursal,
+      sucursal: sucursal === 'all' ? null : sucursal,
       empleadoId
     };
+    
+    console.log('Filtros recibidos en sales controller:', filters);
     
     const sales = await salesService.getSales(filters);
     res.json(sales);
