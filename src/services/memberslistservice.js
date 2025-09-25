@@ -61,15 +61,15 @@ const getMembers = async (
       queryParams.push(serviceFilter);
     }
 
-    // Filtro por estado
+    // Filtro por estado - CORREGIDO para manejar ingresos_disponibles NULL
     if (statusFilter && statusFilter !== "all") {
       if (statusFilter === "active") {
         whereConditions.push(
-          `i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date AND i.ingresos_disponibles > 0`
+          `i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date AND (i.ingresos_disponibles > 0 OR i.ingresos_disponibles IS NULL)`
         );
       } else if (statusFilter === "inactive") {
         whereConditions.push(
-          `(i.fecha_vencimiento < TIMEZONE('America/La_Paz', NOW())::date OR i.ingresos_disponibles = 0)`
+          `(i.fecha_vencimiento < TIMEZONE('America/La_Paz', NOW())::date OR (i.ingresos_disponibles = 0 AND i.ingresos_disponibles IS NOT NULL))`
         );
       }
     }
@@ -79,7 +79,7 @@ const getMembers = async (
         ? `WHERE ${whereConditions.join(" AND ")}`
         : "";
 
-    // Consulta para obtener miembros - CORREGIDA para evaluar estado por sucursal
+    // Consulta para obtener miembros - CORREGIDA para mantener ingresos_disponibles NULL
     const membersQuery = `
       SELECT 
         p.id,
@@ -93,7 +93,9 @@ const getMembers = async (
         s.nombre as servicio_nombre,
         TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
         CASE 
-          WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date AND i.ingresos_disponibles > 0 THEN 'active'
+          WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
+               AND (i.ingresos_disponibles > 0 OR i.ingresos_disponibles IS NULL) 
+               THEN 'active'
           ELSE 'inactive'
         END as servicio_status,
         TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') as registrationDate,
@@ -103,7 +105,7 @@ const getMembers = async (
             WHERE i2.persona_id = p.id 
             AND i2.sucursal_id = i.sucursal_id
             AND i2.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
-            AND i2.ingresos_disponibles > 0
+            AND (i2.ingresos_disponibles > 0 OR i2.ingresos_disponibles IS NULL)
           ) THEN 'active'
           ELSE 'inactive'
         END as member_status
@@ -156,12 +158,12 @@ const getMembers = async (
 
       const member = membersMap.get(key);
 
-      // Agregar cada servicio con sus ingresos individuales
+      // Agregar cada servicio manteniendo el valor NULL si existe
       member.services.push({
         name: row.servicio_nombre,
         expirationDate: row.fecha_vencimiento,
         status: row.servicio_status,
-        ingresos_disponibles: row.ingresos_disponibles || 0,
+        ingresos_disponibles: row.ingresos_disponibles, // Mantener NULL si es NULL
       });
     });
 
@@ -179,7 +181,7 @@ const getMembers = async (
   }
 };
 
-// Obtener todos los miembros (sin paginación) - CORREGIDA para evaluar estado por sucursal
+// Obtener todos los miembros (sin paginación) - CORREGIDA para mantener ingresos_disponibles NULL
 const getAllMembers = async (
   searchTerm,
   serviceFilter,
@@ -225,15 +227,15 @@ const getAllMembers = async (
       queryParams.push(serviceFilter);
     }
 
-    // Filtro por estado
+    // Filtro por estado - CORREGIDO para manejar ingresos_disponibles NULL
     if (statusFilter && statusFilter !== "all") {
       if (statusFilter === "active") {
         whereConditions.push(
-          `i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date AND i.ingresos_disponibles > 0`
+          `i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date AND (i.ingresos_disponibles > 0 OR i.ingresos_disponibles IS NULL)`
         );
       } else if (statusFilter === "inactive") {
         whereConditions.push(
-          `(i.fecha_vencimiento < TIMEZONE('America/La_Paz', NOW())::date OR i.ingresos_disponibles = 0)`
+          `(i.fecha_vencimiento < TIMEZONE('America/La_Paz', NOW())::date OR (i.ingresos_disponibles = 0 AND i.ingresos_disponibles IS NOT NULL))`
         );
       }
     }
@@ -256,7 +258,9 @@ const getAllMembers = async (
         s.nombre as servicio_nombre,
         TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
         CASE 
-          WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date AND i.ingresos_disponibles > 0 THEN 'active'
+          WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
+               AND (i.ingresos_disponibles > 0 OR i.ingresos_disponibles IS NULL) 
+               THEN 'active'
           ELSE 'inactive'
         END as servicio_status,
         TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') as registrationDate,
@@ -266,7 +270,7 @@ const getAllMembers = async (
             WHERE i2.persona_id = p.id 
             AND i2.sucursal_id = i.sucursal_id
             AND i2.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
-            AND i2.ingresos_disponibles > 0
+            AND (i2.ingresos_disponibles > 0 OR i2.ingresos_disponibles IS NULL)
           ) THEN 'active'
           ELSE 'inactive'
         END as member_status
@@ -305,12 +309,12 @@ const getAllMembers = async (
 
       const member = membersMap.get(key);
 
-      // Agregar cada servicio con sus ingresos individuales
+      // Agregar cada servicio manteniendo el valor NULL si existe
       member.services.push({
         name: row.servicio_nombre,
         expirationDate: row.fecha_vencimiento,
         status: row.servicio_status,
-        ingresos_disponibles: row.ingresos_disponibles || 0,
+        ingresos_disponibles: row.ingresos_disponibles, // Mantener NULL si es NULL
       });
     });
 
@@ -323,7 +327,7 @@ const getAllMembers = async (
   }
 };
 
-// Editar miembro
+// Editar miembro (sin cambios)
 const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
   try {
     // Verificar si el CI ya existe en otro miembro
@@ -372,19 +376,19 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
     return result.rows[0];
   } catch (error) {
     console.error("Error en editMember service:", error);
-    
+
     // Si ya es un error personalizado, re-lanzarlo
     if (error.message.includes("La persona ya existe")) {
       throw error;
     }
-    
+
     throw new Error(
       `Error al editar miembro en la base de datos: ${error.message}`
     );
   }
 };
 
-// Eliminar miembro
+// Eliminar miembro (sin cambios)
 const deleteMember = async (id) => {
   try {
     // Verificar si el miembro existe
@@ -413,7 +417,7 @@ const deleteMember = async (id) => {
   }
 };
 
-// Obtener servicios disponibles
+// Obtener servicios disponibles (sin cambios)
 const getAvailableServices = async () => {
   try {
     const queryText = `
@@ -434,7 +438,7 @@ const getAvailableServices = async () => {
   }
 };
 
-// Obtener sucursales disponibles
+// Obtener sucursales disponibles (sin cambios)
 const getAvailableBranches = async () => {
   try {
     const queryText = `

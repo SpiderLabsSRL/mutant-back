@@ -18,7 +18,7 @@ const getAllServices = async () => {
     GROUP BY s.id, s.nombre, s.precio, s.numero_ingresos, s.multisucursal, s.estado
     ORDER BY s.nombre;
   `;
-  
+
   const result = await query(sql);
   return result.rows;
 };
@@ -31,43 +31,53 @@ const getSucursales = async () => {
 };
 
 const createService = async (serviceData) => {
-  const { name, price, maxEntries, sucursales, multisucursal, sucursalesMultisucursal } = serviceData;
+  const {
+    name,
+    price,
+    maxEntries,
+    sucursales,
+    multisucursal,
+    sucursalesMultisucursal,
+  } = serviceData;
   const client = await pool.connect();
-  
+
   try {
-    await client.query('BEGIN');
-    
-    // Insertar servicio
+    await client.query("BEGIN");
+
+    // Insertar servicio (maxEntries puede ser null para ilimitado)
     const serviceResult = await client.query(
       `INSERT INTO servicios (nombre, precio, numero_ingresos, multisucursal, estado)
        VALUES ($1, $2, $3, $4, 1)
        RETURNING id, nombre AS name, precio AS price, numero_ingresos AS "maxEntries", multisucursal, estado = 1 AS "isActive"`,
       [name, price, maxEntries, multisucursal]
     );
-    
+
     const serviceId = serviceResult.rows[0].id;
-    
+
     // Insertar relaciones con sucursales disponibles
     for (const sucursalId of sucursales) {
-      const isMultisucursal = multisucursal && sucursalesMultisucursal.includes(sucursalId);
-      
+      const isMultisucursal =
+        multisucursal && sucursalesMultisucursal.includes(sucursalId);
+
       await client.query(
         `INSERT INTO servicio_sucursal (servicio_id, sucursal_id, disponible, multisucursal)
          VALUES ($1, $2, TRUE, $3)`,
         [serviceId, sucursalId, isMultisucursal]
       );
     }
-    
-    await client.query('COMMIT');
-    
+
+    await client.query("COMMIT");
+
     // Devolver el servicio creado
     const newService = serviceResult.rows[0];
     newService.sucursales = sucursales;
-    newService.sucursalesMultisucursal = multisucursal ? sucursalesMultisucursal : [];
-    
+    newService.sucursalesMultisucursal = multisucursal
+      ? sucursalesMultisucursal
+      : [];
+
     return newService;
   } catch (error) {
-    await client.query('ROLLBACK');
+    await client.query("ROLLBACK");
     throw error;
   } finally {
     client.release();
@@ -75,13 +85,20 @@ const createService = async (serviceData) => {
 };
 
 const updateService = async (id, serviceData) => {
-  const { name, price, maxEntries, sucursales, multisucursal, sucursalesMultisucursal } = serviceData;
+  const {
+    name,
+    price,
+    maxEntries,
+    sucursales,
+    multisucursal,
+    sucursalesMultisucursal,
+  } = serviceData;
   const client = await pool.connect();
-  
+
   try {
-    await client.query('BEGIN');
-    
-    // Actualizar servicio
+    await client.query("BEGIN");
+
+    // Actualizar servicio (maxEntries puede ser null para ilimitado)
     const serviceResult = await client.query(
       `UPDATE servicios 
        SET nombre = $1, precio = $2, numero_ingresos = $3, multisucursal = $4
@@ -89,23 +106,26 @@ const updateService = async (id, serviceData) => {
        RETURNING id, nombre AS name, precio AS price, numero_ingresos AS "maxEntries", multisucursal, estado = 1 AS "isActive"`,
       [name, price, maxEntries, multisucursal, id]
     );
-    
+
     if (serviceResult.rows.length === 0) {
       throw new Error("Servicio no encontrado");
     }
-    
+
     // Eliminar relaciones que ya no están en las sucursales disponibles
     await client.query(
       `DELETE FROM servicio_sucursal 
        WHERE servicio_id = $1 
-       AND sucursal_id NOT IN (${sucursales.map((_, i) => `$${i + 2}`).join(',')})`,
+       AND sucursal_id NOT IN (${sucursales
+         .map((_, i) => `$${i + 2}`)
+         .join(",")})`,
       [id, ...sucursales]
     );
-    
+
     // Insertar/actualizar relaciones con sucursales disponibles
     for (const sucursalId of sucursales) {
-      const isMultisucursal = multisucursal && sucursalesMultisucursal.includes(sucursalId);
-      
+      const isMultisucursal =
+        multisucursal && sucursalesMultisucursal.includes(sucursalId);
+
       await client.query(
         `INSERT INTO servicio_sucursal (servicio_id, sucursal_id, disponible, multisucursal)
          VALUES ($1, $2, TRUE, $3)
@@ -114,7 +134,7 @@ const updateService = async (id, serviceData) => {
         [id, sucursalId, isMultisucursal]
       );
     }
-    
+
     // Si se desactiva el multisucursal, quitar todas las marcas multisucursal
     if (!multisucursal) {
       await client.query(
@@ -124,17 +144,19 @@ const updateService = async (id, serviceData) => {
         [id]
       );
     }
-    
-    await client.query('COMMIT');
-    
+
+    await client.query("COMMIT");
+
     // Devolver el servicio actualizado
     const updatedService = serviceResult.rows[0];
     updatedService.sucursales = sucursales;
-    updatedService.sucursalesMultisucursal = multisucursal ? sucursalesMultisucursal : [];
-    
+    updatedService.sucursalesMultisucursal = multisucursal
+      ? sucursalesMultisucursal
+      : [];
+
     return updatedService;
   } catch (error) {
-    await client.query('ROLLBACK');
+    await client.query("ROLLBACK");
     throw error;
   } finally {
     client.release();
@@ -142,10 +164,7 @@ const updateService = async (id, serviceData) => {
 };
 
 const deleteService = async (id) => {
-  await query(
-    `UPDATE servicios SET estado = 2 WHERE id = $1`,
-    [id]
-  );
+  await query(`UPDATE servicios SET estado = 2 WHERE id = $1`, [id]);
 };
 
 const toggleServiceStatus = async (id) => {
@@ -156,11 +175,11 @@ const toggleServiceStatus = async (id) => {
      RETURNING id, nombre AS name, precio AS price, numero_ingresos AS "maxEntries", multisucursal, estado = 1 AS "isActive"`,
     [id]
   );
-  
+
   if (result.rows.length === 0) {
     throw new Error("Servicio no encontrado");
   }
-  
+
   // Obtener las sucursales disponibles del servicio
   const sucursalesResult = await query(
     `SELECT sucursal_id::text 
@@ -168,7 +187,7 @@ const toggleServiceStatus = async (id) => {
      WHERE servicio_id = $1 AND disponible = TRUE`,
     [id]
   );
-  
+
   // Obtener las sucursales multisucursal del servicio
   const multisucursalResult = await query(
     `SELECT sucursal_id::text 
@@ -176,11 +195,13 @@ const toggleServiceStatus = async (id) => {
      WHERE servicio_id = $1 AND multisucursal = TRUE`,
     [id]
   );
-  
+
   const service = result.rows[0];
-  service.sucursales = sucursalesResult.rows.map(row => row.sucursal_id);
-  service.sucursalesMultisucursal = multisucursalResult.rows.map(row => row.sucursal_id);
-  
+  service.sucursales = sucursalesResult.rows.map((row) => row.sucursal_id);
+  service.sucursalesMultisucursal = multisucursalResult.rows.map(
+    (row) => row.sucursal_id
+  );
+
   return service;
 };
 
@@ -190,5 +211,5 @@ module.exports = {
   createService,
   updateService,
   deleteService,
-  toggleServiceStatus
+  toggleServiceStatus,
 };

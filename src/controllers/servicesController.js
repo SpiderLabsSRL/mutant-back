@@ -6,9 +6,9 @@ const getAllServices = async (req, res) => {
     res.json(services);
   } catch (error) {
     console.error("Error en getAllServices:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message || "Error interno del servidor" 
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error interno del servidor",
     });
   }
 };
@@ -19,41 +19,62 @@ const getSucursales = async (req, res) => {
     res.json(sucursales);
   } catch (error) {
     console.error("Error en getSucursales:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message || "Error interno del servidor" 
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error interno del servidor",
     });
   }
 };
 
 const createService = async (req, res) => {
   try {
-    const { name, price, maxEntries, sucursales, multisucursal, sucursalesMultisucursal } = req.body;
-    
-    if (!name || !price || !maxEntries || !sucursales || sucursales.length === 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Todos los campos son obligatorios, incluyendo al menos una sucursal" 
+    const {
+      name,
+      price,
+      maxEntries,
+      sucursales,
+      multisucursal,
+      sucursalesMultisucursal,
+    } = req.body;
+
+    if (!name || !price || !sucursales || sucursales.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Todos los campos son obligatorios, incluyendo al menos una sucursal",
       });
     }
 
-    if (multisucursal && (!sucursalesMultisucursal || sucursalesMultisucursal.length < 2)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Para servicios multisucursal debe seleccionar al menos 2 sucursales" 
+    // Validar que si no es ilimitado, debe tener maxEntries
+    if (maxEntries !== null && maxEntries <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "El número de ingresos debe ser mayor a 0",
+      });
+    }
+
+    if (
+      multisucursal &&
+      (!sucursalesMultisucursal || sucursalesMultisucursal.length < 2)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Para servicios multisucursal debe seleccionar al menos 2 sucursales",
       });
     }
 
     // Validar que las sucursales multisucursal estén dentro de las disponibles
     if (multisucursal) {
       const invalidSucursales = sucursalesMultisucursal.filter(
-        sucursalId => !sucursales.includes(sucursalId)
+        (sucursalId) => !sucursales.includes(sucursalId)
       );
-      
+
       if (invalidSucursales.length > 0) {
-        return res.status(400).json({ 
-          success: false, 
-          message: "Las sucursales multisucursal deben estar entre las sucursales disponibles" 
+        return res.status(400).json({
+          success: false,
+          message:
+            "Las sucursales multisucursal deben estar entre las sucursales disponibles",
         });
       }
     }
@@ -64,15 +85,15 @@ const createService = async (req, res) => {
       maxEntries,
       sucursales,
       multisucursal: multisucursal || false,
-      sucursalesMultisucursal: multisucursal ? sucursalesMultisucursal : []
+      sucursalesMultisucursal: multisucursal ? sucursalesMultisucursal : [],
     });
-    
+
     res.status(201).json(newService);
   } catch (error) {
     console.error("Error en createService:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message || "Error interno del servidor" 
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error interno del servidor",
     });
   }
 };
@@ -80,32 +101,53 @@ const createService = async (req, res) => {
 const updateService = async (req, res) => {
   try {
     const { id } = req.params;
-    const { name, price, maxEntries, sucursales, multisucursal, sucursalesMultisucursal } = req.body;
-    
-    if (!name || !price || !maxEntries || !sucursales || sucursales.length === 0) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Todos los campos son obligatorios, incluyendo al menos una sucursal" 
+    const {
+      name,
+      price,
+      maxEntries,
+      sucursales,
+      multisucursal,
+      sucursalesMultisucursal,
+    } = req.body;
+
+    if (!name || !price || !sucursales || sucursales.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Todos los campos son obligatorios, incluyendo al menos una sucursal",
       });
     }
 
-    if (multisucursal && (!sucursalesMultisucursal || sucursalesMultisucursal.length < 2)) {
-      return res.status(400).json({ 
-        success: false, 
-        message: "Para servicios multisucursal debe seleccionar al menos 2 sucursales" 
+    // Validar que si no es ilimitado, debe tener maxEntries
+    if (maxEntries !== null && maxEntries <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "El número de ingresos debe ser mayor a 0",
+      });
+    }
+
+    if (
+      multisucursal &&
+      (!sucursalesMultisucursal || sucursalesMultisucursal.length < 2)
+    ) {
+      return res.status(400).json({
+        success: false,
+        message:
+          "Para servicios multisucursal debe seleccionar al menos 2 sucursales",
       });
     }
 
     // Validar que las sucursales multisucursal estén dentro de las disponibles
     if (multisucursal) {
       const invalidSucursales = sucursalesMultisucursal.filter(
-        sucursalId => !sucursales.includes(sucursalId)
+        (sucursalId) => !sucursales.includes(sucursalId)
       );
-      
+
       if (invalidSucursales.length > 0) {
-        return res.status(400).json({ 
-          success: false, 
-          message: "Las sucursales multisucursal deben estar entre las sucursales disponibles" 
+        return res.status(400).json({
+          success: false,
+          message:
+            "Las sucursales multisucursal deben estar entre las sucursales disponibles",
         });
       }
     }
@@ -116,15 +158,15 @@ const updateService = async (req, res) => {
       maxEntries,
       sucursales,
       multisucursal: multisucursal || false,
-      sucursalesMultisucursal: multisucursal ? sucursalesMultisucursal : []
+      sucursalesMultisucursal: multisucursal ? sucursalesMultisucursal : [],
     });
-    
+
     res.json(updatedService);
   } catch (error) {
     console.error("Error en updateService:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message || "Error interno del servidor" 
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error interno del servidor",
     });
   }
 };
@@ -136,9 +178,9 @@ const deleteService = async (req, res) => {
     res.json({ success: true, message: "Servicio eliminado correctamente" });
   } catch (error) {
     console.error("Error en deleteService:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message || "Error interno del servidor" 
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error interno del servidor",
     });
   }
 };
@@ -150,9 +192,9 @@ const toggleServiceStatus = async (req, res) => {
     res.json(updatedService);
   } catch (error) {
     console.error("Error en toggleServiceStatus:", error);
-    res.status(500).json({ 
-      success: false, 
-      message: error.message || "Error interno del servidor" 
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error interno del servidor",
     });
   }
 };
@@ -163,5 +205,5 @@ module.exports = {
   createService,
   updateService,
   deleteService,
-  toggleServiceStatus
+  toggleServiceStatus,
 };
