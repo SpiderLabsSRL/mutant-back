@@ -207,7 +207,8 @@ exports.registerClientAccess = async (
       i.*, 
       s.id as servicio_real_id,
       s.nombre as servicio_nombre, 
-      s.multisucursal
+      s.multisucursal,
+      s.numero_ingresos as servicio_ingresos_ilimitados
     FROM inscripciones i
     INNER JOIN servicios s ON i.servicio_id = s.id
     WHERE i.persona_id = $1 AND i.id = $2
@@ -260,7 +261,11 @@ exports.registerClientAccess = async (
     };
   }
 
-  if (inscription.ingresos_disponibles <= 0) {
+  // VERIFICAR SI ES UN SERVICIO ILIMITADO
+  const isUnlimitedService = inscription.servicio_ingresos_ilimitados === null;
+
+  // Solo verificar ingresos si NO es un servicio ilimitado
+  if (!isUnlimitedService && inscription.ingresos_disponibles <= 0) {
     await query(
       `
       INSERT INTO registros_acceso 
@@ -283,14 +288,17 @@ exports.registerClientAccess = async (
     };
   }
 
-  await query(
-    `
-    UPDATE inscripciones 
-    SET ingresos_disponibles = ingresos_disponibles - 1 
-    WHERE id = $1
-  `,
-    [serviceId]
-  );
+  // SOLO DESCONTAR INGRESO SI NO ES UN SERVICIO ILIMITADO
+  if (!isUnlimitedService) {
+    await query(
+      `
+      UPDATE inscripciones 
+      SET ingresos_disponibles = ingresos_disponibles - 1 
+      WHERE id = $1
+    `,
+      [serviceId]
+    );
+  }
 
   const updatedInscription = await query(
     `
@@ -301,6 +309,11 @@ exports.registerClientAccess = async (
 
   const remainingVisits = updatedInscription.rows[0]?.ingresos_disponibles || 0;
 
+  // Mensaje diferente para servicios ilimitados
+  const detailMessage = isUnlimitedService 
+    ? `Servicio: ${inscription.servicio_nombre} - Ingresos ilimitados`
+    : `Servicio: ${inscription.servicio_nombre} - Visitas restantes: ${remainingVisits}`;
+
   await query(
     `
     INSERT INTO registros_acceso 
@@ -310,7 +323,7 @@ exports.registerClientAccess = async (
     [
       personId,
       inscription.servicio_real_id,
-      `Servicio: ${inscription.servicio_nombre} - Visitas restantes: ${remainingVisits}`,
+      detailMessage,
       "exitoso",
       branchId,
       userId,
@@ -320,7 +333,7 @@ exports.registerClientAccess = async (
   return {
     success: true,
     message: `Acceso registrado para ${inscription.servicio_nombre}`,
-    remainingVisits,
+    remainingVisits: isUnlimitedService ? null : remainingVisits,
   };
 };
 
