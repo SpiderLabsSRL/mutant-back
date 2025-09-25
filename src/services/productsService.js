@@ -44,7 +44,7 @@ const getProductById = async (id) => {
   return result.rows[0];
 };
 
-const createProduct = async (nombre, precio_venta, proveedor, sucursales, stock_por_sucursal) => {
+const createProduct = async (nombre, precio_venta, proveedor, sucursales, stock_por_sucursal, sin_stock) => {
   const client = await pool.connect();
   
   try {
@@ -62,7 +62,16 @@ const createProduct = async (nombre, precio_venta, proveedor, sucursales, stock_
     
     // Insertar stock por sucursal
     for (const sucursalId of sucursales) {
-      const stock = stock_por_sucursal[sucursalId] || 0;
+      let stock = stock_por_sucursal[sucursalId];
+      
+      // Si es producto sin stock, establecer como NULL
+      if (sin_stock) {
+        stock = null;
+      } else {
+        // Si no es sin stock, asegurar que sea un número válido
+        stock = stock !== undefined && stock !== null ? parseInt(stock) : 0;
+        if (isNaN(stock)) stock = 0;
+      }
       
       await client.query(
         `INSERT INTO producto_sucursal (producto_id, sucursal_id, stock)
@@ -84,7 +93,7 @@ const createProduct = async (nombre, precio_venta, proveedor, sucursales, stock_
   }
 };
 
-const updateProduct = async (id, nombre, precio_venta, proveedor, sucursales, stock_por_sucursal) => {
+const updateProduct = async (id, nombre, precio_venta, proveedor, sucursales, stock_por_sucursal, sin_stock) => {
   const client = await pool.connect();
   
   try {
@@ -106,7 +115,16 @@ const updateProduct = async (id, nombre, precio_venta, proveedor, sucursales, st
     
     // Insertar nuevas relaciones
     for (const sucursalId of sucursales) {
-      const stock = stock_por_sucursal[sucursalId] || 0;
+      let stock = stock_por_sucursal[sucursalId];
+      
+      // Si es producto sin stock, establecer como NULL
+      if (sin_stock) {
+        stock = null;
+      } else {
+        // Si no es sin stock, asegurar que sea un número válido
+        stock = stock !== undefined && stock !== null ? parseInt(stock) : 0;
+        if (isNaN(stock)) stock = 0;
+      }
       
       await client.query(
         `INSERT INTO producto_sucursal (producto_id, sucursal_id, stock)
@@ -176,6 +194,24 @@ const getProductStock = async (id, sucursalId) => {
 };
 
 const addStock = async (productId, sucursalId, cantidad) => {
+  // Verificar si el producto tiene stock (no es NULL)
+  const checkResult = await query(
+    `SELECT stock FROM producto_sucursal 
+     WHERE producto_id = $1 AND sucursal_id = $2`,
+    [productId, sucursalId]
+  );
+  
+  if (checkResult.rows.length === 0) {
+    throw new Error("Producto no encontrado en la sucursal especificada");
+  }
+  
+  const currentStock = checkResult.rows[0].stock;
+  
+  // Si el stock actual es NULL, no se puede agregar stock
+  if (currentStock === null) {
+    throw new Error("No se puede agregar stock a un producto configurado como 'sin stock'");
+  }
+  
   await query(
     `UPDATE producto_sucursal 
      SET stock = stock + $1 
