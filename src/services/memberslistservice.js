@@ -1,6 +1,6 @@
 const { query } = require("../../db");
 
-// Obtener miembros con paginación y filtros
+// Obtener miembros con paginación y filtros - MODIFICADO para mostrar solo última inscripción por servicio
 const getMembers = async (
   page,
   limit,
@@ -79,8 +79,18 @@ const getMembers = async (
         ? `WHERE ${whereConditions.join(" AND ")}`
         : "";
 
-    // Consulta para obtener miembros - CORREGIDA para mantener ingresos_disponibles NULL
+    // Subconsulta para obtener la última inscripción por servicio y persona - NUEVA LÓGICA
     const membersQuery = `
+      WITH UltimasInscripciones AS (
+        SELECT 
+          i.persona_id,
+          i.servicio_id,
+          i.sucursal_id,
+          MAX(i.fecha_inicio) as ultima_fecha
+        FROM inscripciones i
+        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
+      )
       SELECT 
         p.id,
         CONCAT(p.nombres, ' ', p.apellidos) as name,
@@ -110,7 +120,11 @@ const getMembers = async (
           ELSE 'inactive'
         END as member_status
       FROM personas p
-      INNER JOIN inscripciones i ON p.id = i.persona_id
+      INNER JOIN UltimasInscripciones ui ON p.id = ui.persona_id
+      INNER JOIN inscripciones i ON p.id = i.persona_id 
+        AND i.servicio_id = ui.servicio_id 
+        AND i.sucursal_id = ui.sucursal_id 
+        AND i.fecha_inicio = ui.ultima_fecha
       INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
       INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
       ${whereClause}
@@ -118,11 +132,25 @@ const getMembers = async (
       LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}
     `;
 
-    // Consulta para contar total
+    // Consulta para contar total - MODIFICADA para usar la misma lógica
     const countQuery = `
+      WITH UltimasInscripciones AS (
+        SELECT 
+          i.persona_id,
+          i.servicio_id,
+          i.sucursal_id,
+          MAX(i.fecha_inicio) as ultima_fecha
+        FROM inscripciones i
+        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
+      )
       SELECT COUNT(DISTINCT CONCAT(p.id, '-', i.sucursal_id))
       FROM personas p
-      INNER JOIN inscripciones i ON p.id = i.persona_id
+      INNER JOIN UltimasInscripciones ui ON p.id = ui.persona_id
+      INNER JOIN inscripciones i ON p.id = i.persona_id 
+        AND i.servicio_id = ui.servicio_id 
+        AND i.sucursal_id = ui.sucursal_id 
+        AND i.fecha_inicio = ui.ultima_fecha
       INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
       INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
       ${whereClause}
@@ -158,12 +186,12 @@ const getMembers = async (
 
       const member = membersMap.get(key);
 
-      // Agregar cada servicio manteniendo el valor NULL si existe
+      // Agregar cada servicio (ahora solo la última inscripción)
       member.services.push({
         name: row.servicio_nombre,
         expirationDate: row.fecha_vencimiento,
         status: row.servicio_status,
-        ingresos_disponibles: row.ingresos_disponibles, // Mantener NULL si es NULL
+        ingresos_disponibles: row.ingresos_disponibles,
       });
     });
 
@@ -181,7 +209,7 @@ const getMembers = async (
   }
 };
 
-// Obtener todos los miembros (sin paginación) - CORREGIDA para mantener ingresos_disponibles NULL
+// Obtener todos los miembros (sin paginación) - MODIFICADO para mostrar solo última inscripción por servicio
 const getAllMembers = async (
   searchTerm,
   serviceFilter,
@@ -245,7 +273,18 @@ const getAllMembers = async (
         ? `WHERE ${whereConditions.join(" AND ")}`
         : "";
 
+    // Subconsulta para obtener la última inscripción por servicio y persona - NUEVA LÓGICA
     const queryText = `
+      WITH UltimasInscripciones AS (
+        SELECT 
+          i.persona_id,
+          i.servicio_id,
+          i.sucursal_id,
+          MAX(i.fecha_inicio) as ultima_fecha
+        FROM inscripciones i
+        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
+      )
       SELECT 
         p.id,
         CONCAT(p.nombres, ' ', p.apellidos) as name,
@@ -275,7 +314,11 @@ const getAllMembers = async (
           ELSE 'inactive'
         END as member_status
       FROM personas p
-      INNER JOIN inscripciones i ON p.id = i.persona_id
+      INNER JOIN UltimasInscripciones ui ON p.id = ui.persona_id
+      INNER JOIN inscripciones i ON p.id = i.persona_id 
+        AND i.servicio_id = ui.servicio_id 
+        AND i.sucursal_id = ui.sucursal_id 
+        AND i.fecha_inicio = ui.ultima_fecha
       INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
       INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
       ${whereClause}
@@ -309,12 +352,12 @@ const getAllMembers = async (
 
       const member = membersMap.get(key);
 
-      // Agregar cada servicio manteniendo el valor NULL si existe
+      // Agregar cada servicio (ahora solo la última inscripción)
       member.services.push({
         name: row.servicio_nombre,
         expirationDate: row.fecha_vencimiento,
         status: row.servicio_status,
-        ingresos_disponibles: row.ingresos_disponibles, // Mantener NULL si es NULL
+        ingresos_disponibles: row.ingresos_disponibles,
       });
     });
 
@@ -327,7 +370,7 @@ const getAllMembers = async (
   }
 };
 
-// Editar miembro (sin cambios)
+// Las demás funciones permanecen igual
 const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
   try {
     // Verificar si el CI ya existe en otro miembro
@@ -388,7 +431,6 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
   }
 };
 
-// Eliminar miembro (sin cambios)
 const deleteMember = async (id) => {
   try {
     // Verificar si el miembro existe
@@ -417,7 +459,6 @@ const deleteMember = async (id) => {
   }
 };
 
-// Obtener servicios disponibles (sin cambios)
 const getAvailableServices = async () => {
   try {
     const queryText = `
@@ -438,7 +479,6 @@ const getAvailableServices = async () => {
   }
 };
 
-// Obtener sucursales disponibles (sin cambios)
 const getAvailableBranches = async () => {
   try {
     const queryText = `
