@@ -370,7 +370,7 @@ const getAllMembers = async (
   }
 };
 
-// Las demás funciones permanecen igual
+// Editar miembro - MODIFICADO para permitir letras y números en CI
 const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
   try {
     // Verificar si el CI ya existe en otro miembro

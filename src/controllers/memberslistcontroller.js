@@ -144,11 +144,27 @@ const editMember = async (req, res) => {
       });
     }
 
-    // Validar formato de CI
-    if (!/^\d+$/.test(ci)) {
+    // NUEVA VALIDACIÓN: Permitir números y letras en CI
+    if (!/^[a-zA-Z0-9]+$/.test(ci)) {
       return res.status(400).json({
         success: false,
-        message: "La cédula de identidad debe contener solo números",
+        message: "La cédula de identidad solo puede contener letras y números",
+      });
+    }
+
+    // NUEVA VALIDACIÓN: Longitud entre 7 y 12 caracteres
+    if (ci.length < 7 || ci.length > 12) {
+      return res.status(400).json({
+        success: false,
+        message: "La cédula de identidad debe tener entre 7 y 12 caracteres",
+      });
+    }
+
+    // NUEVA VALIDACIÓN: No puede ser solo letras
+    if (!/\d/.test(ci)) {
+      return res.status(400).json({
+        success: false,
+        message: "La cédula de identidad debe contener al menos un número",
       });
     }
 
