@@ -201,7 +201,7 @@ exports.getAssignedCashRegister = async (idUsuario) => {
   }
 };
 
-exports.openCashRegister = async (caja_id, monto_inicial, usuario_id) => {
+exports.openCashRegister = async (caja_id, monto_inicial, usuario_id, descripcion) => {
   const client = await pool.connect();
   
   try {
@@ -237,9 +237,9 @@ exports.openCashRegister = async (caja_id, monto_inicial, usuario_id) => {
     await client.query(
       `
       INSERT INTO transacciones_caja (caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id)
-      VALUES ($1, $2, 'apertura', 'Apertura de caja', $3, TIMEZONE('America/La_Paz', NOW()), $4)
+      VALUES ($1, $2, 'apertura', $3, $4, TIMEZONE('America/La_Paz', NOW()), $5)
       `,
-      [caja_id, estado_caja_id, monto_inicial, usuario_id]
+      [caja_id, estado_caja_id, descripcion || `Apertura de caja con Bs. ${monto_inicial.toFixed(2)}`, monto_inicial, usuario_id]
     );
     
     await client.query('COMMIT');
@@ -253,7 +253,7 @@ exports.openCashRegister = async (caja_id, monto_inicial, usuario_id) => {
   }
 };
 
-exports.closeCashRegister = async (caja_id, monto_final, usuario_id) => {
+exports.closeCashRegister = async (caja_id, monto_final, usuario_id, descripcion) => {
   const client = await pool.connect();
   
   try {
@@ -280,13 +280,9 @@ exports.closeCashRegister = async (caja_id, monto_final, usuario_id) => {
       throw new Error("La caja no está abierta");
     }
     
-    if (parseFloat(estadoCajaActual.monto_final) !== parseFloat(monto_final)) {
-      throw new Error("El monto de cierre no coincide con el monto final de la caja");
-    }
-    
     const estado_caja_id = estadoCajaActual.id;
     
-    // Actualizar estado de caja a cerrado
+    // Actualizar estado de caja a cerrado (PERMITIMOS CUALQUIER MONTO)
     await client.query(
       `
       UPDATE estado_caja 
@@ -300,9 +296,9 @@ exports.closeCashRegister = async (caja_id, monto_final, usuario_id) => {
     await client.query(
       `
       INSERT INTO transacciones_caja (caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id)
-      VALUES ($1, $2, 'cierre', 'Cierre de caja', $3, TIMEZONE('America/La_Paz', NOW()), $4)
+      VALUES ($1, $2, 'cierre', $3, $4, TIMEZONE('America/La_Paz', NOW()), $5)
       `,
-      [caja_id, estado_caja_id, monto_final, usuario_id]
+      [caja_id, estado_caja_id, descripcion || `Cierre de caja con Bs. ${monto_final.toFixed(2)}`, monto_final, usuario_id]
     );
     
     await client.query('COMMIT');

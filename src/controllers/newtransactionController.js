@@ -85,16 +85,17 @@ exports.getAssignedCashRegister = async (req, res) => {
 
 exports.openCashRegister = async (req, res) => {
   try {
-    const { caja_id, monto_inicial, usuario_id } = req.body;
+    const { caja_id, monto_inicial, usuario_id, descripcion } = req.body;
     
-    if (!caja_id || !monto_inicial || !usuario_id) {
+    if (!caja_id || monto_inicial === undefined || !usuario_id) {
       return res.status(400).json({ error: "Datos incompletos para abrir la caja" });
     }
     
     const result = await newtransactionService.openCashRegister(
       parseInt(caja_id),
       parseFloat(monto_inicial),
-      parseInt(usuario_id)
+      parseInt(usuario_id),
+      descripcion
     );
     
     res.status(201).json(result);
@@ -106,16 +107,17 @@ exports.openCashRegister = async (req, res) => {
 
 exports.closeCashRegister = async (req, res) => {
   try {
-    const { caja_id, monto_final, usuario_id } = req.body;
+    const { caja_id, monto_final, usuario_id, descripcion } = req.body;
     
-    if (!caja_id || !monto_final || !usuario_id) {
+    if (!caja_id || monto_final === undefined || !usuario_id) {
       return res.status(400).json({ error: "Datos incompletos para cerrar la caja" });
     }
     
     const result = await newtransactionService.closeCashRegister(
       parseInt(caja_id),
       parseFloat(monto_final),
-      parseInt(usuario_id)
+      parseInt(usuario_id),
+      descripcion
     );
     
     res.status(200).json(result);
