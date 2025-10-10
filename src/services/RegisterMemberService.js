@@ -32,7 +32,7 @@ exports.getActiveSubscriptions = async (personaId, sucursalId) => {
     INNER JOIN servicios s ON i.servicio_id = s.id
     WHERE i.persona_id = $1 
     AND i.estado = 1 
-    AND i.fecha_vencimiento >= CURRENT_DATE
+    AND i.fecha_vencimiento > CURRENT_DATE 
     AND (i.sucursal_id = $2 OR s.multisucursal = true)
   `, [personaId, sucursalId]);
   
@@ -129,9 +129,9 @@ exports.registerMember = async (registrationData) => {
     for (const servicio of serviciosInfo) {
       // Verificar si ya existe una inscripción activa para este servicio
       const existingSubscription = await client.query(`
-        SELECT id, ingresos_disponibles FROM inscripciones 
+        SELECT id, ingresos_disponibles, fecha_vencimiento FROM inscripciones 
         WHERE persona_id = $1 AND servicio_id = $2 
-        AND estado = 1 AND fecha_vencimiento >= CURRENT_DATE
+        AND estado = 1 AND fecha_vencimiento > CURRENT_DATE  -- MODIFICADO: Solo considerar activas las que vencen en el futuro
         AND (sucursal_id = $3 OR (SELECT multisucursal FROM servicios WHERE id = $2) = true)
       `, [personaId, servicio.servicioId, registrationData.sucursalId]);
       
