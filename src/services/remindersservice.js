@@ -7,25 +7,25 @@ const getNewMembers = async (sucursalId) => {
     console.log("Buscando nuevos miembros para hoy en sucursal:", sucursalId);
     
     const result = await query(`
-  SELECT 
-    p.id,
-    CONCAT(p.nombres, ' ', p.apellidos) as nombre,
-    p.telefono,
-    s.nombre as servicio,
-    i.fecha_inicio as "fechaRegistro",
-    CONCAT(
-      '¡Bienvenido/a a MUTANT GYM ', p.nombres, '! 🏋️‍♂️ ',
-      'Estamos emocionados de tenerte en nuestra familia fitness. ',
-      'Tu membresía ', s.nombre, ' está activa. ¡Comencemos a entrenar! 🔥'
-    ) as mensaje
-  FROM personas p
-  INNER JOIN inscripciones i ON p.id = i.persona_id
-  INNER JOIN servicios s ON i.servicio_id = s.id
-  WHERE i.fecha_inicio::date = (NOW() AT TIME ZONE 'America/La_Paz')::date
-  AND i.estado = 1
-  AND i.sucursal_id = $1
-  ORDER BY i.fecha_inicio DESC
-`, [sucursalId]);
+      SELECT DISTINCT ON (p.id, s.id)
+        p.id,
+        CONCAT(p.nombres, ' ', p.apellidos) as nombre,
+        p.telefono,
+        s.nombre as servicio,
+        i.fecha_inicio as "fechaRegistro",
+        CONCAT(
+          '¡Bienvenido/a a MUTANT GYM ', p.nombres, '! 🏋️‍♂️ ',
+          'Estamos emocionados de tenerte en nuestra familia fitness. ',
+          'Tu membresía ', s.nombre, ' está activa. ¡Comencemos a entrenar! 🔥'
+        ) as mensaje
+      FROM personas p
+      INNER JOIN inscripciones i ON p.id = i.persona_id
+      INNER JOIN servicios s ON i.servicio_id = s.id
+      WHERE i.fecha_inicio::date = (NOW() AT TIME ZONE 'America/La_Paz')::date
+      AND i.estado = 1
+      AND i.sucursal_id = $1
+      ORDER BY p.id, s.id, i.fecha_inicio DESC
+    `, [sucursalId]);
 
     console.log("Nuevos miembros encontrados:", result.rows.length);
     
@@ -49,8 +49,9 @@ const getNewMembers = async (sucursalId) => {
       console.log("Datos de prueba (últimos 7 días):", testResult.rows);
     }
     
-    return result.rows.map(row => ({
-      id: row.id.toString(),
+    return result.rows.map((row, index) => ({
+      id: `${row.id}_${index}`, // ID único para React
+      personaId: row.id, // ID original de la persona
       nombre: row.nombre,
       telefono: row.telefono,
       servicio: row.servicio,
@@ -69,34 +70,34 @@ const getExpiringMembers = async (sucursalId) => {
     console.log("Buscando miembros próximos a vencer en sucursal:", sucursalId);
     
     const result = await query(`
-  SELECT 
-    p.id,
-    CONCAT(p.nombres, ' ', p.apellidos) as nombre,
-    p.telefono,
-    s.nombre as servicio,
-    i.fecha_vencimiento as "fechaVencimiento",
-    (i.fecha_vencimiento::date - (NOW() AT TIME ZONE 'America/La_Paz')::date) as dias_restantes,
-    CONCAT(
-      '¡Hola ', p.nombres, '! 👋 ',
-      'Tu membresía ', s.nombre, ' en MUTANT GYM vence el ', 
-      TO_CHAR(i.fecha_vencimiento, 'DD/MM/YYYY'), 
-      '. ¡Renuévala para seguir entrenando sin interrupciones! 💪'
-    ) as mensaje
-  FROM personas p
-  INNER JOIN inscripciones i ON p.id = i.persona_id
-  INNER JOIN servicios s ON i.servicio_id = s.id
-  WHERE i.fecha_vencimiento::date BETWEEN (NOW() AT TIME ZONE 'America/La_Paz')::date
-    AND ((NOW() AT TIME ZONE 'America/La_Paz')::date + INTERVAL '3 days')
-  AND i.estado = 1
-  AND i.sucursal_id = $1
-  ORDER BY i.fecha_vencimiento ASC
-`, [sucursalId]);
-
+      SELECT DISTINCT ON (p.id, s.id)
+        p.id,
+        CONCAT(p.nombres, ' ', p.apellidos) as nombre,
+        p.telefono,
+        s.nombre as servicio,
+        i.fecha_vencimiento as "fechaVencimiento",
+        (i.fecha_vencimiento::date - (NOW() AT TIME ZONE 'America/La_Paz')::date) as dias_restantes,
+        CONCAT(
+          '¡Hola ', p.nombres, '! 👋 ',
+          'Tu membresía ', s.nombre, ' en MUTANT GYM vence el ', 
+          TO_CHAR(i.fecha_vencimiento, 'DD/MM/YYYY'), 
+          '. ¡Renuévala para seguir entrenando sin interrupciones! 💪'
+        ) as mensaje
+      FROM personas p
+      INNER JOIN inscripciones i ON p.id = i.persona_id
+      INNER JOIN servicios s ON i.servicio_id = s.id
+      WHERE i.fecha_vencimiento::date BETWEEN (NOW() AT TIME ZONE 'America/La_Paz')::date
+        AND ((NOW() AT TIME ZONE 'America/La_Paz')::date + INTERVAL '3 days')
+      AND i.estado = 1
+      AND i.sucursal_id = $1
+      ORDER BY p.id, s.id, i.fecha_vencimiento ASC
+    `, [sucursalId]);
 
     console.log("Miembros próximos a vencer encontrados:", result.rows.length);
     
-    return result.rows.map(row => ({
-      id: row.id.toString(),
+    return result.rows.map((row, index) => ({
+      id: `${row.id}_${index}_expiring`, // ID único para React
+      personaId: row.id, // ID original de la persona
       nombre: row.nombre,
       telefono: row.telefono,
       servicio: row.servicio,
@@ -121,7 +122,7 @@ const getBirthdayMembers = async (sucursalId) => {
     console.log("Buscando cumpleañeros para el día:", day, "mes:", month, "en sucursal:", sucursalId);
     
     const result = await query(`
-      SELECT 
+      SELECT DISTINCT ON (p.id)
         p.id,
         CONCAT(p.nombres, ' ', p.apellidos) as nombre,
         p.telefono,
@@ -140,13 +141,14 @@ const getBirthdayMembers = async (sucursalId) => {
       AND EXTRACT(DAY FROM p.fecha_nacimiento) = $2
       AND i.estado = 1
       AND i.sucursal_id = $3
-      ORDER BY p.nombres ASC
+      ORDER BY p.id, p.nombres ASC
     `, [month, day, sucursalId]);
 
     console.log("Cumpleañeros encontrados:", result.rows.length);
     
-    return result.rows.map(row => ({
-      id: row.id.toString(),
+    return result.rows.map((row, index) => ({
+      id: `${row.id}_${index}_birthday`, // ID único para React
+      personaId: row.id, // ID original de la persona
       nombre: row.nombre,
       telefono: row.telefono,
       servicio: row.servicio,
