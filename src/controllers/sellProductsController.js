@@ -78,9 +78,9 @@ const processSale = async (req, res) => {
       });
     }
     
-    if (typeof saleData.total !== 'number' || saleData.total <= 0) {
+    if (typeof saleData.total !== 'number' || saleData.total < 0) {
       return res.status(400).json({ 
-        error: "El total de la venta debe ser mayor a 0" 
+        error: "El total de la venta no puede ser negativo" 
       });
     }
     
