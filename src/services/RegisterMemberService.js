@@ -243,46 +243,38 @@ exports.registerMember = async (registrationData) => {
     
     // Solo procesar transacciones de caja y estado de caja para pagos en efectivo o la parte efectivo del pago mixto
     if (registrationData.formaPago === 'efectivo' || registrationData.formaPago === 'mixto') {
-      const montoEfectivo = registrationData.formaPago === 'efectivo' 
-        ? registrationData.total 
-        : registrationData.montoEfectivo;
-      
-      // Obtener el último estado de caja para el monto inicial
-      const lastCashStatus = await client.query(`
-        SELECT id as estado_caja_id, monto_final 
-        FROM estado_caja 
-        WHERE caja_id = $1 
-        ORDER BY id DESC 
-        LIMIT 1
-      `, [registrationData.cajaId]);
-      
-      const montoInicial = lastCashStatus.rows.length > 0 ? lastCashStatus.rows[0].monto_final : 0;
-      const estadoCajaIdExistente = lastCashStatus.rows.length > 0 ? lastCashStatus.rows[0].estado_caja_id : null;
-      
-      // Actualizar estado_caja (solo para efectivo)
-      const montoFinal = parseFloat(montoInicial) + parseFloat(montoEfectivo);
-      
-      const estadoCajaResult = await client.query(`
-        INSERT INTO estado_caja (caja_id, estado, monto_inicial, monto_final, usuario_id)
-        VALUES ($1, 'abierta', $2, $3, $4)
-        RETURNING id
-      `, [registrationData.cajaId, montoInicial, montoFinal, registrationData.empleadoId]);
-      
-      const nuevoEstadoCajaId = estadoCajaResult.rows[0].id;
-      
-      // Registrar transacción de caja (solo para efectivo) con referencia al estado_caja
-      await client.query(`
-        INSERT INTO transacciones_caja (caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id)
-        VALUES ($1, $2, 'ingreso', 'Venta de servicio', $3, TIMEZONE('America/La_Paz', NOW()), $4)
-      `, [registrationData.cajaId, nuevoEstadoCajaId, montoEfectivo, registrationData.empleadoId]);
-      
-      // Si había un estado de caja anterior, actualizarlo a cerrado
-      if (estadoCajaIdExistente) {
-        await client.query(`
-          UPDATE estado_caja SET estado = 'cerrada' WHERE id = $1
-        `, [estadoCajaIdExistente]);
-      }
-    }
+  const montoEfectivo = registrationData.formaPago === 'efectivo' 
+    ? registrationData.total 
+    : registrationData.montoEfectivo;
+  
+  // Obtener el último estado de caja para el monto inicial
+  const lastCashStatus = await client.query(`
+    SELECT id as estado_caja_id, monto_final 
+    FROM estado_caja 
+    WHERE caja_id = $1 
+    ORDER BY id DESC 
+    LIMIT 1
+  `, [registrationData.cajaId]);
+  
+  const montoInicial = lastCashStatus.rows.length > 0 ? lastCashStatus.rows[0].monto_final : 0;
+  
+  // Crear NUEVO estado_caja con el monto_inicial = último monto_final
+  const montoFinal = parseFloat(montoInicial) + parseFloat(montoEfectivo);
+  
+  const estadoCajaResult = await client.query(`
+    INSERT INTO estado_caja (caja_id, estado, monto_inicial, monto_final, usuario_id)
+    VALUES ($1, 'abierta', $2, $3, $4)
+    RETURNING id
+  `, [registrationData.cajaId, montoInicial, montoFinal, registrationData.empleadoId]);
+  
+  const nuevoEstadoCajaId = estadoCajaResult.rows[0].id;
+  
+  // Registrar transacción de caja (solo para efectivo) con referencia al NUEVO estado_caja
+  await client.query(`
+    INSERT INTO transacciones_caja (caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id)
+    VALUES ($1, $2, 'ingreso', 'Venta de servicio', $3, TIMEZONE('America/La_Paz', NOW()), $4)
+  `, [registrationData.cajaId, nuevoEstadoCajaId, montoEfectivo, registrationData.empleadoId]);
+}
     
     await client.query('COMMIT');
     
