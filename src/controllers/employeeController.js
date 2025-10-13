@@ -145,9 +145,31 @@ exports.toggleEmployeeStatus = async (req, res) => {
 exports.registerFingerprint = async (req, res) => {
   try {
     const { id } = req.params;
-    await employeeService.registerFingerprint(id);
-    res.status(200).json({ message: "Huella registrada exitosamente" });
+    const { fingerprint_data, format, quality, timestamp } = req.body;
+    
+    // Validaciones
+    if (!fingerprint_data) {
+      return res.status(400).json({ message: "Los datos de la huella son obligatorios" });
+    }
+    
+    if (!format) {
+      return res.status(400).json({ message: "El formato de la huella es obligatorio" });
+    }
+
+    const result = await employeeService.registerFingerprint(id, {
+      fingerprint_data,
+      format,
+      quality: quality || 80,
+      timestamp: timestamp || new Date().toISOString()
+    });
+    
+    res.status(200).json({ 
+      message: "Huella registrada exitosamente",
+      employeeId: id,
+      hasFingerprint: true
+    });
   } catch (error) {
+    console.error("Error en registerFingerprint:", error);
     res.status(400).json({ message: error.message });
   }
 };

@@ -1,5 +1,6 @@
 const { query, pool } = require("../../db");
 const bcrypt = require("bcrypt");
+const zlib = require('zlib');
 
 exports.getBranches = async () => {
   const result = await query(
@@ -32,7 +33,7 @@ exports.getEmployees = async () => {
       e.hora_ingreso,
       e.hora_salida,
       e.estado,
-      (p.huella_digital IS NOT NULL) as tiene_huella,
+      (p.huella_digital IS NOT NULL AND LENGTH(p.huella_digital) > 0) as tiene_huella,
       u.username
     FROM empleados e
     INNER JOIN personas p ON e.persona_id = p.id
@@ -271,25 +272,88 @@ exports.toggleEmployeeStatus = async (id) => {
   return updatedEmployee;
 };
 
-exports.registerFingerprint = async (id) => {
-  const empleadoResult = await query(
-    'SELECT persona_id FROM empleados WHERE id = $1',
-    [id]
-  );
+exports.registerFingerprint = async (employeeId, fingerprintData) => {
+  const { fingerprint_data, format, quality, timestamp } = fingerprintData;
   
-  if (empleadoResult.rows.length === 0) {
-    throw new Error('Empleado no encontrado');
-  }
+  const client = await pool.connect();
   
-  const personaId = empleadoResult.rows[0].persona_id;
-  
-  // Simular registro de huella
-  await query(
-    'UPDATE personas SET huella_digital = $1 WHERE id = $2',
-    [Buffer.from('simulated_fingerprint_data'), personaId]
-  );
-};
+  try {
+    await client.query('BEGIN');
 
+    // 1. Obtener el persona_id del empleado
+    const empleadoResult = await client.query(
+      'SELECT persona_id FROM empleados WHERE id = $1',
+      [employeeId]
+    );
+    
+    if (empleadoResult.rows.length === 0) {
+      throw new Error('Empleado no encontrado');
+    }
+    
+    const personaId = empleadoResult.rows[0].persona_id;
+
+    // 2. COMPRIMIR los datos de la huella antes de guardar
+    let huellaBuffer;
+    
+    if (format === 'png' || format === 'wsq') {
+      let imageData = fingerprint_data;
+      
+      // Extraer base64 si viene en data URL
+      if (fingerprint_data.startsWith('data:')) {
+        imageData = fingerprint_data.split(',')[1];
+      }
+      
+      // Decodificar base64 y comprimir
+      const originalBuffer = Buffer.from(imageData, 'base64');
+      huellaBuffer = await new Promise((resolve, reject) => {
+        zlib.gzip(originalBuffer, (err, compressed) => {
+          if (err) reject(err);
+          else resolve(compressed);
+        });
+      });
+      
+    } else if (format === 'raw') {
+      // Comprimir datos RAW
+      const originalBuffer = Buffer.from(fingerprint_data);
+      huellaBuffer = await new Promise((resolve, reject) => {
+        zlib.gzip(originalBuffer, (err, compressed) => {
+          if (err) reject(err);
+          else resolve(compressed);
+        });
+      });
+    } else {
+      huellaBuffer = Buffer.from(fingerprint_data);
+    }
+
+    console.log(`📦 Huella comprimida: ${huellaBuffer.length} bytes`);
+
+    // 3. Actualizar la huella digital COMPRIMIDA
+    await client.query(
+      `UPDATE personas 
+       SET huella_digital = $1 
+       WHERE id = $2`,
+      [huellaBuffer, personaId]
+    );
+
+    await client.query('COMMIT');
+
+    return {
+      success: true,
+      employeeId: employeeId,
+      personaId: personaId,
+      format: format,
+      quality: quality,
+      timestamp: timestamp,
+      compressedSize: huellaBuffer.length
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error('Error en registerFingerprint:', error);
+    throw new Error(`Error al registrar huella: ${error.message}`);
+  } finally {
+    client.release();
+  }
+};
 exports.getEmployeeById = async (id) => {
   const result = await query(`
     SELECT 
@@ -307,7 +371,7 @@ exports.getEmployeeById = async (id) => {
       e.hora_ingreso,
       e.hora_salida,
       e.estado,
-      (p.huella_digital IS NOT NULL) as tiene_huella,
+      (p.huella_digital IS NOT NULL AND LENGTH(p.huella_digital) > 0) as tiene_huella,
       u.username
     FROM empleados e
     INNER JOIN personas p ON e.persona_id = p.id
