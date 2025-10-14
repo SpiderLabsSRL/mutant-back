@@ -55,6 +55,7 @@ const RegisterMemberRoutes = require("./src/routes/RegisterMemberRoutes");
 const salesControlRoutes = require('./src/routes/salescontrolRoutes');
 const newtransactionRoutes = require('./src/routes/newtransactionRoutes');
 const sellProductsRoutes = require("./src/routes/sellProductsRoutes");
+const fingerprintRecognitionRoutes = require('./src/routes/fingerprintRecognitionRoutes');
 
 // ✅ CONFIGURACIÓN CORREGIDA: Usar las rutas SIN duplicar middleware
 app.use("/api/reminders", remindersRoutes);
@@ -70,6 +71,7 @@ app.use("/api/inscription", RegisterMemberRoutes);
 app.use('/api/sales', salesControlRoutes);
 app.use('/api', newtransactionRoutes);
 app.use("/api/sell-products", sellProductsRoutes);
+app.use('/api/fingerprint', fingerprintRecognitionRoutes);
 
 // Manejador de errores global
 app.use((err, req, res, next) => {

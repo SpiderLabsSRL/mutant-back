@@ -1,6 +1,5 @@
 const { query, pool } = require("../../db");
 const bcrypt = require("bcrypt");
-const zlib = require('zlib');
 
 exports.getBranches = async () => {
   const result = await query(
@@ -67,7 +66,6 @@ exports.createEmployee = async (employeeData) => {
   try {
     await client.query('BEGIN');
 
-    // 1. Crear persona
     const personaResult = await client.query(
       `INSERT INTO personas (nombres, apellidos, ci, telefono) 
        VALUES ($1, $2, $3, $4) RETURNING id`,
@@ -75,7 +73,6 @@ exports.createEmployee = async (employeeData) => {
     );
     const personaId = personaResult.rows[0].id;
 
-    // 2. Crear empleado (para admin, sucursal_id, horarioIngreso y horarioSalida son null)
     const empleadoResult = await client.query(
       `INSERT INTO empleados (persona_id, rol, sucursal_id, hora_ingreso, hora_salida, estado) 
        VALUES ($1, $2, $3, $4, $5, 1) RETURNING id`,
@@ -84,7 +81,6 @@ exports.createEmployee = async (employeeData) => {
     );
     const empleadoId = empleadoResult.rows[0].id;
 
-    // 3. Asignar caja solo para recepcionista
     if (caja_id && cargo === "recepcionista") {
       await client.query(
         `INSERT INTO empleado_caja (empleado_id, caja_id, estado) 
@@ -93,7 +89,6 @@ exports.createEmployee = async (employeeData) => {
       );
     }
 
-    // 4. Crear usuario si es necesario (para admin y recepcionista)
     if (username && password && ['admin', 'recepcionista'].includes(cargo)) {
       const hashedPassword = await bcrypt.hash(password, 10);
       await client.query(
@@ -135,7 +130,6 @@ exports.updateEmployee = async (id, employeeData) => {
   try {
     await client.query('BEGIN');
 
-    // 1. Obtener el persona_id del empleado
     const empleadoResult = await client.query(
       'SELECT persona_id FROM empleados WHERE id = $1',
       [id]
@@ -147,14 +141,12 @@ exports.updateEmployee = async (id, employeeData) => {
     
     const personaId = empleadoResult.rows[0].persona_id;
 
-    // 2. Actualizar persona
     await client.query(
       `UPDATE personas SET nombres = $1, apellidos = $2, ci = $3, telefono = $4 
        WHERE id = $5`,
       [nombres, apellidos, ci, telefono, personaId]
     );
 
-    // 3. Actualizar empleado (para admin, sucursal_id, horarioIngreso y horarioSalida son null)
     await client.query(
       `UPDATE empleados SET rol = $1, sucursal_id = $2, hora_ingreso = $3, hora_salida = $4 
        WHERE id = $5`,
@@ -162,22 +154,18 @@ exports.updateEmployee = async (id, employeeData) => {
        cargo === "admin" ? null : horarioIngreso, cargo === "admin" ? null : horarioSalida, id]
     );
 
-    // 4. Manejar asignación de caja (solo para recepcionista)
     if (cargo === "recepcionista" && caja_id) {
-      // Verificar si ya existe una asignación
       const asignacionExistente = await client.query(
         'SELECT id FROM empleado_caja WHERE empleado_id = $1 AND estado = 1',
         [id]
       );
 
       if (asignacionExistente.rows.length > 0) {
-        // Actualizar asignación existente
         await client.query(
           'UPDATE empleado_caja SET caja_id = $1 WHERE empleado_id = $2 AND estado = 1',
           [caja_id, id]
         );
       } else {
-        // Crear nueva asignación
         await client.query(
           `INSERT INTO empleado_caja (empleado_id, caja_id, estado) 
            VALUES ($1, $2, 1)`,
@@ -185,23 +173,19 @@ exports.updateEmployee = async (id, employeeData) => {
         );
       }
     } else {
-      // Eliminar asignación de caja si el cargo ya no es recepcionista
       await client.query(
         'UPDATE empleado_caja SET estado = 0 WHERE empleado_id = $1',
         [id]
       );
     }
 
-    // 5. Manejar usuario (para admin y recepcionista)
     if (['admin', 'recepcionista'].includes(cargo)) {
-      // Verificar si ya existe un usuario
       const usuarioExistente = await client.query(
         'SELECT id FROM usuarios WHERE empleado_id = $1',
         [id]
       );
 
       if (usuarioExistente.rows.length > 0) {
-        // Actualizar usuario existente
         if (password) {
           const hashedPassword = await bcrypt.hash(password, 10);
           await client.query(
@@ -209,14 +193,12 @@ exports.updateEmployee = async (id, employeeData) => {
             [username, hashedPassword, id]
           );
         } else {
-          // Solo actualizar username si no se cambia la contraseña
           await client.query(
             'UPDATE usuarios SET username = $1 WHERE empleado_id = $2',
             [username, id]
           );
         }
       } else if (username && password) {
-        // Crear nuevo usuario
         const hashedPassword = await bcrypt.hash(password, 10);
         await client.query(
           `INSERT INTO usuarios (username, password_hash, empleado_id) 
@@ -225,7 +207,6 @@ exports.updateEmployee = async (id, employeeData) => {
         );
       }
     } else {
-      // Eliminar usuario si el cargo ya no requiere acceso
       await client.query(
         'DELETE FROM usuarios WHERE empleado_id = $1',
         [id]
@@ -273,14 +254,13 @@ exports.toggleEmployeeStatus = async (id) => {
 };
 
 exports.registerFingerprint = async (employeeId, fingerprintData) => {
-  const { fingerprint_data, format, quality, timestamp } = fingerprintData;
+  const { fingerprint_data, format, quality, timestamp, attempt, size, samples_count } = fingerprintData;
   
   const client = await pool.connect();
   
   try {
     await client.query('BEGIN');
 
-    // 1. Obtener el persona_id del empleado
     const empleadoResult = await client.query(
       'SELECT persona_id FROM empleados WHERE id = $1',
       [employeeId]
@@ -292,68 +272,54 @@ exports.registerFingerprint = async (employeeId, fingerprintData) => {
     
     const personaId = empleadoResult.rows[0].persona_id;
 
-    // 2. COMPRIMIR los datos de la huella antes de guardar
-    let huellaBuffer;
-    
-    if (format === 'png' || format === 'wsq') {
-      let imageData = fingerprint_data;
-      
-      // Extraer base64 si viene en data URL
-      if (fingerprint_data.startsWith('data:')) {
-        imageData = fingerprint_data.split(',')[1];
-      }
-      
-      // Decodificar base64 y comprimir
-      const originalBuffer = Buffer.from(imageData, 'base64');
-      huellaBuffer = await new Promise((resolve, reject) => {
-        zlib.gzip(originalBuffer, (err, compressed) => {
-          if (err) reject(err);
-          else resolve(compressed);
-        });
-      });
-      
-    } else if (format === 'raw') {
-      // Comprimir datos RAW
-      const originalBuffer = Buffer.from(fingerprint_data);
-      huellaBuffer = await new Promise((resolve, reject) => {
-        zlib.gzip(originalBuffer, (err, compressed) => {
-          if (err) reject(err);
-          else resolve(compressed);
-        });
-      });
-    } else {
-      huellaBuffer = Buffer.from(fingerprint_data);
+    if (quality < 60) {
+      throw new Error(`Calidad de huella insuficiente: ${quality}%. Se requiere mínimo 60%.`);
     }
 
-    console.log(`📦 Huella comprimida: ${huellaBuffer.length} bytes`);
+    console.log(`💾 Guardando datos RAW biométricos para empleado ${employeeId}:`, {
+      calidad: quality,
+      intento: attempt,
+      formato: format,
+      tamaño: size,
+      muestras: samples_count,
+      timestamp: timestamp
+    });
 
-    // 3. Actualizar la huella digital COMPRIMIDA
+    // Convertir datos RAW a Buffer directamente
+    const huellaBuffer = Buffer.from(fingerprint_data, 'base64');
+    
+    console.log(`💾 Guardando datos RAW - Tamaño: ${huellaBuffer.length} bytes`);
+
     await client.query(
       `UPDATE personas 
-       SET huella_digital = $1 
+       SET huella_digital = $1
        WHERE id = $2`,
       [huellaBuffer, personaId]
     );
 
     await client.query('COMMIT');
 
+    console.log(`✅ Datos RAW guardados exitosamente para persona_id: ${personaId}`);
+
     return {
       success: true,
       employeeId: employeeId,
       personaId: personaId,
-      format: format,
       quality: quality,
-      timestamp: timestamp,
-      compressedSize: huellaBuffer.length
+      attempt: attempt,
+      size: size,
+      samplesCount: samples_count,
+      timestamp: timestamp
     };
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('Error en registerFingerprint:', error);
-    throw new Error(`Error al registrar huella: ${error.message}`);
+    throw new Error(`Error al registrar datos biométricos: ${error.message}`);
   } finally {
     client.release();
   }
 };
+
 exports.getEmployeeById = async (id) => {
   const result = await query(`
     SELECT 
