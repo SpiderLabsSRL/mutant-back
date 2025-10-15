@@ -30,25 +30,3 @@ exports.getAllFingerprints = async (req, res) => {
   }
 };
 
-// NUEVO endpoint para diagnóstico
-exports.getFingerprintDiagnostic = async (req, res) => {
-  try {
-    console.log("🔍 Ejecutando diagnóstico de huellas...");
-
-    const result = await fingerprintRecognitionService.getFingerprintDiagnostic();
-    
-    res.status(200).json({
-      success: true,
-      diagnostic: result,
-      total: result.length,
-      message: "Diagnóstico completado"
-    });
-    
-  } catch (error) {
-    console.error("❌ Error en diagnóstico:", error);
-    res.status(400).json({ 
-      success: false,
-      message: error.message 
-    });
-  }
-};

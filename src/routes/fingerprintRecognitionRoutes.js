@@ -5,7 +5,5 @@ const fingerprintController = require('../controllers/fingerprintRecognitionCont
 // SOLO obtener huellas - la comparación se hace en el frontend
 router.get('/all-fingerprints', fingerprintController.getAllFingerprints);
 
-// NUEVA ruta para diagnóstico
-router.get('/diagnostic', fingerprintController.getFingerprintDiagnostic);
 
 module.exports = router;
