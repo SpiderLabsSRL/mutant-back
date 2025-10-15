@@ -253,11 +253,7 @@ exports.toggleEmployeeStatus = async (id) => {
   return updatedEmployee;
 };
 
-// REEMPLAZA solo la función registerFingerprint en tu employeeService.js:
-
-// FUNCIÓN CORREGIDA: Guardar datos EXACTAMENTE como vienen del frontend
-// REEMPLAZA solo la función registerFingerprint en employeeService.js:
-
+// FUNCIÓN CRÍTICAMENTE CORREGIDA - MANTENER FORMATO SDK DIGITALPERSONA
 exports.registerFingerprint = async (employeeId, fingerprintData) => {
   const { fingerprint_data, format, quality, timestamp, attempt, size, samples_count } = fingerprintData;
   
@@ -281,48 +277,32 @@ exports.registerFingerprint = async (employeeId, fingerprintData) => {
       throw new Error(`Calidad de huella insuficiente: ${quality}%. Se requiere mínimo 60%.`);
     }
 
-    console.log(`💾 Guardando datos biométricos para empleado ${employeeId}:`, {
+    console.log(`💾 Guardando datos biométricos en FORMATO SDK DIGITALPERSONA:`, {
+      employeeId: employeeId,
       calidad: quality,
       intento: attempt,
       formato: format,
-      tamaño_recibido: size,
-      muestras: samples_count,
+      tamaño_recibido: fingerprint_data.length,
       timestamp: timestamp
     });
 
-    // VALIDACIÓN CRÍTICA: Verificar que los datos sean base64 válido
+    // VALIDACIÓN CRÍTICA: Aceptar SOLO el formato que viene del frontend
     if (!fingerprint_data || fingerprint_data.length === 0) {
       throw new Error("Los datos de huella están vacíos o son inválidos");
     }
 
-    // VERIFICAR FORMATO BASE64
-    const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
-    if (!base64Regex.test(fingerprint_data)) {
-      throw new Error("Los datos de huella no están en formato base64 válido");
-    }
+    console.log(`📥 Datos recibidos - Longitud: ${fingerprint_data.length} caracteres`);
+    console.log(`🔍 Formato detectado: ${fingerprint_data.substring(0, 100)}...`);
 
-    console.log(`📥 Datos recibidos - Longitud: ${fingerprint_data.length} caracteres, Inicio: ${fingerprint_data.substring(0, 30)}...`);
+    // CRÍTICO: GUARDAR LOS DATOS EXACTAMENTE COMO VIENEN DEL SDK
+    // Sin conversiones, sin procesamiento - mantener formato original
+    const huellaBuffer = Buffer.from(fingerprint_data, 'utf8');
+    
+    console.log(`💾 Buffer creado - Tamaño: ${huellaBuffer.length} bytes`);
+    console.log(`🔍 Verificación - Primeros bytes: ${huellaBuffer.subarray(0, 20).join(', ')}`);
 
-    // CRÍTICO: Convertir base64 a Buffer SIN MODIFICACIONES
-    let huellaBuffer;
-    try {
-      huellaBuffer = Buffer.from(fingerprint_data, 'base64');
-      console.log(`💾 Buffer creado desde base64 - Tamaño: ${huellaBuffer.length} bytes`);
-      
-      // Validación del buffer
-      if (huellaBuffer.length === 0) {
-        throw new Error("Buffer vacío después de la conversión base64");
-      }
-      
-      console.log(`🔍 Verificación buffer - Primeros bytes: ${huellaBuffer.subarray(0, 10).join(', ')}`);
-      
-    } catch (bufferError) {
-      console.error(`❌ Error creando buffer desde base64: ${bufferError.message}`);
-      throw new Error(`Error procesando datos base64: ${bufferError.message}`);
-    }
-
-    // GUARDAR EN BASE DE DATOS
-    console.log(`💾 Guardando en BD - Tamaño buffer: ${huellaBuffer.length} bytes`);
+    // GUARDAR EN BASE DE DATOS - FORMATO ORIGINAL SDK
+    console.log(`💾 Guardando en BD - Formato SDK DigitalPersona`);
 
     const updateResult = await client.query(
       `UPDATE personas 
@@ -338,15 +318,15 @@ exports.registerFingerprint = async (employeeId, fingerprintData) => {
 
     await client.query('COMMIT');
 
-    console.log(`✅ Datos guardados exitosamente para persona_id: ${personaId}`);
+    console.log(`✅ Datos guardados EXITOSAMENTE en formato SDK DigitalPersona`);
     console.log(`📊 Resumen del guardado:`, {
       employeeId: employeeId,
       personaId: personaId,
       calidad: quality,
       intento: attempt,
       tamañoBuffer: huellaBuffer.length,
-      tamañoOriginal: size,
-      formato: format,
+      tamañoOriginal: fingerprint_data.length,
+      formato: 'sdk_digitalpersona_raw',
       timestamp: timestamp
     });
 
@@ -367,9 +347,10 @@ exports.registerFingerprint = async (employeeId, fingerprintData) => {
       attempt: attempt,
       bufferSize: huellaBuffer.length,
       storedSize: storedSize,
-      originalSize: size,
+      originalSize: fingerprint_data.length,
       samplesCount: samples_count,
       timestamp: timestamp,
+      format: 'sdk_digitalpersona_raw',
       verified: storedSize > 0
     };
   } catch (error) {

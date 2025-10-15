@@ -1,15 +1,13 @@
-// VERIFICA que tu fingerprintRecognitionService.js tenga esto:
-
 const { query, pool } = require("../../db");
 
-// SOLO obtener huellas - NO comparar
+// FUNCIÓN CORREGIDA: Obtener huellas en formato SDK DigitalPersona
 exports.getAllFingerprints = async () => {
   const client = await pool.connect();
   
   try {
-    console.log("🔍 Obteniendo todas las huellas registradas...");
+    console.log("🔍 Obteniendo huellas en FORMATO SDK DIGITALPERSONA...");
 
-    // CONSULTA CORREGIDA: Usar formato consistente
+    // CONSULTA QUE MANTIENE EL FORMATO ORIGINAL
     const result = await client.query(`
       SELECT 
         p.id as persona_id,
@@ -17,8 +15,8 @@ exports.getAllFingerprints = async () => {
         p.apellidos,
         p.ci,
         p.telefono,
-        -- CRÍTICO: Convertir bytea a base64 de manera consistente
-        ENCODE(p.huella_digital, 'base64') as huella_digital,
+        -- CRÍTICO: Obtener los datos EXACTAMENTE como se guardaron (formato SDK)
+        CONVERT_FROM(p.huella_digital, 'UTF8') as huella_digital,
         LENGTH(p.huella_digital) as data_size,
         e.id as empleado_id,
         e.rol,
@@ -40,89 +38,128 @@ exports.getAllFingerprints = async () => {
       LEFT JOIN sucursales s ON e.sucursal_id = s.id
       WHERE p.huella_digital IS NOT NULL 
         AND LENGTH(p.huella_digital) > 0
-        AND p.huella_digital IS DISTINCT FROM DECODE('', 'escape')
       ORDER BY p.nombres, p.apellidos
     `);
 
-    console.log(`📋 ${result.rows.length} huellas encontradas en la base de datos`);
+    console.log(`📋 ${result.rows.length} huellas encontradas en formato SDK`);
 
-    // VALIDACIÓN CRÍTICA: Verificar formato de cada huella
-    const fingerprints = result.rows.map((row, index) => {
-      const huellaData = row.huella_digital;
-      
-      // Verificar que los datos sean base64 válido
-      if (!huellaData || typeof huellaData !== 'string') {
-        console.error(`❌ Huella ${index + 1} tiene datos inválidos:`, {
-          persona: `${row.nombres} ${row.apellidos}`,
-          tipo: typeof huellaData
-        });
+    // VALIDAR Y PREPARAR DATOS EN FORMATO SDK
+    const fingerprints = result.rows.map(row => {
+      // Verificar que existan datos en formato SDK
+      if (!row.huella_digital || row.huella_digital.length === 0) {
+        console.warn(`⚠️ Huella vacía para: ${row.nombres} ${row.apellidos}`);
         return null;
       }
 
-      // Verificar formato base64
-      const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
-      if (!base64Regex.test(huellaData)) {
-        console.error(`❌ Huella ${index + 1} no está en base64 válido:`, {
-          persona: `${row.nombres} ${row.apellidos}`,
-          length: huellaData.length,
-          preview: huellaData.substring(0, 30)
-        });
-        return null;
-      }
+      console.log(`🔍 Huella ${row.nombres}:`, {
+        tamaño: row.data_size,
+        formato: 'sdk_digitalpersona',
+        inicio_datos: row.huella_digital.substring(0, 100)
+      });
 
       return {
-        ...row,
-        huella_digital: huellaData, // Mantener base64
+        persona_id: row.persona_id,
+        nombres: row.nombres,
+        apellidos: row.apellidos,
+        ci: row.ci,
+        telefono: row.telefono,
+        huella_digital: row.huella_digital, // FORMATO SDK ORIGINAL
         data_size: parseInt(row.data_size) || 0,
-        formato_verificado: true
+        empleado_id: row.empleado_id,
+        rol: row.rol,
+        sucursal_id: row.sucursal_id,
+        sucursal_nombre: row.sucursal_nombre,
+        tipo: row.tipo,
+        inscripciones_activas: row.inscripciones_activas || 0,
+        formato: 'sdk_digitalpersona_raw' // INDICAR FORMATO
       };
-    }).filter(Boolean); // Filtrar huellas inválidas
+    }).filter(Boolean);
 
-    console.log(`✅ ${fingerprints.length} huellas válidas después de validación`);
-
-    // Log para verificar formato
-    if (fingerprints.length > 0) {
-      const sample = fingerprints[0];
-      console.log(`🔍 Ejemplo huella válida:`, {
-        persona: `${sample.nombres} ${sample.apellidos}`,
-        tamaño: sample.data_size,
-        formato: 'base64',
-        inicio_datos: sample.huella_digital.substring(0, 30) + '...'
-      });
-    }
+    console.log(`✅ ${fingerprints.length} huellas preparadas en formato SDK DigitalPersona`);
 
     return fingerprints;
 
   } catch (error) {
-    console.error('❌ Error obteniendo huellas:', error);
+    console.error('❌ Error obteniendo huellas SDK:', error);
     throw new Error(`Error al obtener huellas: ${error.message}`);
   } finally {
     client.release();
   }
 };
 
-// NUEVA función para diagnóstico de formato
-exports.getFingerprintFormatDiagnostic = async () => {
+// FUNCIÓN ALTERNATIVA para PostgreSQL sin CONVERT_FROM
+exports.getAllFingerprintsRaw = async () => {
   const client = await pool.connect();
   
   try {
+    console.log("🔍 Obteniendo huellas en formato RAW SDK...");
+
     const result = await client.query(`
       SELECT 
-        p.id,
+        p.id as persona_id,
         p.nombres,
         p.apellidos,
-        LENGTH(p.huella_digital) as raw_size,
-        LENGTH(ENCODE(p.huella_digital, 'base64')) as base64_size,
-        SUBSTRING(ENCODE(p.huella_digital, 'base64') FROM 1 FOR 30) as base64_preview,
-        (p.huella_digital IS NOT NULL AND LENGTH(p.huella_digital) > 0) as has_data
+        p.ci,
+        p.telefono,
+        -- Alternativa: usar ENCODE pero mantener formato
+        ENCODE(p.huella_digital, 'escape') as huella_digital,
+        LENGTH(p.huella_digital) as data_size,
+        e.id as empleado_id,
+        e.rol,
+        e.sucursal_id,
+        s.nombre as sucursal_nombre,
+        CASE 
+          WHEN e.id IS NOT NULL THEN 'empleado' 
+          ELSE 'cliente' 
+        END as tipo,
+        (
+          SELECT COUNT(*) 
+          FROM inscripciones i 
+          WHERE i.persona_id = p.id 
+          AND i.estado = 1 
+          AND i.fecha_vencimiento >= CURRENT_DATE
+        ) as inscripciones_activas
       FROM personas p
-      WHERE p.huella_digital IS NOT NULL
-      LIMIT 5
+      LEFT JOIN empleados e ON p.id = e.persona_id AND e.estado = 1
+      LEFT JOIN sucursales s ON e.sucursal_id = s.id
+      WHERE p.huella_digital IS NOT NULL 
+        AND LENGTH(p.huella_digital) > 0
+      ORDER BY p.nombres, p.apellidos
     `);
 
-    return result.rows;
+    console.log(`📋 ${result.rows.length} huellas RAW SDK obtenidas`);
+
+    const fingerprints = result.rows.map(row => ({
+      persona_id: row.persona_id,
+      nombres: row.nombres,
+      apellidos: row.apellidos,
+      ci: row.ci,
+      telefono: row.telefono,
+      huella_digital: row.huella_digital, // Mantener formato original
+      data_size: parseInt(row.data_size) || 0,
+      empleado_id: row.empleado_id,
+      rol: row.rol,
+      sucursal_id: row.sucursal_id,
+      sucursal_nombre: row.sucursal_nombre,
+      tipo: row.tipo,
+      inscripciones_activas: row.inscripciones_activas || 0,
+      formato: 'sdk_digitalpersona_raw'
+    }));
+
+    // Log de diagnóstico
+    fingerprints.forEach((fp, index) => {
+      console.log(`🔍 Huella RAW ${index + 1}:`, {
+        persona: `${fp.nombres} ${fp.apellidos}`,
+        tamaño: fp.data_size,
+        formato: fp.formato,
+        inicio_datos: fp.huella_digital ? `${fp.huella_digital.substring(0, 50)}...` : 'VACÍA'
+      });
+    });
+
+    return fingerprints;
+
   } catch (error) {
-    console.error('❌ Error en diagnóstico:', error);
+    console.error('❌ Error obteniendo huellas RAW SDK:', error);
     throw error;
   } finally {
     client.release();
