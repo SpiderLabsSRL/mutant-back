@@ -1,9 +1,11 @@
-const express = require("express");
+const express = require('express');
 const router = express.Router();
-const fingerprintRecognitionController = require("../controllers/fingerprintRecognitionController");
+const fingerprintController = require('../controllers/fingerprintRecognitionController');
 
-// Ruta para reconocimiento de huellas
-router.post("/recognize", fingerprintRecognitionController.recognizeFingerprint);
+// SOLO obtener huellas - la comparación se hace en el frontend
+router.get('/all-fingerprints', fingerprintController.getAllFingerprints);
 
+// ELIMINAR la ruta de reconocimiento
+// router.post('/recognize', fingerprintController.recognizeFingerprint);
 
 module.exports = router;

@@ -253,6 +253,11 @@ exports.toggleEmployeeStatus = async (id) => {
   return updatedEmployee;
 };
 
+// REEMPLAZA solo la función registerFingerprint en tu employeeService.js:
+
+// FUNCIÓN CORREGIDA: Guardar datos EXACTAMENTE como vienen del frontend
+// REEMPLAZA solo la función registerFingerprint en employeeService.js:
+
 exports.registerFingerprint = async (employeeId, fingerprintData) => {
   const { fingerprint_data, format, quality, timestamp, attempt, size, samples_count } = fingerprintData;
   
@@ -276,30 +281,83 @@ exports.registerFingerprint = async (employeeId, fingerprintData) => {
       throw new Error(`Calidad de huella insuficiente: ${quality}%. Se requiere mínimo 60%.`);
     }
 
-    console.log(`💾 Guardando datos RAW biométricos para empleado ${employeeId}:`, {
+    console.log(`💾 Guardando datos biométricos para empleado ${employeeId}:`, {
       calidad: quality,
       intento: attempt,
       formato: format,
-      tamaño: size,
+      tamaño_recibido: size,
       muestras: samples_count,
       timestamp: timestamp
     });
 
-    // Convertir datos RAW a Buffer directamente
-    const huellaBuffer = Buffer.from(fingerprint_data, 'base64');
-    
-    console.log(`💾 Guardando datos RAW - Tamaño: ${huellaBuffer.length} bytes`);
+    // VALIDACIÓN CRÍTICA: Verificar que los datos sean base64 válido
+    if (!fingerprint_data || fingerprint_data.length === 0) {
+      throw new Error("Los datos de huella están vacíos o son inválidos");
+    }
 
-    await client.query(
+    // VERIFICAR FORMATO BASE64
+    const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
+    if (!base64Regex.test(fingerprint_data)) {
+      throw new Error("Los datos de huella no están en formato base64 válido");
+    }
+
+    console.log(`📥 Datos recibidos - Longitud: ${fingerprint_data.length} caracteres, Inicio: ${fingerprint_data.substring(0, 30)}...`);
+
+    // CRÍTICO: Convertir base64 a Buffer SIN MODIFICACIONES
+    let huellaBuffer;
+    try {
+      huellaBuffer = Buffer.from(fingerprint_data, 'base64');
+      console.log(`💾 Buffer creado desde base64 - Tamaño: ${huellaBuffer.length} bytes`);
+      
+      // Validación del buffer
+      if (huellaBuffer.length === 0) {
+        throw new Error("Buffer vacío después de la conversión base64");
+      }
+      
+      console.log(`🔍 Verificación buffer - Primeros bytes: ${huellaBuffer.subarray(0, 10).join(', ')}`);
+      
+    } catch (bufferError) {
+      console.error(`❌ Error creando buffer desde base64: ${bufferError.message}`);
+      throw new Error(`Error procesando datos base64: ${bufferError.message}`);
+    }
+
+    // GUARDAR EN BASE DE DATOS
+    console.log(`💾 Guardando en BD - Tamaño buffer: ${huellaBuffer.length} bytes`);
+
+    const updateResult = await client.query(
       `UPDATE personas 
        SET huella_digital = $1
-       WHERE id = $2`,
+       WHERE id = $2
+       RETURNING id`,
       [huellaBuffer, personaId]
     );
 
+    if (updateResult.rows.length === 0) {
+      throw new Error("No se pudo actualizar el registro de la persona");
+    }
+
     await client.query('COMMIT');
 
-    console.log(`✅ Datos RAW guardados exitosamente para persona_id: ${personaId}`);
+    console.log(`✅ Datos guardados exitosamente para persona_id: ${personaId}`);
+    console.log(`📊 Resumen del guardado:`, {
+      employeeId: employeeId,
+      personaId: personaId,
+      calidad: quality,
+      intento: attempt,
+      tamañoBuffer: huellaBuffer.length,
+      tamañoOriginal: size,
+      formato: format,
+      timestamp: timestamp
+    });
+
+    // VERIFICAR ALMACENAMIENTO
+    const verificationResult = await client.query(
+      'SELECT LENGTH(huella_digital) as stored_size FROM personas WHERE id = $1',
+      [personaId]
+    );
+
+    const storedSize = verificationResult.rows[0]?.stored_size || 0;
+    console.log(`🔍 Verificación post-guardado - Tamaño en BD: ${storedSize} bytes`);
 
     return {
       success: true,
@@ -307,16 +365,69 @@ exports.registerFingerprint = async (employeeId, fingerprintData) => {
       personaId: personaId,
       quality: quality,
       attempt: attempt,
-      size: size,
+      bufferSize: huellaBuffer.length,
+      storedSize: storedSize,
+      originalSize: size,
       samplesCount: samples_count,
-      timestamp: timestamp
+      timestamp: timestamp,
+      verified: storedSize > 0
     };
   } catch (error) {
     await client.query('ROLLBACK');
-    console.error('Error en registerFingerprint:', error);
+    console.error('❌ Error en registerFingerprint:', error);
     throw new Error(`Error al registrar datos biométricos: ${error.message}`);
   } finally {
     client.release();
+  }
+};
+
+// FUNCIÓN NUEVA: Verificar datos de huella guardados
+exports.verifyFingerprintStorage = async (employeeId) => {
+  try {
+    const result = await query(`
+      SELECT 
+        p.id as persona_id,
+        p.nombres,
+        p.apellidos,
+        p.ci,
+        LENGTH(p.huella_digital) as huella_size,
+        (p.huella_digital IS NOT NULL AND LENGTH(p.huella_digital) > 0) as tiene_huella
+      FROM personas p
+      INNER JOIN empleados e ON p.id = e.persona_id
+      WHERE e.id = $1
+    `, [employeeId]);
+    
+    if (result.rows.length === 0) {
+      throw new Error('Empleado no encontrado');
+    }
+    
+    const persona = result.rows[0];
+    
+    console.log(`🔍 Verificación de huella para ${persona.nombres} ${persona.apellidos}:`, {
+      persona_id: persona.persona_id,
+      tiene_huella: persona.tiene_huella,
+      tamaño_huella: persona.huella_size
+    });
+    
+    return {
+      success: true,
+      persona: {
+        id: persona.persona_id,
+        nombres: persona.nombres,
+        apellidos: persona.apellidos,
+        ci: persona.ci
+      },
+      fingerprint: {
+        exists: persona.tiene_huella,
+        size: persona.huella_size
+      },
+      message: persona.tiene_huella 
+        ? `Huella almacenada correctamente (${persona.huella_size} bytes)`
+        : "No se encontró huella almacenada"
+    };
+  } catch (error) {
+    console.error('❌ Error verificando almacenamiento de huella:', error);
+    throw error;
   }
 };
 

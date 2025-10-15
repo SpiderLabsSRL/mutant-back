@@ -1,55 +1,25 @@
+// VERIFICA que tu fingerprintRecognitionService.js tenga esto:
+
 const { query, pool } = require("../../db");
 
-exports.recognizeFingerprint = async (recognitionData) => {
-  const { fingerprint_data, format, quality, size } = recognitionData;
-  
+// SOLO obtener huellas - NO comparar
+exports.getAllFingerprints = async () => {
   const client = await pool.connect();
   
   try {
-    await client.query('BEGIN');
+    console.log("🔍 Obteniendo todas las huellas registradas...");
 
-    console.log("🔍 Iniciando reconocimiento AVANZADO de huella...", {
-      format: format,
-      size: size || 'N/A',
-      quality: quality
-    });
-
-    // 1. Procesar la huella entrante (datos RAW)
-    let processedIncomingData = fingerprint_data;
-    
-    console.log(`📥 Datos recibidos - Longitud: ${processedIncomingData.length} caracteres`);
-    
-    // Verificar que los datos sean válidos
-    if (!processedIncomingData || processedIncomingData.length < 100) {
-      throw new Error("Datos de huella insuficientes o inválidos");
-    }
-
-    // Si es base64, convertirlo a buffer
-    let incomingBuffer;
-    try {
-      incomingBuffer = Buffer.from(processedIncomingData, 'base64');
-      console.log(`📦 Buffer creado - Tamaño: ${incomingBuffer.length} bytes`);
-    } catch (error) {
-      console.error("❌ Error creando buffer:", error);
-      throw new Error("Error procesando datos de huella: formato inválido");
-    }
-
-    // 2. Generar hash único de la huella entrante
-    console.log("🔧 Generando hash para huella entrante...");
-    const crypto = require('crypto');
-    const incomingHash = crypto.createHash('sha256').update(incomingBuffer).digest('hex');
-    
-    console.log(`📊 Hash generado: ${incomingHash.substring(0, 16)}...`);
-
-    // 3. Obtener todas las huellas registradas
-    const allFingerprints = await client.query(`
+    // CONSULTA CORREGIDA: Usar formato consistente
+    const result = await client.query(`
       SELECT 
         p.id as persona_id,
         p.nombres,
         p.apellidos,
         p.ci,
         p.telefono,
-        p.huella_digital,
+        -- CRÍTICO: Convertir bytea a base64 de manera consistente
+        ENCODE(p.huella_digital, 'base64') as huella_digital,
+        LENGTH(p.huella_digital) as data_size,
         e.id as empleado_id,
         e.rol,
         e.sucursal_id,
@@ -57,7 +27,14 @@ exports.recognizeFingerprint = async (recognitionData) => {
         CASE 
           WHEN e.id IS NOT NULL THEN 'empleado' 
           ELSE 'cliente' 
-        END as tipo
+        END as tipo,
+        (
+          SELECT COUNT(*) 
+          FROM inscripciones i 
+          WHERE i.persona_id = p.id 
+          AND i.estado = 1 
+          AND i.fecha_vencimiento >= CURRENT_DATE
+        ) as inscripciones_activas
       FROM personas p
       LEFT JOIN empleados e ON p.id = e.persona_id AND e.estado = 1
       LEFT JOIN sucursales s ON e.sucursal_id = s.id
@@ -67,168 +44,87 @@ exports.recognizeFingerprint = async (recognitionData) => {
       ORDER BY p.nombres, p.apellidos
     `);
 
-    console.log(`📋 ${allFingerprints.rows.length} huellas encontradas en la base de datos`);
+    console.log(`📋 ${result.rows.length} huellas encontradas en la base de datos`);
 
-    if (allFingerprints.rows.length === 0) {
-      await client.query('COMMIT');
-      return {
-        success: false,
-        confidence: 0,
-        message: "No hay huellas registradas en el sistema",
-        timestamp: new Date().toISOString()
-      };
-    }
-
-    // 4. COMPARACIÓN DIRECTA POR HASH Y DATOS RAW
-    let bestMatch = null;
-    let highestSimilarity = 0;
-    const SIMILARITY_THRESHOLD = 85;
-
-    console.log("🔍 Iniciando comparación directa de datos RAW...");
-
-    for (const storedFingerprint of allFingerprints.rows) {
-      try {
-        console.log(`\n🔄 Comparando con: ${storedFingerprint.nombres} ${storedFingerprint.apellidos}`);
-        
-        // Obtener datos RAW almacenados
-        const storedBuffer = storedFingerprint.huella_digital;
-        
-        if (!storedBuffer || storedBuffer.length === 0) {
-          console.log(`   ⚠️  Datos vacíos para ${storedFingerprint.nombres}`);
-          continue;
-        }
-
-        // Generar hash de los datos almacenados
-        const storedHash = crypto.createHash('sha256').update(storedBuffer).digest('hex');
-        console.log(`   🔑 Hash almacenado: ${storedHash.substring(0, 16)}...`);
-
-        // Comparación 1: Hash exacto (100% coincidencia)
-        if (incomingHash === storedHash) {
-          console.log(`   🎯 COINCIDENCIA EXACTA POR HASH - 100%`);
-          highestSimilarity = 100;
-          bestMatch = storedFingerprint;
-          break; // Coincidencia perfecta, salir del loop
-        }
-
-        // Comparación 2: Comparación de buffers (para datos similares)
-        let similarity = 0;
-        
-        // Comparar tamaño primero
-        const sizeSimilarity = calculateSizeSimilarity(incomingBuffer.length, storedBuffer.length);
-        
-        // Comparar contenido byte por byte (muestra representativa)
-        const contentSimilarity = calculateContentSimilarity(incomingBuffer, storedBuffer);
-        
-        // Calcular similitud total
-        similarity = (sizeSimilarity * 0.3) + (contentSimilarity * 0.7);
-        
-        console.log(`   📊 Similitud con ${storedFingerprint.nombres}: ${similarity.toFixed(2)}% (tamaño: ${sizeSimilarity.toFixed(2)}%, contenido: ${contentSimilarity.toFixed(2)}%)`);
-
-        if (similarity > highestSimilarity) {
-          highestSimilarity = similarity;
-          bestMatch = storedFingerprint;
-          console.log(`   🏆 Nueva mejor coincidencia: ${similarity.toFixed(2)}%`);
-        }
-      } catch (error) {
-        console.error(`   ❌ Error comparando con ${storedFingerprint.nombres}:`, error.message);
-        continue;
-      }
-    }
-
-    console.log(`\n📈 RESUMEN DE COMPARACIÓN:`);
-    console.log(`   Mejor coincidencia: ${bestMatch ? `${bestMatch.nombres} ${bestMatch.apellidos}` : 'Ninguna'}`);
-    console.log(`   Mejor similitud: ${highestSimilarity.toFixed(2)}%`);
-    console.log(`   Umbral requerido: ${SIMILARITY_THRESHOLD}%`);
-
-    // 5. Verificar si encontramos una coincidencia válida
-    if (!bestMatch || highestSimilarity < SIMILARITY_THRESHOLD) {
-      await client.query('COMMIT');
-      const bestMatchName = bestMatch ? `${bestMatch.nombres} ${bestMatch.apellidos}` : 'Nadie';
-      return {
-        success: false,
-        confidence: Math.round(highestSimilarity),
-        message: `Huella no reconocida. Mejor coincidencia: ${bestMatchName} (${highestSimilarity.toFixed(2)}%) - Se requiere ${SIMILARITY_THRESHOLD}%`,
-        timestamp: new Date().toISOString()
-      };
-    }
-
-    // 6. Preparar respuesta exitosa
-    const result = {
-      success: true,
-      persona: {
-        id: bestMatch.persona_id,
-        nombres: bestMatch.nombres,
-        apellidos: bestMatch.apellidos,
-        ci: bestMatch.ci,
-        telefono: bestMatch.telefono,
-        tipo: bestMatch.tipo
-      },
-      confidence: Math.round(highestSimilarity),
-      message: "Huella reconocida exitosamente",
-      timestamp: new Date().toISOString()
-    };
-
-    if (bestMatch.tipo === 'empleado' && bestMatch.empleado_id) {
-      result.empleado = {
-        id: bestMatch.empleado_id,
-        rol: bestMatch.rol,
-        sucursal_id: bestMatch.sucursal_id,
-        sucursal_nombre: bestMatch.sucursal_nombre
-      };
-    }
-
-    // Contar inscripciones activas para clientes
-    if (bestMatch.tipo === 'cliente') {
-      const inscripcionesResult = await client.query(`
-        SELECT COUNT(*) as activas 
-        FROM inscripciones 
-        WHERE persona_id = $1 
-        AND estado = 1 
-        AND fecha_vencimiento >= CURRENT_DATE
-      `, [bestMatch.persona_id]);
+    // VALIDACIÓN CRÍTICA: Verificar formato de cada huella
+    const fingerprints = result.rows.map((row, index) => {
+      const huellaData = row.huella_digital;
       
-      result.cliente = {
-        id: bestMatch.persona_id,
-        inscripciones_activas: parseInt(inscripcionesResult.rows[0].activas) || 0
+      // Verificar que los datos sean base64 válido
+      if (!huellaData || typeof huellaData !== 'string') {
+        console.error(`❌ Huella ${index + 1} tiene datos inválidos:`, {
+          persona: `${row.nombres} ${row.apellidos}`,
+          tipo: typeof huellaData
+        });
+        return null;
+      }
+
+      // Verificar formato base64
+      const base64Regex = /^[A-Za-z0-9+/]*={0,2}$/;
+      if (!base64Regex.test(huellaData)) {
+        console.error(`❌ Huella ${index + 1} no está en base64 válido:`, {
+          persona: `${row.nombres} ${row.apellidos}`,
+          length: huellaData.length,
+          preview: huellaData.substring(0, 30)
+        });
+        return null;
+      }
+
+      return {
+        ...row,
+        huella_digital: huellaData, // Mantener base64
+        data_size: parseInt(row.data_size) || 0,
+        formato_verificado: true
       };
+    }).filter(Boolean); // Filtrar huellas inválidas
+
+    console.log(`✅ ${fingerprints.length} huellas válidas después de validación`);
+
+    // Log para verificar formato
+    if (fingerprints.length > 0) {
+      const sample = fingerprints[0];
+      console.log(`🔍 Ejemplo huella válida:`, {
+        persona: `${sample.nombres} ${sample.apellidos}`,
+        tamaño: sample.data_size,
+        formato: 'base64',
+        inicio_datos: sample.huella_digital.substring(0, 30) + '...'
+      });
     }
 
-    await client.query('COMMIT');
-
-    console.log("✅ Reconocimiento EXITOSO:", {
-      persona: `${result.persona.nombres} ${result.persona.apellidos}`,
-      confidence: result.confidence,
-      tipo: result.persona.tipo
-    });
-
-    return result;
+    return fingerprints;
 
   } catch (error) {
-    await client.query('ROLLBACK');
-    console.error('❌ Error en reconocimiento de huella:', error);
-    throw new Error(`Error al reconocer huella: ${error.message}`);
+    console.error('❌ Error obteniendo huellas:', error);
+    throw new Error(`Error al obtener huellas: ${error.message}`);
   } finally {
     client.release();
   }
 };
 
-// Función para calcular similitud de tamaño
-function calculateSizeSimilarity(size1, size2) {
-  const diff = Math.abs(size1 - size2);
-  const maxSize = Math.max(size1, size2, 1);
-  return Math.max(0, 100 - (diff / maxSize) * 100);
-}
+// NUEVA función para diagnóstico de formato
+exports.getFingerprintFormatDiagnostic = async () => {
+  const client = await pool.connect();
+  
+  try {
+    const result = await client.query(`
+      SELECT 
+        p.id,
+        p.nombres,
+        p.apellidos,
+        LENGTH(p.huella_digital) as raw_size,
+        LENGTH(ENCODE(p.huella_digital, 'base64')) as base64_size,
+        SUBSTRING(ENCODE(p.huella_digital, 'base64') FROM 1 FOR 30) as base64_preview,
+        (p.huella_digital IS NOT NULL AND LENGTH(p.huella_digital) > 0) as has_data
+      FROM personas p
+      WHERE p.huella_digital IS NOT NULL
+      LIMIT 5
+    `);
 
-// Función para calcular similitud de contenido
-function calculateContentSimilarity(buffer1, buffer2) {
-  const sampleSize = Math.min(1000, buffer1.length, buffer2.length);
-  let matchingBytes = 0;
-  
-  for (let i = 0; i < sampleSize; i++) {
-    if (buffer1[i] === buffer2[i]) {
-      matchingBytes++;
-    }
+    return result.rows;
+  } catch (error) {
+    console.error('❌ Error en diagnóstico:', error);
+    throw error;
+  } finally {
+    client.release();
   }
-  
-  return (matchingBytes / sampleSize) * 100;
-}
+};
