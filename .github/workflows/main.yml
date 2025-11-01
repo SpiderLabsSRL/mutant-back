@@ -13,7 +13,7 @@ jobs:
     steps:
       - name: Hacer ping al backend
         run: |
-          curl -s -o /dev/null -w "Status: %{http_code}\n" https://mutant-back.onrender.com/api/products/products
+          curl -s -o /dev/null -w "Status: %{http_code}\n" https://mutant-back-r1pe.onrender.com/api/products/products
       - name: Registrar hora de ejecución
         run: |
           echo "Ping ejecutado a $(date -u) UTC"
