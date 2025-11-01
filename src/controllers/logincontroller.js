@@ -1,4 +1,3 @@
-// controllers/loginController.js
 const authService = require("../services/loginservice");
 const { generateToken } = require("../utils/jwtUtils");
 
@@ -19,6 +18,19 @@ const login = async (req, res) => {
     let userResponse = {};
     
     if (user.userType === 'empleado') {
+      // Obtener horario principal para compatibilidad
+      let horarioPrincipal = null;
+      if (user.horarios && user.horarios.length > 0) {
+        // Buscar horario de lunes a viernes (dia_semana = 1) como principal
+        const horarioLV = user.horarios.find(h => h.dia_semana === 1);
+        if (horarioLV) {
+          horarioPrincipal = horarioLV;
+        } else {
+          // Si no tiene horario de lunes a viernes, usar el primero disponible
+          horarioPrincipal = user.horarios[0];
+        }
+      }
+
       userResponse = {
         idpersona: user.idpersona,
         idempleado: user.idempleado,
@@ -26,13 +38,14 @@ const login = async (req, res) => {
         idcaja: user.idcaja,
         idsucursal: user.idsucursal,
         rol: user.rol,
-        hora_ingreso: user.hora_ingreso,
-        hora_salida: user.hora_salida,
+        hora_ingreso: horarioPrincipal ? horarioPrincipal.hora_ingreso : null,
+        hora_salida: horarioPrincipal ? horarioPrincipal.hora_salida : null,
         nombres: user.nombres,
         apellidos: user.apellidos,
         username: user.username,
         userType: user.userType,
-        sucursalNombre: user.sucursalNombre
+        sucursalNombre: user.sucursalNombre,
+        horarios: user.horarios // Enviar todos los horarios
       };
     } else {
       userResponse = {

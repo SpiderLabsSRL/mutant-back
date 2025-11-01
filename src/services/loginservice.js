@@ -1,4 +1,3 @@
-// services/loginservice.js
 const { query } = require("../../db");
 const bcrypt = require("bcrypt");
 
@@ -16,8 +15,6 @@ const authenticateUser = async (username, password) => {
         e.rol,
         e.estado as estado_empleado,
         e.sucursal_id as idsucursal,
-        e.hora_ingreso,
-        e.hora_salida,
         p.id as idpersona,
         p.nombres,
         p.apellidos,
@@ -63,7 +60,6 @@ const authenticateUser = async (username, password) => {
       
       // Asegurarnos de que tenemos el nombre de la sucursal
       if (!user.sucursalNombre && user.idsucursal) {
-        // Si no viene el nombre de sucursal pero tenemos el ID, buscarlo
         const sucursalResult = await query(
           "SELECT nombre FROM sucursales WHERE id = $1",
           [user.idsucursal]
@@ -72,11 +68,27 @@ const authenticateUser = async (username, password) => {
           user.sucursalNombre = sucursalResult.rows[0].nombre;
         }
       }
+
+      // OBTENER HORARIOS DESDE LA NUEVA TABLA horarios_empleado
+      if (user.rol !== 'admin') {
+        const horariosResult = await query(
+          `SELECT dia_semana, hora_ingreso, hora_salida 
+           FROM horarios_empleado 
+           WHERE empleado_id = $1 
+           ORDER BY dia_semana`,
+          [user.idempleado]
+        );
+        
+        user.horarios = horariosResult.rows;
+        console.log("Horarios encontrados para", user.username + ":", user.horarios);
+      } else {
+        // Para admin, no necesita horarios
+        user.horarios = [];
+      }
     }
 
     console.log("Usuario encontrado:", user.username, "Tipo:", userType, "Sucursal:", user.sucursalNombre);
 
-    // Resto del código sin cambios...
     // Verificar si el usuario está inactivo (solo para empleados)
     if (user.userType === 'empleado' && user.estado_empleado !== 1) {
       console.log("Usuario inactivo");
@@ -93,15 +105,23 @@ const authenticateUser = async (username, password) => {
       throw new Error("Contraseña incorrecta");
     }
 
-    // Verificar horario para empleados (excepto admin)
+    // VERIFICAR HORARIO PARA EMPLEADOS (EXCEPTO ADMIN) - LÓGICA CORREGIDA
     if (user.userType === 'empleado' && user.rol !== 'admin') {
       const horaActualBolivia = new Date().toLocaleString("en-US", { timeZone: "America/La_Paz" });
       const ahora = new Date(horaActualBolivia);
+      const diaSemanaActual = ahora.getDay() === 0 ? 7 : ahora.getDay(); // Domingo=7, Lunes=1, etc.
       const horaActual = ahora.getHours() * 60 + ahora.getMinutes(); // minutos desde medianoche
 
-      if (user.hora_ingreso && user.hora_salida) {
-        const [horaIngresoHoras, horaIngresoMinutos] = user.hora_ingreso.split(':').map(Number);
-        const [horaSalidaHoras, horaSalidaMinutos] = user.hora_salida.split(':').map(Number);
+      console.log("Día de la semana actual:", diaSemanaActual);
+      console.log("Hora actual (minutos):", horaActual);
+      console.log("Horarios del usuario:", user.horarios);
+
+      // Buscar horario para el día actual
+      const horarioHoy = user.horarios.find(h => h.dia_semana === diaSemanaActual);
+      
+      if (horarioHoy && horarioHoy.hora_ingreso && horarioHoy.hora_salida) {
+        const [horaIngresoHoras, horaIngresoMinutos] = horarioHoy.hora_ingreso.split(':').map(Number);
+        const [horaSalidaHoras, horaSalidaMinutos] = horarioHoy.hora_salida.split(':').map(Number);
         
         const horaIngresoMin = horaIngresoHoras * 60 + horaIngresoMinutos;
         const horaSalidaMin = horaSalidaHoras * 60 + horaSalidaMinutos;
@@ -110,11 +130,53 @@ const authenticateUser = async (username, password) => {
         const horaIngresoPermitido = horaIngresoMin - 30;
         const horaSalidaPermitido = horaSalidaMin + 30;
 
+        console.log("Horario hoy - Ingreso:", horaIngresoMin, "Salida:", horaSalidaMin);
+        console.log("Límites - Ingreso:", horaIngresoPermitido, "Salida:", horaSalidaPermitido);
+
         if (horaActual < horaIngresoPermitido || horaActual > horaSalidaPermitido) {
           console.log("Fuera de horario permitido");
-          throw new Error("Fuera de horario laboral");
+          throw new Error("Fuera de horario laboral. Su horario para hoy es: " + 
+                         horarioHoy.hora_ingreso + " - " + horarioHoy.hora_salida);
+        }
+        
+        console.log("Dentro del horario permitido");
+      } else {
+        console.log("No tiene horario definido para hoy o horario incompleto");
+        
+        // NUEVA LÓGICA: Si no tiene horario específico para hoy, usar horario de Lunes a Viernes
+        const horarioLV = user.horarios.find(h => h.dia_semana === 1); // Lunes a Viernes
+        
+        if (horarioLV && horarioLV.hora_ingreso && horarioLV.hora_salida) {
+          console.log("Usando horario de Lunes a Viernes:", horarioLV);
+          
+          const [horaIngresoHoras, horaIngresoMinutos] = horarioLV.hora_ingreso.split(':').map(Number);
+          const [horaSalidaHoras, horaSalidaMinutos] = horarioLV.hora_salida.split(':').map(Number);
+          
+          const horaIngresoMin = horaIngresoHoras * 60 + horaIngresoMinutos;
+          const horaSalidaMin = horaSalidaHoras * 60 + horaSalidaMinutos;
+          
+          // Permitir acceso 30 minutos antes y después del horario
+          const horaIngresoPermitido = horaIngresoMin - 30;
+          const horaSalidaPermitido = horaSalidaMin + 30;
+
+          console.log("Horario L-V - Ingreso:", horaIngresoMin, "Salida:", horaSalidaMin);
+          console.log("Límites L-V - Ingreso:", horaIngresoPermitido, "Salida:", horaSalidaPermitido);
+
+          if (horaActual < horaIngresoPermitido || horaActual > horaSalidaPermitido) {
+            console.log("Fuera de horario L-V permitido");
+            throw new Error("Fuera de horario laboral. Su horario es: " + 
+                           horarioLV.hora_ingreso + " - " + horarioLV.hora_salida);
+          }
+          
+          console.log("Dentro del horario L-V permitido");
+        } else {
+          // Si no tiene ningún horario definido
+          console.log("No tiene horarios definidos");
+          throw new Error("No tiene horarios laborales definidos en el sistema");
         }
       }
+    } else if (user.userType === 'empleado' && user.rol === 'admin') {
+      console.log("Usuario admin - sin verificación de horario");
     }
 
     // Eliminar la contraseña del objeto de retorno

@@ -17,6 +17,4 @@ router.post("/register/employee/checkin", accessController.registerEmployeeCheck
 // Registrar salida de empleado
 router.post("/register/employee/checkout", accessController.registerEmployeeCheckOut);
 
-// Ya no se necesita la ruta de exportación ya que se hace desde el frontend
-
 module.exports = router;

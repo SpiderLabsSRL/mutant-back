@@ -29,8 +29,6 @@ exports.getEmployees = async () => {
       s.nombre as sucursal_nombre,
       ec.caja_id,
       c.nombre as caja_nombre,
-      e.hora_ingreso,
-      e.hora_salida,
       e.estado,
       (p.huella_digital IS NOT NULL) as tiene_huella,
       u.username
@@ -43,7 +41,26 @@ exports.getEmployees = async () => {
     WHERE e.estado IN (0, 1)
     ORDER BY p.nombres, p.apellidos
   `);
-  return result.rows;
+  
+  // Obtener horarios para cada empleado
+  const employeesWithHorarios = await Promise.all(
+    result.rows.map(async (employee) => {
+      const horariosResult = await query(
+        `SELECT dia_semana, hora_ingreso, hora_salida 
+         FROM horarios_empleado 
+         WHERE empleado_id = $1 
+         ORDER BY dia_semana`,
+        [employee.id]
+      );
+      
+      return {
+        ...employee,
+        horarios: horariosResult.rows
+      };
+    })
+  );
+  
+  return employeesWithHorarios;
 };
 
 exports.createEmployee = async (employeeData) => {
@@ -55,8 +72,7 @@ exports.createEmployee = async (employeeData) => {
     cargo,
     sucursal_id,
     caja_id,
-    horarioIngreso,
-    horarioSalida,
+    horarios,
     username,
     password
   } = employeeData;
@@ -74,12 +90,11 @@ exports.createEmployee = async (employeeData) => {
     );
     const personaId = personaResult.rows[0].id;
 
-    // 2. Crear empleado (para admin, sucursal_id, horarioIngreso y horarioSalida son null)
+    // 2. Crear empleado (para admin, sucursal_id es null)
     const empleadoResult = await client.query(
-      `INSERT INTO empleados (persona_id, rol, sucursal_id, hora_ingreso, hora_salida, estado) 
-       VALUES ($1, $2, $3, $4, $5, 1) RETURNING id`,
-      [personaId, cargo, cargo === "admin" ? null : sucursal_id, 
-       cargo === "admin" ? null : horarioIngreso, cargo === "admin" ? null : horarioSalida]
+      `INSERT INTO empleados (persona_id, rol, sucursal_id, estado) 
+       VALUES ($1, $2, $3, 1) RETURNING id`,
+      [personaId, cargo, cargo === "admin" ? null : sucursal_id]
     );
     const empleadoId = empleadoResult.rows[0].id;
 
@@ -92,7 +107,20 @@ exports.createEmployee = async (employeeData) => {
       );
     }
 
-    // 4. Crear usuario si es necesario (para admin y recepcionista)
+    // 4. Crear horarios si no es admin y hay horarios definidos
+    if (cargo !== "admin" && horarios && horarios.length > 0) {
+      for (const horario of horarios) {
+        if (horario.hora_ingreso && horario.hora_salida) {
+          await client.query(
+            `INSERT INTO horarios_empleado (empleado_id, dia_semana, hora_ingreso, hora_salida) 
+             VALUES ($1, $2, $3, $4)`,
+            [empleadoId, horario.dia_semana, horario.hora_ingreso, horario.hora_salida]
+          );
+        }
+      }
+    }
+
+    // 5. Crear usuario si es necesario (para admin y recepcionista)
     if (username && password && ['admin', 'recepcionista'].includes(cargo)) {
       const hashedPassword = await bcrypt.hash(password, 10);
       await client.query(
@@ -123,8 +151,7 @@ exports.updateEmployee = async (id, employeeData) => {
     cargo,
     sucursal_id,
     caja_id,
-    horarioIngreso,
-    horarioSalida,
+    horarios,
     username,
     password
   } = employeeData;
@@ -153,12 +180,10 @@ exports.updateEmployee = async (id, employeeData) => {
       [nombres, apellidos, ci, telefono, personaId]
     );
 
-    // 3. Actualizar empleado (para admin, sucursal_id, horarioIngreso y horarioSalida son null)
+    // 3. Actualizar empleado (para admin, sucursal_id es null)
     await client.query(
-      `UPDATE empleados SET rol = $1, sucursal_id = $2, hora_ingreso = $3, hora_salida = $4 
-       WHERE id = $5`,
-      [cargo, cargo === "admin" ? null : sucursal_id, 
-       cargo === "admin" ? null : horarioIngreso, cargo === "admin" ? null : horarioSalida, id]
+      `UPDATE empleados SET rol = $1, sucursal_id = $2 WHERE id = $3`,
+      [cargo, cargo === "admin" ? null : sucursal_id, id]
     );
 
     // 4. Manejar asignación de caja (solo para recepcionista)
@@ -191,7 +216,35 @@ exports.updateEmployee = async (id, employeeData) => {
       );
     }
 
-    // 5. Manejar usuario (para admin y recepcionista)
+    // 5. Manejar horarios (solo para roles que no son admin)
+    if (cargo !== "admin") {
+      // Eliminar horarios existentes
+      await client.query(
+        'DELETE FROM horarios_empleado WHERE empleado_id = $1',
+        [id]
+      );
+
+      // Insertar nuevos horarios
+      if (horarios && horarios.length > 0) {
+        for (const horario of horarios) {
+          if (horario.hora_ingreso && horario.hora_salida) {
+            await client.query(
+              `INSERT INTO horarios_empleado (empleado_id, dia_semana, hora_ingreso, hora_salida) 
+               VALUES ($1, $2, $3, $4)`,
+              [id, horario.dia_semana, horario.hora_ingreso, horario.hora_salida]
+            );
+          }
+        }
+      }
+    } else {
+      // Eliminar horarios si el cargo cambia a admin
+      await client.query(
+        'DELETE FROM horarios_empleado WHERE empleado_id = $1',
+        [id]
+      );
+    }
+
+    // 6. Manejar usuario (para admin y recepcionista)
     if (['admin', 'recepcionista'].includes(cargo)) {
       // Verificar si ya existe un usuario
       const usuarioExistente = await client.query(
@@ -304,8 +357,6 @@ exports.getEmployeeById = async (id) => {
       s.nombre as sucursal_nombre,
       ec.caja_id,
       c.nombre as caja_nombre,
-      e.hora_ingreso,
-      e.hora_salida,
       e.estado,
       (p.huella_digital IS NOT NULL) as tiene_huella,
       u.username
@@ -322,5 +373,17 @@ exports.getEmployeeById = async (id) => {
     throw new Error('Empleado no encontrado');
   }
   
-  return result.rows[0];
+  // Obtener horarios del empleado
+  const horariosResult = await query(
+    `SELECT dia_semana, hora_ingreso, hora_salida 
+     FROM horarios_empleado 
+     WHERE empleado_id = $1 
+     ORDER BY dia_semana`,
+    [id]
+  );
+  
+  return {
+    ...result.rows[0],
+    horarios: horariosResult.rows
+  };
 };

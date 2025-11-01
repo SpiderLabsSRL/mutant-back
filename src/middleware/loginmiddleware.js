@@ -55,16 +55,16 @@ const authenticate = async (req, res, next) => {
         e.rol,
         e.estado as estado_empleado,
         e.sucursal_id as idsucursal,
-        e.hora_ingreso,
-        e.hora_salida,
         p.id as idpersona,
         p.nombres,
         p.apellidos,
-        ec.caja_id as idcaja
+        ec.caja_id as idcaja,
+        s.nombre as sucursalNombre
       FROM usuarios u
       INNER JOIN empleados e ON u.empleado_id = e.id
       INNER JOIN personas p ON e.persona_id = p.id
       LEFT JOIN empleado_caja ec ON e.id = ec.empleado_id AND ec.estado = 1
+      LEFT JOIN sucursales s ON e.sucursal_id = s.id
       WHERE u.id = $1 AND e.estado = 1
     `;
     
@@ -77,12 +77,8 @@ const authenticate = async (req, res, next) => {
         SELECT 
           uc.id as idusuario,
           uc.username,
-          p.id as idpersona,
-          p.nombres,
-          p.apellidos,
           'cliente' as rol
         FROM usuarios_clientes uc
-        INNER JOIN personas p ON uc.username LIKE '%' || p.nombres || '.' || p.apellidos || '%'
         WHERE uc.id = $1
       `;
       
@@ -97,9 +93,51 @@ const authenticate = async (req, res, next) => {
       
       user = clientResult.rows[0];
       user.userType = 'cliente';
+      
+      // Para clientes, buscar datos de persona basado en el username
+      const personaQuery = `
+        SELECT 
+          p.id as idpersona,
+          p.nombres,
+          p.apellidos
+        FROM personas p
+        WHERE CONCAT(LOWER(p.nombres), '.', LOWER(p.apellidos)) = LOWER($1)
+        OR CONCAT(LOWER(SPLIT_PART(p.nombres, ' ', 1)), '.', LOWER(p.apellidos)) = LOWER($1)
+      `;
+      
+      const personaResult = await db.query(personaQuery, [user.username]);
+      
+      if (personaResult.rows.length > 0) {
+        user.idpersona = personaResult.rows[0].idpersona;
+        user.nombres = personaResult.rows[0].nombres;
+        user.apellidos = personaResult.rows[0].apellidos;
+      }
     } else {
       user = userResult.rows[0];
       user.userType = 'empleado';
+      
+      // OBTENER HORARIOS DESDE LA NUEVA TABLA horarios_empleado PARA EMPLEADOS
+      if (user.rol !== 'admin') {
+        const horariosQuery = `
+          SELECT dia_semana, hora_ingreso, hora_salida 
+          FROM horarios_empleado 
+          WHERE empleado_id = $1 
+          ORDER BY dia_semana
+        `;
+        
+        const horariosResult = await db.query(horariosQuery, [user.idempleado]);
+        user.horarios = horariosResult.rows;
+        
+        // Asignar horario principal (Lunes a Viernes) para compatibilidad
+        if (user.horarios && user.horarios.length > 0) {
+          const horarioPrincipal = user.horarios.find(h => h.dia_semana === 1) || user.horarios[0];
+          user.hora_ingreso = horarioPrincipal.hora_ingreso;
+          user.hora_salida = horarioPrincipal.hora_salida;
+        }
+      } else {
+        // Admin no necesita horarios
+        user.horarios = [];
+      }
     }
 
     // 6. Adjuntar información del usuario al request

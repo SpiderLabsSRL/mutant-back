@@ -142,8 +142,6 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
           'idempleado', e.id,
           'rol', e.rol,
           'sucursal_id', e.sucursal_id,
-          'hora_ingreso', e.hora_ingreso,
-          'hora_salida', e.hora_salida,
           'estado', e.estado,
           'ultimo_registro_entrada', (
             SELECT MAX(ra.fecha) 
@@ -337,6 +335,55 @@ exports.registerClientAccess = async (
   };
 };
 
+// OBTENER HORARIO DEL EMPLEADO PARA EL DÍA ACTUAL
+const getEmployeeScheduleForToday = async (employeeId) => {
+  // Obtener el día de la semana actual (1=Lunes, 7=Domingo)
+  const dayResult = await query(
+    `SELECT EXTRACT(DOW FROM TIMEZONE('America/La_Paz', NOW())) + 1 as dia_semana`
+  );
+  const diaSemanaActual = dayResult.rows[0].dia_semana;
+
+  // Buscar horario específico para hoy
+  const horarioResult = await query(
+    `SELECT hora_ingreso, hora_salida 
+     FROM horarios_empleado 
+     WHERE empleado_id = $1 AND dia_semana = $2`,
+    [employeeId, diaSemanaActual]
+  );
+
+  if (horarioResult.rows.length > 0) {
+    return horarioResult.rows[0];
+  }
+
+  // Si no tiene horario específico para hoy, usar horario de Lunes a Viernes (dia_semana = 1)
+  const horarioLVResult = await query(
+    `SELECT hora_ingreso, hora_salida 
+     FROM horarios_empleado 
+     WHERE empleado_id = $1 AND dia_semana = 1`,
+    [employeeId]
+  );
+
+  if (horarioLVResult.rows.length > 0) {
+    return horarioLVResult.rows[0];
+  }
+
+  // Si no tiene ningún horario, usar el primero disponible
+  const anyScheduleResult = await query(
+    `SELECT hora_ingreso, hora_salida 
+     FROM horarios_empleado 
+     WHERE empleado_id = $1 
+     ORDER BY dia_semana 
+     LIMIT 1`,
+    [employeeId]
+  );
+
+  if (anyScheduleResult.rows.length > 0) {
+    return anyScheduleResult.rows[0];
+  }
+
+  throw new Error("El empleado no tiene horarios definidos");
+};
+
 exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   const employee = await query(
     `
@@ -354,6 +401,9 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
+  // Obtener horario del empleado para hoy
+  const horario = await getEmployeeScheduleForToday(employeeId);
+
   // Obtener la fecha y hora actual en Bolivia
   const currentTimeResult = await query(
     `SELECT TIMEZONE('America/La_Paz', NOW()) as hora_actual_bolivia`
@@ -362,7 +412,7 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   const horaActualBolivia = currentTimeResult.rows[0].hora_actual_bolivia;
 
   // Parsear la hora de ingreso del empleado
-  const [shiftHours, shiftMinutes, shiftSeconds] = emp.hora_ingreso.split(':').map(Number);
+  const [shiftHours, shiftMinutes, shiftSeconds] = horario.hora_ingreso.split(':').map(Number);
   
   // Crear objeto Date para la hora de ingreso de hoy
   const hoy = new Date(horaActualBolivia);
@@ -417,6 +467,9 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
+  // Obtener horario del empleado para hoy
+  const horario = await getEmployeeScheduleForToday(employeeId);
+
   // Obtener la fecha y hora actual en Bolivia
   const currentTimeResult = await query(
     `SELECT TIMEZONE('America/La_Paz', NOW()) as hora_actual_bolivia`
@@ -425,7 +478,7 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   const horaActualBolivia = currentTimeResult.rows[0].hora_actual_bolivia;
 
   // Parsear la hora de salida del empleado
-  const [shiftHours, shiftMinutes, shiftSeconds] = emp.hora_salida.split(':').map(Number);
+  const [shiftHours, shiftMinutes, shiftSeconds] = horario.hora_salida.split(':').map(Number);
   
   // Crear objeto Date para la hora de salida de hoy
   const hoy = new Date(horaActualBolivia);

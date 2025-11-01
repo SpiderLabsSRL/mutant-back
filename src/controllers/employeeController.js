@@ -48,14 +48,15 @@ exports.createEmployee = async (req, res) => {
       }
     }
 
-    // Validaciones específicas para roles que requieren sucursal y horario
+    // Validaciones específicas para roles que requieren sucursal
     if (employeeData.cargo !== 'admin') {
       if (!employeeData.sucursal_id) {
         return res.status(400).json({ message: "Sucursal es obligatoria para este cargo" });
       }
       
-      if (!employeeData.horarioIngreso || !employeeData.horarioSalida) {
-        return res.status(400).json({ message: "Horario es obligatorio para este cargo" });
+      // Validar que haya al menos un horario definido
+      if (!employeeData.horarios || employeeData.horarios.length === 0) {
+        return res.status(400).json({ message: "Debe definir al menos un horario para este cargo" });
       }
     }
 
@@ -94,14 +95,10 @@ exports.updateEmployee = async (req, res) => {
       }
     }
 
-    // Validaciones específicas para roles que requieren sucursal y horario
+    // Validaciones específicas para roles que requieren sucursal
     if (employeeData.cargo !== 'admin') {
       if (!employeeData.sucursal_id) {
         return res.status(400).json({ message: "Sucursal es obligatoria para este cargo" });
-      }
-      
-      if (!employeeData.horarioIngreso || !employeeData.horarioSalida) {
-        return res.status(400).json({ message: "Horario es obligatorio para este cargo" });
       }
     }
 
