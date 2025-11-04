@@ -45,6 +45,9 @@ const getMembers = async (
       `p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)`
     );
 
+    // SOLO MOSTRAR PERSONAS ACTIVAS (estado = 0)
+    whereConditions.push(`p.estado = 0`);
+
     // Filtro de búsqueda
     if (searchTerm && searchTerm.trim() !== "") {
       paramCount++;
@@ -239,6 +242,9 @@ const getAllMembers = async (
       `p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)`
     );
 
+    // SOLO MOSTRAR PERSONAS ACTIVAS (estado = 0)
+    whereConditions.push(`p.estado = 0`);
+
     // Filtro de búsqueda
     if (searchTerm && searchTerm.trim() !== "") {
       paramCount++;
@@ -373,10 +379,10 @@ const getAllMembers = async (
 // Editar miembro - MODIFICADO para permitir letras y números en CI
 const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
   try {
-    // Verificar si el CI ya existe en otro miembro
+    // Verificar si el CI ya existe en otro miembro ACTIVO
     const checkCiQuery = `
       SELECT id, nombres, apellidos, ci, telefono, fecha_nacimiento
-      FROM personas WHERE ci = $1 AND id != $2
+      FROM personas WHERE ci = $1 AND id != $2 AND estado = 0
     `;
     const ciResult = await query(checkCiQuery, [ci, id]);
 
@@ -390,7 +396,7 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
     const updateQuery = `
       UPDATE personas 
       SET nombres = $1, apellidos = $2, ci = $3, telefono = $4, fecha_nacimiento = $5
-      WHERE id = $6
+      WHERE id = $6 AND estado = 0
       RETURNING *
     `;
 
@@ -413,7 +419,7 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
     ]);
 
     if (result.rows.length === 0) {
-      throw new Error("Miembro no encontrado");
+      throw new Error("Miembro no encontrado o ya está eliminado");
     }
 
     return result.rows[0];
@@ -431,22 +437,20 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
   }
 };
 
+// Eliminar miembro - MODIFICADO para cambiar estado a 1 en lugar de borrar
 const deleteMember = async (id) => {
   try {
-    // Verificar si el miembro existe
-    const checkQuery = "SELECT * FROM personas WHERE id = $1";
+    // Verificar si el miembro existe y está activo
+    const checkQuery = "SELECT * FROM personas WHERE id = $1 AND estado = 0";
     const checkResult = await query(checkQuery, [id]);
 
     if (checkResult.rows.length === 0) {
-      throw new Error("Miembro no encontrado");
+      throw new Error("Miembro no encontrado o ya está eliminado");
     }
 
-    // Primero eliminamos las inscripciones relacionadas
-    await query("DELETE FROM inscripciones WHERE persona_id = $1", [id]);
-
-    // Luego eliminamos la persona
+    // Actualizar el estado a 1 (eliminado) en lugar de borrar
     const result = await query(
-      "DELETE FROM personas WHERE id = $1 RETURNING *",
+      "UPDATE personas SET estado = 1 WHERE id = $1 AND estado = 0 RETURNING *",
       [id]
     );
 

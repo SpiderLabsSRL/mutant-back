@@ -217,7 +217,7 @@ const editMember = async (req, res) => {
   }
 };
 
-// Eliminar miembro
+// Eliminar miembro - MODIFICADO para cambiar estado en lugar de borrar
 const deleteMember = async (req, res) => {
   try {
     const { id } = req.params;
@@ -227,7 +227,7 @@ const deleteMember = async (req, res) => {
 
     res.json({
       success: true,
-      message: "Miembro eliminado exitosamente",
+      message: "Miembro eliminado exitosamente (cambiado a estado inactivo)",
       member: deletedMember,
     });
   } catch (error) {

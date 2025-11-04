@@ -20,6 +20,7 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
     INNER JOIN personas p ON ra.persona_id = p.id
     LEFT JOIN servicios s ON ra.servicio_id = s.id
     WHERE ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
+    AND p.estado = 0
   `;
 
   const params = [];
@@ -113,6 +114,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       FROM personas p
       LEFT JOIN ultimas_inscripciones ui ON p.id = ui.persona_id
       WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
+      AND p.estado = 0
     `;
 
     if (branchId) {
@@ -178,6 +180,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       INNER JOIN empleados e ON p.id = e.persona_id
       WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
       AND e.estado = 1
+      AND p.estado = 0
     `;
 
     if (branchId) {
@@ -209,14 +212,16 @@ exports.registerClientAccess = async (
       s.numero_ingresos as servicio_ingresos_ilimitados
     FROM inscripciones i
     INNER JOIN servicios s ON i.servicio_id = s.id
+    INNER JOIN personas p ON i.persona_id = p.id
     WHERE i.persona_id = $1 AND i.id = $2
     AND (i.sucursal_id = $3 OR s.multisucursal = TRUE)
+    AND p.estado = 0
   `,
     [personId, serviceId, branchId]
   );
 
   if (client.rows.length === 0) {
-    throw new Error("Inscripción no encontrada o no válida para esta sucursal");
+    throw new Error("Inscripción no encontrada, no válida para esta sucursal o cliente eliminado");
   }
 
   const inscription = client.rows[0];
@@ -391,12 +396,13 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
     FROM empleados e
     INNER JOIN personas p ON e.persona_id = p.id
     WHERE e.id = $1
+    AND p.estado = 0
   `,
     [employeeId]
   );
 
   if (employee.rows.length === 0) {
-    throw new Error("Empleado no encontrado");
+    throw new Error("Empleado no encontrado o eliminado");
   }
 
   const emp = employee.rows[0];
@@ -457,12 +463,13 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     FROM empleados e
     INNER JOIN personas p ON e.persona_id = p.id
     WHERE e.id = $1
+    AND p.estado = 0
   `,
     [employeeId]
   );
 
   if (employee.rows.length === 0) {
-    throw new Error("Empleado no encontrado");
+    throw new Error("Empleado no encontrado o eliminado");
   }
 
   const emp = employee.rows[0];
