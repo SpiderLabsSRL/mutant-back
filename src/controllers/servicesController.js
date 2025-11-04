@@ -35,13 +35,15 @@ const createService = async (req, res) => {
       sucursales,
       multisucursal,
       sucursalesMultisucursal,
+      tipoDuracion,
+      cantidadDuracion,
     } = req.body;
 
-    if (!name || !price || !sucursales || sucursales.length === 0) {
+    if (!name || !price || !sucursales || sucursales.length === 0 || !tipoDuracion || !cantidadDuracion) {
       return res.status(400).json({
         success: false,
         message:
-          "Todos los campos son obligatorios, incluyendo al menos una sucursal",
+          "Todos los campos son obligatorios, incluyendo al menos una sucursal, tipo de duración y cantidad",
       });
     }
 
@@ -50,6 +52,22 @@ const createService = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "El número de ingresos debe ser mayor a 0",
+      });
+    }
+
+    // Validar tipo de duración
+    if (!['dias', 'meses'].includes(tipoDuracion)) {
+      return res.status(400).json({
+        success: false,
+        message: "El tipo de duración debe ser 'dias' o 'meses'",
+      });
+    }
+
+    // Validar cantidad de duración
+    if (cantidadDuracion <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "La cantidad de duración debe ser mayor a 0",
       });
     }
 
@@ -86,6 +104,8 @@ const createService = async (req, res) => {
       sucursales,
       multisucursal: multisucursal || false,
       sucursalesMultisucursal: multisucursal ? sucursalesMultisucursal : [],
+      tipoDuracion,
+      cantidadDuracion,
     });
 
     res.status(201).json(newService);
@@ -108,13 +128,15 @@ const updateService = async (req, res) => {
       sucursales,
       multisucursal,
       sucursalesMultisucursal,
+      tipoDuracion,
+      cantidadDuracion,
     } = req.body;
 
-    if (!name || !price || !sucursales || sucursales.length === 0) {
+    if (!name || !price || !sucursales || sucursales.length === 0 || !tipoDuracion || !cantidadDuracion) {
       return res.status(400).json({
         success: false,
         message:
-          "Todos los campos son obligatorios, incluyendo al menos una sucursal",
+          "Todos los campos son obligatorios, incluyendo al menos una sucursal, tipo de duración y cantidad",
       });
     }
 
@@ -123,6 +145,22 @@ const updateService = async (req, res) => {
       return res.status(400).json({
         success: false,
         message: "El número de ingresos debe ser mayor a 0",
+      });
+    }
+
+    // Validar tipo de duración
+    if (!['dias', 'meses'].includes(tipoDuracion)) {
+      return res.status(400).json({
+        success: false,
+        message: "El tipo de duración debe ser 'dias' o 'meses'",
+      });
+    }
+
+    // Validar cantidad de duración
+    if (cantidadDuracion <= 0) {
+      return res.status(400).json({
+        success: false,
+        message: "La cantidad de duración debe ser mayor a 0",
       });
     }
 
@@ -159,6 +197,8 @@ const updateService = async (req, res) => {
       sucursales,
       multisucursal: multisucursal || false,
       sucursalesMultisucursal: multisucursal ? sucursalesMultisucursal : [],
+      tipoDuracion,
+      cantidadDuracion,
     });
 
     res.json(updatedService);

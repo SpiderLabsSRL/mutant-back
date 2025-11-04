@@ -8,6 +8,8 @@ const getAllServices = async () => {
       s.precio AS price,
       s.numero_ingresos AS "maxEntries",
       s.multisucursal,
+      s.tipo_duracion AS "tipoDuracion",
+      s.cantidad_duracion AS "cantidadDuracion",
       (s.estado = 1) AS "isActive",
       ARRAY_AGG(DISTINCT ss.sucursal_id::text) AS sucursales,
       ARRAY_AGG(DISTINCT CASE WHEN ss.multisucursal THEN ss.sucursal_id::text END) 
@@ -15,7 +17,7 @@ const getAllServices = async () => {
     FROM servicios s
     LEFT JOIN servicio_sucursal ss ON s.id = ss.servicio_id
     WHERE s.estado IN (0, 1)
-    GROUP BY s.id, s.nombre, s.precio, s.numero_ingresos, s.multisucursal, s.estado
+    GROUP BY s.id, s.nombre, s.precio, s.numero_ingresos, s.multisucursal, s.tipo_duracion, s.cantidad_duracion, s.estado
     ORDER BY s.nombre;
   `;
 
@@ -38,6 +40,8 @@ const createService = async (serviceData) => {
     sucursales,
     multisucursal,
     sucursalesMultisucursal,
+    tipoDuracion,
+    cantidadDuracion,
   } = serviceData;
   const client = await pool.connect();
 
@@ -46,10 +50,10 @@ const createService = async (serviceData) => {
 
     // Insertar servicio (maxEntries puede ser null para ilimitado)
     const serviceResult = await client.query(
-      `INSERT INTO servicios (nombre, precio, numero_ingresos, multisucursal, estado)
-       VALUES ($1, $2, $3, $4, 1)
-       RETURNING id, nombre AS name, precio AS price, numero_ingresos AS "maxEntries", multisucursal, estado = 1 AS "isActive"`,
-      [name, price, maxEntries, multisucursal]
+      `INSERT INTO servicios (nombre, precio, numero_ingresos, multisucursal, tipo_duracion, cantidad_duracion, estado)
+       VALUES ($1, $2, $3, $4, $5, $6, 1)
+       RETURNING id, nombre AS name, precio AS price, numero_ingresos AS "maxEntries", multisucursal, tipo_duracion AS "tipoDuracion", cantidad_duracion AS "cantidadDuracion", estado = 1 AS "isActive"`,
+      [name, price, maxEntries, multisucursal, tipoDuracion, cantidadDuracion]
     );
 
     const serviceId = serviceResult.rows[0].id;
@@ -92,6 +96,8 @@ const updateService = async (id, serviceData) => {
     sucursales,
     multisucursal,
     sucursalesMultisucursal,
+    tipoDuracion,
+    cantidadDuracion,
   } = serviceData;
   const client = await pool.connect();
 
@@ -101,10 +107,10 @@ const updateService = async (id, serviceData) => {
     // Actualizar servicio (maxEntries puede ser null para ilimitado)
     const serviceResult = await client.query(
       `UPDATE servicios 
-       SET nombre = $1, precio = $2, numero_ingresos = $3, multisucursal = $4
-       WHERE id = $5
-       RETURNING id, nombre AS name, precio AS price, numero_ingresos AS "maxEntries", multisucursal, estado = 1 AS "isActive"`,
-      [name, price, maxEntries, multisucursal, id]
+       SET nombre = $1, precio = $2, numero_ingresos = $3, multisucursal = $4, tipo_duracion = $5, cantidad_duracion = $6
+       WHERE id = $7
+       RETURNING id, nombre AS name, precio AS price, numero_ingresos AS "maxEntries", multisucursal, tipo_duracion AS "tipoDuracion", cantidad_duracion AS "cantidadDuracion", estado = 1 AS "isActive"`,
+      [name, price, maxEntries, multisucursal, tipoDuracion, cantidadDuracion, id]
     );
 
     if (serviceResult.rows.length === 0) {
@@ -172,7 +178,7 @@ const toggleServiceStatus = async (id) => {
     `UPDATE servicios 
      SET estado = CASE WHEN estado = 1 THEN 0 ELSE 1 END 
      WHERE id = $1 
-     RETURNING id, nombre AS name, precio AS price, numero_ingresos AS "maxEntries", multisucursal, estado = 1 AS "isActive"`,
+     RETURNING id, nombre AS name, precio AS price, numero_ingresos AS "maxEntries", multisucursal, tipo_duracion AS "tipoDuracion", cantidad_duracion AS "cantidadDuracion", estado = 1 AS "isActive"`,
     [id]
   );
 
