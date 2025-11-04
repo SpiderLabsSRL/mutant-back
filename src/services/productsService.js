@@ -6,7 +6,6 @@ const getAllProducts = async (sucursalId) => {
       p.id as idproducto, 
       p.nombre, 
       p.precio_venta, 
-      p.proveedor, 
       p.estado
     FROM productos p
     WHERE p.estado IN (0, 1)
@@ -35,7 +34,6 @@ const getProductById = async (id) => {
       p.id as idproducto, 
       p.nombre, 
       p.precio_venta, 
-      p.proveedor, 
       p.estado
     FROM productos p
     WHERE p.id = $1 AND p.estado IN (0, 1)`,
@@ -44,7 +42,7 @@ const getProductById = async (id) => {
   return result.rows[0];
 };
 
-const createProduct = async (nombre, precio_venta, proveedor, sucursales, stock_por_sucursal, sin_stock) => {
+const createProduct = async (nombre, precio_venta, sucursales, stock_por_sucursal, sin_stock) => {
   const client = await pool.connect();
   
   try {
@@ -52,10 +50,10 @@ const createProduct = async (nombre, precio_venta, proveedor, sucursales, stock_
     
     // Insertar producto
     const productResult = await client.query(
-      `INSERT INTO productos (nombre, precio_venta, proveedor, estado)
-       VALUES ($1, $2, $3, 1)
+      `INSERT INTO productos (nombre, precio_venta, estado)
+       VALUES ($1, $2, 1)
        RETURNING id`,
-      [nombre, precio_venta, proveedor]
+      [nombre, precio_venta]
     );
     
     const productId = productResult.rows[0].id;
@@ -93,7 +91,7 @@ const createProduct = async (nombre, precio_venta, proveedor, sucursales, stock_
   }
 };
 
-const updateProduct = async (id, nombre, precio_venta, proveedor, sucursales, stock_por_sucursal, sin_stock) => {
+const updateProduct = async (id, nombre, precio_venta, sucursales, stock_por_sucursal, sin_stock) => {
   const client = await pool.connect();
   
   try {
@@ -102,9 +100,9 @@ const updateProduct = async (id, nombre, precio_venta, proveedor, sucursales, st
     // Actualizar producto
     await client.query(
       `UPDATE productos 
-       SET nombre = $1, precio_venta = $2, proveedor = $3
+       SET nombre = $1, precio_venta = $2
        WHERE id = $4`,
-      [nombre, precio_venta, proveedor, id]
+      [nombre, precio_venta, id]
     );
     
     // Eliminar relaciones existentes
@@ -158,7 +156,7 @@ const toggleProductStatus = async (id) => {
     `UPDATE productos 
      SET estado = CASE WHEN estado = 1 THEN 0 ELSE 1 END 
      WHERE id = $1 
-     RETURNING id, nombre, precio_venta, proveedor, estado`,
+     RETURNING id, nombre, precio_venta, estado`,
     [id]
   );
   

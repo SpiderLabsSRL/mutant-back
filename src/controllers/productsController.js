@@ -22,11 +22,11 @@ const getProductById = async (req, res) => {
 
 const createProduct = async (req, res) => {
   try {
-    const { nombre, precio_venta, proveedor, sucursales, stock_por_sucursal, sin_stock } = req.body;
+    const { nombre, precio_venta, sucursales, stock_por_sucursal, sin_stock } = req.body;
     
     // Validaciones básicas
-    if (!nombre || !precio_venta || !proveedor) {
-      return res.status(400).json({ error: "Nombre, precio_venta y proveedor son obligatorios" });
+    if (!nombre || !precio_venta) {
+      return res.status(400).json({ error: "Nombre y precio_venta son obligatorios" });
     }
     
     if (!sucursales || !Array.isArray(sucursales) || sucursales.length === 0) {
@@ -36,7 +36,6 @@ const createProduct = async (req, res) => {
     const newProduct = await productsService.createProduct(
       nombre,
       precio_venta,
-      proveedor,
       sucursales,
       stock_por_sucursal,
       sin_stock || false
@@ -50,11 +49,11 @@ const createProduct = async (req, res) => {
 const updateProduct = async (req, res) => {
   try {
     const { id } = req.params;
-    const { nombre, precio_venta, proveedor, sucursales, stock_por_sucursal, sin_stock } = req.body;
+    const { nombre, precio_venta, sucursales, stock_por_sucursal, sin_stock } = req.body;
     
     // Validaciones básicas
-    if (!nombre || !precio_venta || !proveedor) {
-      return res.status(400).json({ error: "Nombre, precio_venta y proveedor son obligatorios" });
+    if (!nombre || !precio_venta) {
+      return res.status(400).json({ error: "Nombre y precio_venta son obligatorios" });
     }
     
     if (!sucursales || !Array.isArray(sucursales) || sucursales.length === 0) {
@@ -65,7 +64,6 @@ const updateProduct = async (req, res) => {
       id,
       nombre,
       precio_venta,
-      proveedor,
       sucursales,
       stock_por_sucursal,
       sin_stock || false
