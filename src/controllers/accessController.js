@@ -4,14 +4,11 @@ exports.getAccessLogs = async (req, res) => {
   try {
     const { search, type, limit, branchId } = req.query;
     
-    // Convertir branchId a número si existe
-    const parsedBranchId = branchId ? parseInt(branchId) : undefined;
-    
     const logs = await accessService.getAccessLogs(
       search, 
       type, 
       limit ? parseInt(limit) : 100,
-      parsedBranchId
+      parseInt(branchId)
     );
     res.json(logs);
   } catch (error) {
@@ -27,10 +24,7 @@ exports.searchMembers = async (req, res) => {
       return res.status(400).json({ message: "Término de búsqueda debe tener al menos 2 caracteres" });
     }
     
-    // Convertir branchId a número si existe
-    const parsedBranchId = branchId ? parseInt(branchId) : undefined;
-    
-    const members = await accessService.searchMembers(search, type, parsedBranchId);
+    const members = await accessService.searchMembers(search, type, parseInt(branchId));
     res.json(members);
   } catch (error) {
     console.error("Error in searchMembers:", error);
@@ -42,11 +36,21 @@ exports.registerClientAccess = async (req, res) => {
   try {
     const { personId, serviceId, branchId, userId } = req.body;
     
+    console.log("Datos recibidos para acceso:", { personId, serviceId, branchId, userId });
+    
     if (!personId || !serviceId || !branchId || !userId) {
-      return res.status(400).json({ message: "Faltan parámetros requeridos" });
+      return res.status(400).json({ 
+        message: "Faltan parámetros requeridos",
+        received: { personId, serviceId, branchId, userId }
+      });
     }
     
-    const result = await accessService.registerClientAccess(personId, serviceId, branchId, userId);
+    const result = await accessService.registerClientAccess(
+      parseInt(personId), 
+      parseInt(serviceId), 
+      parseInt(branchId), 
+      parseInt(userId)
+    );
     res.json(result);
   } catch (error) {
     console.error("Error in registerClientAccess:", error);
@@ -62,7 +66,11 @@ exports.registerEmployeeCheckIn = async (req, res) => {
       return res.status(400).json({ message: "Faltan parámetros requeridos" });
     }
     
-    const result = await accessService.registerEmployeeCheckIn(employeeId, branchId, userId);
+    const result = await accessService.registerEmployeeCheckIn(
+      parseInt(employeeId), 
+      parseInt(branchId), 
+      parseInt(userId)
+    );
     res.json(result);
   } catch (error) {
     console.error("Error in registerEmployeeCheckIn:", error);
@@ -78,7 +86,11 @@ exports.registerEmployeeCheckOut = async (req, res) => {
       return res.status(400).json({ message: "Faltan parámetros requeridos" });
     }
     
-    const result = await accessService.registerEmployeeCheckOut(employeeId, branchId, userId);
+    const result = await accessService.registerEmployeeCheckOut(
+      parseInt(employeeId), 
+      parseInt(branchId), 
+      parseInt(userId)
+    );
     res.json(result);
   } catch (error) {
     console.error("Error in registerEmployeeCheckOut:", error);

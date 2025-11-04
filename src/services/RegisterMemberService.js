@@ -132,7 +132,8 @@ exports.registerMember = async (registrationData) => {
     for (const servicio of serviciosInfo) {
       // Verificar si ya existe una inscripción activa para este servicio
       const existingSubscription = await client.query(`
-        SELECT id, ingresos_disponibles, fecha_vencimiento FROM inscripciones 
+        SELECT id, ingresos_disponibles, fecha_vencimiento 
+        FROM inscripciones 
         WHERE persona_id = $1 AND servicio_id = $2 
         AND estado = 1 AND fecha_vencimiento > CURRENT_DATE
         AND (sucursal_id = $3 OR (SELECT multisucursal FROM servicios WHERE id = $2) = true)
@@ -140,63 +141,51 @@ exports.registerMember = async (registrationData) => {
       
       let inscripcionId;
       
+      // SIEMPRE crear nueva inscripción - NO HACER UPDATE
       if (existingSubscription.rows.length > 0) {
+        // Si ya existe una suscripción activa con ingresos disponibles, no permitir renovación
         const existingSub = existingSubscription.rows[0];
-        
-        if (existingSub.ingresos_disponibles <= 0) {
-          const updateResult = await client.query(`
-            UPDATE inscripciones 
-            SET fecha_inicio = $1, fecha_vencimiento = $2, ingresos_disponibles = $3
-            WHERE id = $4
-            RETURNING id
-          `, [
-            servicio.fechaInicio,
-            servicio.fechaVencimiento,
-            servicio.numero_ingresos,
-            existingSub.id
-          ]);
-          
-          inscripcionId = updateResult.rows[0].id;
-        } else {
+        if (existingSub.ingresos_disponibles > 0) {
           throw new Error(`El cliente ya tiene una suscripción activa para este servicio con ingresos disponibles`);
         }
-      } else {
-        // Crear nueva inscripción para la sucursal principal
-        const inscripcionResult = await client.query(`
-          INSERT INTO inscripciones (persona_id, servicio_id, sucursal_id, fecha_inicio, fecha_vencimiento, ingresos_disponibles, estado)
-          VALUES ($1, $2, $3, $4, $5, $6, 1)
-          RETURNING id
-        `, [
-          personaId,
-          servicio.servicioId,
-          registrationData.sucursalId,
-          servicio.fechaInicio,
-          servicio.fechaVencimiento,
-          servicio.numero_ingresos
-        ]);
+      }
+      
+      // Crear NUEVA inscripción para la sucursal principal
+      const inscripcionResult = await client.query(`
+        INSERT INTO inscripciones (persona_id, servicio_id, sucursal_id, fecha_inicio, fecha_vencimiento, ingresos_disponibles, estado)
+        VALUES ($1, $2, $3, $4, $5, $6, 1)
+        RETURNING id
+      `, [
+        personaId,
+        servicio.servicioId,
+        registrationData.sucursalId,
+        servicio.fechaInicio,
+        servicio.fechaVencimiento,
+        servicio.numero_ingresos
+      ]);
+      
+      inscripcionId = inscripcionResult.rows[0].id;
+      
+      // Si el servicio es multisucursal, crear inscripciones en todas las sucursales disponibles CON LOS MISMOS INGRESOS DISPONIBLES
+      if (servicio.multisucursal) {
+        const otrasSucursales = await client.query(`
+          SELECT sucursal_id 
+          FROM servicio_sucursal 
+          WHERE servicio_id = $1 AND sucursal_id != $2 AND disponible = true
+        `, [servicio.servicioId, registrationData.sucursalId]);
         
-        inscripcionId = inscripcionResult.rows[0].id;
-        
-        // Si el servicio es multisucursal, crear inscripciones en todas las sucursales disponibles
-        if (servicio.multisucursal) {
-          const otrasSucursales = await client.query(`
-            SELECT sucursal_id 
-            FROM servicio_sucursal 
-            WHERE servicio_id = $1 AND sucursal_id != $2 AND disponible = true
-          `, [servicio.servicioId, registrationData.sucursalId]);
-          
-          for (const otraSucursal of otrasSucursales.rows) {
-            await client.query(`
-              INSERT INTO inscripciones (persona_id, servicio_id, sucursal_id, fecha_inicio, fecha_vencimiento, ingresos_disponibles, estado)
-              VALUES ($1, $2, $3, $4, $5, 0, 1)
-            `, [
-              personaId,
-              servicio.servicioId,
-              otraSucursal.sucursal_id,
-              servicio.fechaInicio,
-              servicio.fechaVencimiento
-            ]);
-          }
+        for (const otraSucursal of otrasSucursales.rows) {
+          await client.query(`
+            INSERT INTO inscripciones (persona_id, servicio_id, sucursal_id, fecha_inicio, fecha_vencimiento, ingresos_disponibles, estado)
+            VALUES ($1, $2, $3, $4, $5, $6, 1)
+          `, [
+            personaId,
+            servicio.servicioId,
+            otraSucursal.sucursal_id,
+            servicio.fechaInicio,
+            servicio.fechaVencimiento,
+            servicio.numero_ingresos  // Mismo número de ingresos para todas las sucursales
+          ]);
         }
       }
       

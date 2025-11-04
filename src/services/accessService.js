@@ -21,6 +21,7 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
     LEFT JOIN servicios s ON ra.servicio_id = s.id
     WHERE ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
     AND p.estado = 0
+    AND (s.id IS NULL OR s.estado = 1)  -- Filtrar servicios eliminados
   `;
 
   const params = [];
@@ -84,6 +85,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id
         WHERE i.estado = 1
+        AND s.estado = 1  -- Filtrar servicios eliminados
         ORDER BY i.servicio_id, i.persona_id, i.fecha_inicio DESC
       )
       SELECT 
@@ -195,6 +197,36 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
   return results;
 };
 
+// Obtener las inscripciones multisucursales MÁS RECIENTES de cada sucursal
+const getLatestMultisucursalInscriptions = async (personId, serviceId, fechaInicio, fechaVencimiento) => {
+  const result = await query(
+    `
+    WITH ranked_inscriptions AS (
+      SELECT 
+        i.id, 
+        i.sucursal_id, 
+        i.ingresos_disponibles,
+        ROW_NUMBER() OVER (PARTITION BY i.sucursal_id ORDER BY i.fecha_inicio DESC, i.id DESC) as rn
+      FROM inscripciones i
+      INNER JOIN servicios s ON i.servicio_id = s.id
+      WHERE i.persona_id = $1 
+      AND i.servicio_id = $2
+      AND i.fecha_inicio = $3
+      AND i.fecha_vencimiento = $4
+      AND i.estado = 1
+      AND s.multisucursal = true
+    )
+    SELECT id, sucursal_id, ingresos_disponibles
+    FROM ranked_inscriptions
+    WHERE rn = 1  -- Solo la más reciente por sucursal
+    ORDER BY id DESC
+    `,
+    [personId, serviceId, fechaInicio, fechaVencimiento]
+  );
+  
+  return result.rows;
+};
+
 // Registrar acceso de cliente
 exports.registerClientAccess = async (
   personId,
@@ -216,12 +248,13 @@ exports.registerClientAccess = async (
     WHERE i.persona_id = $1 AND i.id = $2
     AND (i.sucursal_id = $3 OR s.multisucursal = TRUE)
     AND p.estado = 0
+    AND s.estado = 1  -- Filtrar servicios eliminados
   `,
     [personId, serviceId, branchId]
   );
 
   if (client.rows.length === 0) {
-    throw new Error("Inscripción no encontrada, no válida para esta sucursal o cliente eliminado");
+    throw new Error("Inscripción no encontrada, no válida para esta sucursal, servicio eliminado o cliente eliminado");
   }
 
   const inscription = client.rows[0];
@@ -291,26 +324,59 @@ exports.registerClientAccess = async (
     };
   }
 
+  let remainingVisits = 0;
+  let latestMultisucursalInscriptions = [];
+  
   // SOLO DESCONTAR INGRESO SI NO ES UN SERVICIO ILIMITADO
   if (!isUnlimitedService) {
-    await query(
-      `
-      UPDATE inscripciones 
-      SET ingresos_disponibles = ingresos_disponibles - 1 
-      WHERE id = $1
-    `,
-      [serviceId]
-    );
+    // Si es multisucursal, descontar en las inscripciones MÁS RECIENTES de cada sucursal
+    if (inscription.multisucursal) {
+      // Obtener las inscripciones multisucursales MÁS RECIENTES de cada sucursal
+      latestMultisucursalInscriptions = await getLatestMultisucursalInscriptions(
+        personId, 
+        inscription.servicio_real_id, 
+        inscription.fecha_inicio, 
+        inscription.fecha_vencimiento
+      );
+      
+      // Descontar en todas las inscripciones multisucursales más recientes
+      for (const multiInscription of latestMultisucursalInscriptions) {
+        await query(
+          `
+          UPDATE inscripciones 
+          SET ingresos_disponibles = ingresos_disponibles - 1 
+          WHERE id = $1
+          `,
+          [multiInscription.id]
+        );
+      }
+      
+      // Obtener el nuevo valor de ingresos disponibles (de la inscripción actual)
+      const updatedInscription = await query(
+        `SELECT ingresos_disponibles FROM inscripciones WHERE id = $1`,
+        [serviceId]
+      );
+      
+      remainingVisits = updatedInscription.rows[0]?.ingresos_disponibles || 0;
+    } else {
+      // Si no es multisucursal, descontar solo en esta inscripción
+      await query(
+        `
+        UPDATE inscripciones 
+        SET ingresos_disponibles = ingresos_disponibles - 1 
+        WHERE id = $1
+        `,
+        [serviceId]
+      );
+
+      const updatedInscription = await query(
+        `SELECT ingresos_disponibles FROM inscripciones WHERE id = $1`,
+        [serviceId]
+      );
+      
+      remainingVisits = updatedInscription.rows[0]?.ingresos_disponibles || 0;
+    }
   }
-
-  const updatedInscription = await query(
-    `
-    SELECT ingresos_disponibles FROM inscripciones WHERE id = $1
-  `,
-    [serviceId]
-  );
-
-  const remainingVisits = updatedInscription.rows[0]?.ingresos_disponibles || 0;
 
   // Mensaje diferente para servicios ilimitados
   const detailMessage = isUnlimitedService 
@@ -337,6 +403,8 @@ exports.registerClientAccess = async (
     success: true,
     message: `Acceso registrado para ${inscription.servicio_nombre}`,
     remainingVisits: isUnlimitedService ? null : remainingVisits,
+    isMultisucursal: inscription.multisucursal,
+    updatedInscriptionsCount: inscription.multisucursal ? latestMultisucursalInscriptions.length : 1
   };
 };
 
