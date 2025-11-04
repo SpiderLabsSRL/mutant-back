@@ -1,6 +1,6 @@
 const { query } = require("../../db");
 
-// Obtener miembros con paginación y filtros - MODIFICADO para mostrar solo última inscripción por servicio
+// Obtener miembros con paginación y filtros - CORREGIDO para evitar servicios duplicados
 const getMembers = async (
   page,
   limit,
@@ -82,7 +82,7 @@ const getMembers = async (
         ? `WHERE ${whereConditions.join(" AND ")}`
         : "";
 
-    // Subconsulta para obtener la última inscripción por servicio y persona - NUEVA LÓGICA
+    // Subconsulta para obtener la última inscripción por servicio, persona y sucursal - CORREGIDO
     const membersQuery = `
       WITH UltimasInscripciones AS (
         SELECT 
@@ -93,49 +93,69 @@ const getMembers = async (
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
         GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
+      ),
+      ServiciosUnicos AS (
+        SELECT DISTINCT ON (ui.persona_id, ui.sucursal_id, ui.servicio_id)
+          p.id as persona_id,
+          p.nombres,
+          p.apellidos,
+          p.ci,
+          p.telefono,
+          p.fecha_nacimiento,
+          ui.sucursal_id,
+          su.nombre as sucursal_name,
+          ui.servicio_id,
+          s.nombre as servicio_nombre,
+          i.ingresos_disponibles,
+          i.fecha_vencimiento,
+          i.fecha_inicio,
+          CASE 
+            WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
+                 AND (i.ingresos_disponibles > 0 OR i.ingresos_disponibles IS NULL) 
+                 THEN 'active'
+            ELSE 'inactive'
+          END as servicio_status
+        FROM personas p
+        INNER JOIN UltimasInscripciones ui ON p.id = ui.persona_id
+        INNER JOIN inscripciones i ON p.id = i.persona_id 
+          AND i.servicio_id = ui.servicio_id 
+          AND i.sucursal_id = ui.sucursal_id 
+          AND i.fecha_inicio = ui.ultima_fecha
+        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
+        ${whereClause}
+        ORDER BY ui.persona_id, ui.sucursal_id, ui.servicio_id, ui.ultima_fecha DESC
       )
       SELECT 
-        p.id,
-        CONCAT(p.nombres, ' ', p.apellidos) as name,
-        p.ci,
-        p.telefono as phone,
-        TO_CHAR(p.fecha_nacimiento, 'YYYY-MM-DD') as birthDate,
-        i.sucursal_id as sucursal_id,
-        su.nombre as sucursal_name,
-        i.ingresos_disponibles,
-        s.nombre as servicio_nombre,
-        TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
-        CASE 
-          WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
-               AND (i.ingresos_disponibles > 0 OR i.ingresos_disponibles IS NULL) 
-               THEN 'active'
-          ELSE 'inactive'
-        END as servicio_status,
-        TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') as registrationDate,
+        persona_id as id,
+        CONCAT(nombres, ' ', apellidos) as name,
+        ci,
+        telefono as phone,
+        TO_CHAR(fecha_nacimiento, 'YYYY-MM-DD') as birthDate,
+        sucursal_id,
+        sucursal_name,
+        servicio_id,
+        servicio_nombre,
+        ingresos_disponibles,
+        TO_CHAR(fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
+        servicio_status,
+        TO_CHAR(fecha_inicio, 'YYYY-MM-DD') as registrationDate,
         CASE 
           WHEN EXISTS (
             SELECT 1 FROM inscripciones i2 
-            WHERE i2.persona_id = p.id 
-            AND i2.sucursal_id = i.sucursal_id
+            WHERE i2.persona_id = persona_id 
+            AND i2.sucursal_id = sucursal_id
             AND i2.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
             AND (i2.ingresos_disponibles > 0 OR i2.ingresos_disponibles IS NULL)
           ) THEN 'active'
           ELSE 'inactive'
         END as member_status
-      FROM personas p
-      INNER JOIN UltimasInscripciones ui ON p.id = ui.persona_id
-      INNER JOIN inscripciones i ON p.id = i.persona_id 
-        AND i.servicio_id = ui.servicio_id 
-        AND i.sucursal_id = ui.sucursal_id 
-        AND i.fecha_inicio = ui.ultima_fecha
-      INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
-      INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
-      ${whereClause}
-      ORDER BY p.nombres, p.apellidos, s.nombre
+      FROM ServiciosUnicos
+      ORDER BY nombres, apellidos, servicio_nombre
       LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}
     `;
 
-    // Consulta para contar total - MODIFICADA para usar la misma lógica
+    // Consulta para contar total - CORREGIDA
     const countQuery = `
       WITH UltimasInscripciones AS (
         SELECT 
@@ -167,7 +187,7 @@ const getMembers = async (
     const membersResult = await query(membersQuery, queryParams);
     const countResult = await query(countQuery, queryParams.slice(0, -2));
 
-    // Agrupar servicios por persona y sucursal
+    // Agrupar servicios por persona y sucursal - CORREGIDO para evitar duplicados
     const membersMap = new Map();
 
     membersResult.rows.forEach((row) => {
@@ -189,13 +209,19 @@ const getMembers = async (
 
       const member = membersMap.get(key);
 
-      // Agregar cada servicio (ahora solo la última inscripción)
-      member.services.push({
-        name: row.servicio_nombre,
-        expirationDate: row.fecha_vencimiento,
-        status: row.servicio_status,
-        ingresos_disponibles: row.ingresos_disponibles,
-      });
+      // Verificar si el servicio ya existe antes de agregarlo
+      const servicioExistente = member.services.find(
+        service => service.name === row.servicio_nombre
+      );
+
+      if (!servicioExistente) {
+        member.services.push({
+          name: row.servicio_nombre,
+          expirationDate: row.fecha_vencimiento,
+          status: row.servicio_status,
+          ingresos_disponibles: row.ingresos_disponibles,
+        });
+      }
     });
 
     const members = Array.from(membersMap.values());
@@ -212,7 +238,7 @@ const getMembers = async (
   }
 };
 
-// Obtener todos los miembros (sin paginación) - MODIFICADO para mostrar solo última inscripción por servicio
+// Obtener todos los miembros (sin paginación) - CORREGIDO para evitar servicios duplicados
 const getAllMembers = async (
   searchTerm,
   serviceFilter,
@@ -279,7 +305,7 @@ const getAllMembers = async (
         ? `WHERE ${whereConditions.join(" AND ")}`
         : "";
 
-    // Subconsulta para obtener la última inscripción por servicio y persona - NUEVA LÓGICA
+    // Subconsulta para obtener la última inscripción por servicio, persona y sucursal - CORREGIDO
     const queryText = `
       WITH UltimasInscripciones AS (
         SELECT 
@@ -290,45 +316,65 @@ const getAllMembers = async (
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
         GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
+      ),
+      ServiciosUnicos AS (
+        SELECT DISTINCT ON (ui.persona_id, ui.sucursal_id, ui.servicio_id)
+          p.id as persona_id,
+          p.nombres,
+          p.apellidos,
+          p.ci,
+          p.telefono,
+          p.fecha_nacimiento,
+          ui.sucursal_id,
+          su.nombre as sucursal_name,
+          ui.servicio_id,
+          s.nombre as servicio_nombre,
+          i.ingresos_disponibles,
+          i.fecha_vencimiento,
+          i.fecha_inicio,
+          CASE 
+            WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
+                 AND (i.ingresos_disponibles > 0 OR i.ingresos_disponibles IS NULL) 
+                 THEN 'active'
+            ELSE 'inactive'
+          END as servicio_status
+        FROM personas p
+        INNER JOIN UltimasInscripciones ui ON p.id = ui.persona_id
+        INNER JOIN inscripciones i ON p.id = i.persona_id 
+          AND i.servicio_id = ui.servicio_id 
+          AND i.sucursal_id = ui.sucursal_id 
+          AND i.fecha_inicio = ui.ultima_fecha
+        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
+        ${whereClause}
+        ORDER BY ui.persona_id, ui.sucursal_id, ui.servicio_id, ui.ultima_fecha DESC
       )
       SELECT 
-        p.id,
-        CONCAT(p.nombres, ' ', p.apellidos) as name,
-        p.ci,
-        p.telefono as phone,
-        TO_CHAR(p.fecha_nacimiento, 'YYYY-MM-DD') as birthDate,
-        i.sucursal_id as sucursal_id,
-        su.nombre as sucursal_name,
-        i.ingresos_disponibles,
-        s.nombre as servicio_nombre,
-        TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
-        CASE 
-          WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
-               AND (i.ingresos_disponibles > 0 OR i.ingresos_disponibles IS NULL) 
-               THEN 'active'
-          ELSE 'inactive'
-        END as servicio_status,
-        TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') as registrationDate,
+        persona_id as id,
+        CONCAT(nombres, ' ', apellidos) as name,
+        ci,
+        telefono as phone,
+        TO_CHAR(fecha_nacimiento, 'YYYY-MM-DD') as birthDate,
+        sucursal_id,
+        sucursal_name,
+        servicio_id,
+        servicio_nombre,
+        ingresos_disponibles,
+        TO_CHAR(fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
+        servicio_status,
+        TO_CHAR(fecha_inicio, 'YYYY-MM-DD') as registrationDate,
         CASE 
           WHEN EXISTS (
             SELECT 1 FROM inscripciones i2 
-            WHERE i2.persona_id = p.id 
-            AND i2.sucursal_id = i.sucursal_id
+            WHERE i2.persona_id = persona_id 
+            AND i2.sucursal_id = sucursal_id
             AND i2.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
             AND (i2.ingresos_disponibles > 0 OR i2.ingresos_disponibles IS NULL)
           ) THEN 'active'
           ELSE 'inactive'
         END as member_status
-      FROM personas p
-      INNER JOIN UltimasInscripciones ui ON p.id = ui.persona_id
-      INNER JOIN inscripciones i ON p.id = i.persona_id 
-        AND i.servicio_id = ui.servicio_id 
-        AND i.sucursal_id = ui.sucursal_id 
-        AND i.fecha_inicio = ui.ultima_fecha
-      INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
-      INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
-      ${whereClause}
-      ORDER BY p.nombres, p.apellidos, s.nombre
+      FROM ServiciosUnicos
+      ORDER BY nombres, apellidos, servicio_nombre
     `;
 
     console.log("Ejecutando consulta todos los miembros:", queryText);
@@ -336,7 +382,7 @@ const getAllMembers = async (
 
     const result = await query(queryText, queryParams);
 
-    // Agrupar servicios por persona y sucursal
+    // Agrupar servicios por persona y sucursal - CORREGIDO para evitar duplicados
     const membersMap = new Map();
 
     result.rows.forEach((row) => {
@@ -358,13 +404,19 @@ const getAllMembers = async (
 
       const member = membersMap.get(key);
 
-      // Agregar cada servicio (ahora solo la última inscripción)
-      member.services.push({
-        name: row.servicio_nombre,
-        expirationDate: row.fecha_vencimiento,
-        status: row.servicio_status,
-        ingresos_disponibles: row.ingresos_disponibles,
-      });
+      // Verificar si el servicio ya existe antes de agregarlo
+      const servicioExistente = member.services.find(
+        service => service.name === row.servicio_nombre
+      );
+
+      if (!servicioExistente) {
+        member.services.push({
+          name: row.servicio_nombre,
+          expirationDate: row.fecha_vencimiento,
+          status: row.servicio_status,
+          ingresos_disponibles: row.ingresos_disponibles,
+        });
+      }
     });
 
     return Array.from(membersMap.values());
