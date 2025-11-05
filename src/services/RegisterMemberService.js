@@ -202,6 +202,11 @@ exports.registerMember = async (registrationData) => {
       detallePago = `Efectivo: ${registrationData.montoEfectivo}, QR: ${registrationData.montoQr}`;
     }
     
+    // Si es pago en plazos, agregar información al detalle
+    if (registrationData.pagoPlazos) {
+      detallePago += ` | Pago en plazos - Entregado: ${registrationData.montoEntregado}, Pendiente: ${registrationData.montoPendiente}`;
+    }
+    
     // Registrar venta de servicios usando la fecha del servidor
     const ventaResult = await client.query(`
       INSERT INTO ventas_servicios (
@@ -231,6 +236,28 @@ exports.registerMember = async (registrationData) => {
         INSERT INTO detalle_venta_servicios (venta_servicio_id, inscripcion_id, precio)
         VALUES ($1, $2, $3)
       `, [ventaId, inscripcionesIds[i], registrationData.servicios[i].precio]);
+    }
+    
+    // Registrar pago pendiente si es pago en plazos
+    let pagoPendienteId = null;
+    if (registrationData.pagoPlazos && registrationData.montoPendiente > 0) {
+      const pagoPendienteResult = await client.query(`
+        INSERT INTO pagos_pendientes (
+          persona_id, venta_servicio_id, monto_total, monto_pagado, monto_pendiente,
+          fecha_inscripcion, fecha_ultima_actualizacion, estado
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $6, 'pendiente')
+        RETURNING id
+      `, [
+        personaId,
+        ventaId,
+        registrationData.servicios.reduce((sum, s) => sum + s.precio, 0) - registrationData.descuento,
+        registrationData.montoEntregado,
+        registrationData.montoPendiente,
+        fechaActual
+      ]);
+      
+      pagoPendienteId = pagoPendienteResult.rows[0].id;
     }
     
     // Solo procesar transacciones de caja y estado de caja para pagos en efectivo o la parte efectivo del pago mixto
@@ -273,11 +300,96 @@ exports.registerMember = async (registrationData) => {
     return {
       success: true,
       ventaId: ventaId,
-      message: "Inscripción registrada correctamente"
+      pagoPendienteId: pagoPendienteId,
+      message: registrationData.pagoPlazos ? 
+        "Inscripción registrada correctamente con pago en plazos" : 
+        "Inscripción registrada correctamente"
     };
   } catch (error) {
     await client.query('ROLLBACK');
     console.error("Error in registerMember service:", error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+// Obtener pagos pendientes de una persona
+exports.getPagosPendientes = async (personaId) => {
+  const result = await client.query(`
+    SELECT 
+      pp.id,
+      pp.persona_id as "personaId",
+      pp.venta_servicio_id as "ventaServicioId",
+      pp.monto_total as "montoTotal",
+      pp.monto_pagado as "montoPagado",
+      pp.monto_pendiente as "montoPendiente",
+      pp.fecha_inscripcion as "fechaInscripcion",
+      pp.fecha_ultima_actualizacion as "fechaUltimaActualizacion",
+      pp.estado
+    FROM pagos_pendientes pp
+    WHERE pp.persona_id = $1 AND pp.estado = 'pendiente'
+    ORDER BY pp.fecha_inscripcion DESC
+  `, [personaId]);
+  
+  return result.rows;
+};
+
+// Actualizar pago pendiente
+exports.updatePagoPendiente = async (pagoId, montoPagado) => {
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    // Obtener el pago pendiente actual
+    const pagoActual = await client.query(`
+      SELECT monto_pagado, monto_pendiente, monto_total
+      FROM pagos_pendientes
+      WHERE id = $1 AND estado = 'pendiente'
+    `, [pagoId]);
+    
+    if (pagoActual.rows.length === 0) {
+      throw new Error("Pago pendiente no encontrado");
+    }
+    
+    const { monto_pagado, monto_pendiente, monto_total } = pagoActual.rows[0];
+    
+    const nuevoMontoPagado = parseFloat(monto_pagado) + parseFloat(montoPagado);
+    const nuevoMontoPendiente = parseFloat(monto_pendiente) - parseFloat(montoPagado);
+    
+    if (nuevoMontoPendiente < 0) {
+      throw new Error("El monto pagado no puede ser mayor al monto pendiente");
+    }
+    
+    // Obtener fecha actual
+    const fechaActualResult = await client.query(`
+      SELECT TIMEZONE('America/La_Paz', NOW()) as fecha_actual
+    `);
+    const fechaActual = fechaActualResult.rows[0].fecha_actual;
+    
+    // Actualizar el pago pendiente
+    await client.query(`
+      UPDATE pagos_pendientes 
+      SET 
+        monto_pagado = $1,
+        monto_pendiente = $2,
+        fecha_ultima_actualizacion = $3,
+        estado = CASE WHEN $2 = 0 THEN 'completado' ELSE 'pendiente' END
+      WHERE id = $4
+    `, [nuevoMontoPagado, nuevoMontoPendiente, fechaActual, pagoId]);
+    
+    await client.query('COMMIT');
+    
+    return {
+      success: true,
+      message: nuevoMontoPendiente === 0 ? 
+        "Pago completado exitosamente" : 
+        "Pago actualizado exitosamente"
+    };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    console.error("Error updating pending payment:", error);
     throw error;
   } finally {
     client.release();

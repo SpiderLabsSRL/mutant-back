@@ -71,3 +71,33 @@ exports.registerMember = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+// Obtener pagos pendientes de una persona
+exports.getPagosPendientes = async (req, res) => {
+  try {
+    const { personaId } = req.params;
+    const pagos = await RegisterMemberService.getPagosPendientes(personaId);
+    res.json(pagos);
+  } catch (error) {
+    console.error("Error in getPagosPendientes:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Actualizar pago pendiente
+exports.updatePagoPendiente = async (req, res) => {
+  try {
+    const { pagoId } = req.params;
+    const { montoPagado } = req.body;
+    
+    if (!montoPagado || montoPagado <= 0) {
+      return res.status(400).json({ message: "Monto pagado debe ser mayor a 0" });
+    }
+    
+    const result = await RegisterMemberService.updatePagoPendiente(pagoId, montoPagado);
+    res.json(result);
+  } catch (error) {
+    console.error("Error in updatePagoPendiente:", error);
+    res.status(500).json({ message: error.message });
+  }
+};

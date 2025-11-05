@@ -17,4 +17,10 @@ router.get("/cash-register/status/:cajaId", RegisterMemberController.getCashRegi
 // Registrar nueva inscripción
 router.post("/subscriptions/register", RegisterMemberController.registerMember);
 
+// Obtener pagos pendientes de una persona
+router.get("/pagos-pendientes/:personaId", RegisterMemberController.getPagosPendientes);
+
+// Actualizar pago pendiente
+router.put("/pagos-pendientes/:pagoId", RegisterMemberController.updatePagoPendiente);
+
 module.exports = router;

@@ -227,6 +227,47 @@ const getLatestMultisucursalInscriptions = async (personId, serviceId, fechaInic
   return result.rows;
 };
 
+// Función checkPagosPendientes definitiva
+const checkPagosPendientes = async (personId) => {
+  try {
+    const result = await query(
+      `
+      SELECT 
+        pp.monto_pendiente,
+        pp.monto_total,
+        s.nombre as servicio_nombre
+      FROM pagos_pendientes pp
+      INNER JOIN ventas_servicios vs ON pp.venta_servicio_id = vs.id
+      INNER JOIN detalle_venta_servicios dvs ON vs.id = dvs.venta_servicio_id
+      INNER JOIN inscripciones i ON dvs.inscripcion_id = i.id
+      INNER JOIN servicios s ON i.servicio_id = s.id
+      WHERE pp.persona_id = $1 
+      AND pp.estado = 'pendiente'
+      AND pp.monto_pendiente > 0
+      ORDER BY pp.fecha_inscripcion DESC
+      LIMIT 1
+      `,
+      [personId]
+    );
+    
+    if (result.rows.length === 0) {
+      return null;
+    }
+
+    const pago = result.rows[0];
+    
+    // Asegurarse de que los montos sean números
+    return {
+      monto_pendiente: parseFloat(pago.monto_pendiente),
+      monto_total: parseFloat(pago.monto_total),
+      servicio_nombre: pago.servicio_nombre
+    };
+  } catch (error) {
+    console.error('Error en checkPagosPendientes:', error);
+    return null;
+  }
+};
+
 // Registrar acceso de cliente
 exports.registerClientAccess = async (
   personId,
@@ -399,12 +440,21 @@ exports.registerClientAccess = async (
     ]
   );
 
+  // VERIFICAR SI EL CLIENTE TIENE PAGOS PENDIENTES
+  const pagoPendiente = await checkPagosPendientes(personId);
+
   return {
     success: true,
     message: `Acceso registrado para ${inscription.servicio_nombre}`,
     remainingVisits: isUnlimitedService ? null : remainingVisits,
     isMultisucursal: inscription.multisucursal,
-    updatedInscriptionsCount: inscription.multisucursal ? latestMultisucursalInscriptions.length : 1
+    updatedInscriptionsCount: inscription.multisucursal ? latestMultisucursalInscriptions.length : 1,
+    tieneDeuda: pagoPendiente !== null,
+    deudaInfo: pagoPendiente ? {
+      montoPendiente: pagoPendiente.monto_pendiente,
+      montoTotal: pagoPendiente.monto_total,
+      servicioNombre: pagoPendiente.servicio_nombre
+    } : null
   };
 };
 
