@@ -56,6 +56,7 @@ const salesControlRoutes = require('./src/routes/salescontrolRoutes');
 const newtransactionRoutes = require('./src/routes/newtransactionRoutes');
 const sellProductsRoutes = require("./src/routes/sellProductsRoutes");
 const suscripcionRoutes = require("./src/routes/suscripcionRoutes");
+const pendientesRoutes = require("./src/routes/pendientesRoutes");
 
 // ✅ CONFIGURACIÓN CORREGIDA: Usar las rutas SIN duplicar middleware
 app.use("/api/reminders", remindersRoutes);
@@ -72,6 +73,7 @@ app.use('/api/sales', salesControlRoutes);
 app.use('/api', newtransactionRoutes);
 app.use("/api/sell-products", sellProductsRoutes);
 app.use("/api/suscripcion", suscripcionRoutes);
+app.use("/api/pendientes", pendientesRoutes);
 
 // Manejador de errores global
 app.use((err, req, res, next) => {
