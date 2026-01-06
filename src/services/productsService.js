@@ -97,11 +97,11 @@ const updateProduct = async (id, nombre, precio_venta, sucursales, stock_por_suc
   try {
     await client.query('BEGIN');
     
-    // Actualizar producto
+    // Actualizar producto - CORREGIDO: $3 en lugar de $4
     await client.query(
       `UPDATE productos 
        SET nombre = $1, precio_venta = $2
-       WHERE id = $4`,
+       WHERE id = $3`,
       [nombre, precio_venta, id]
     );
     
