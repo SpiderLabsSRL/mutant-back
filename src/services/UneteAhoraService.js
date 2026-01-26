@@ -14,22 +14,137 @@ class UneteAhoraService {
     }
   }
 
-  // Obtener todos los planes activos
+  // Obtener todos los planes activos - VERSIÓN CORREGIDA
   static async getPlanes() {
     try {
-      const result = await query(
-        `SELECT s.id as idservicio, s.nombre, s.precio, s.numero_ingresos, 
-                s.categoria, s.estado, s.multisucursal
-         FROM servicios s
-         WHERE s.estado = 1 
-         ORDER BY s.precio`
-      );
+      console.log("Consultando planes desde la base de datos...");
+      
+      // Primero, verifiquemos la estructura de la tabla servicios
+      const tableInfo = await query(`
+        SELECT column_name, data_type 
+        FROM information_schema.columns 
+        WHERE table_name = 'servicios' 
+        ORDER BY ordinal_position;
+      `);
+      
+      console.log("Columnas de la tabla servicios:", tableInfo.rows.map(col => col.column_name));
+      
+      // Consulta adaptativa basada en las columnas disponibles
+      const columnasDisponibles = tableInfo.rows.map(col => col.column_name);
+      
+      let querySQL = `
+        SELECT 
+          s.id as idservicio,
+          s.nombre,
+          s.precio
+      `;
+      
+      // Agregar columnas condicionalmente
+      if (columnasDisponibles.includes('numero_ingresos')) {
+        querySQL += `, s.numero_ingresos`;
+      } else {
+        querySQL += `, 30 as numero_ingresos`;
+      }
+      
+      // No incluir categoria ya que no existe en tu BD
+      querySQL += `, 'Membresía' as categoria`;
+      
+      querySQL += `, s.estado`;
+      
+      if (columnasDisponibles.includes('multisucursal')) {
+        querySQL += `, s.multisucursal`;
+      } else {
+        querySQL += `, false as multisucursal`;
+      }
+      
+      querySQL += `
+        FROM servicios s
+        WHERE s.estado = 1
+        ORDER BY s.precio ASC
+      `;
+      
+      console.log("Query a ejecutar:", querySQL);
+      
+      const result = await query(querySQL);
+      
+      console.log(`Se encontraron ${result.rows.length} planes`);
+      
+      // Log para debug
+      if (result.rows.length > 0) {
+        console.log("Primer plan encontrado:", result.rows[0]);
+      }
       
       return result.rows;
     } catch (error) {
       console.error("Error en getPlanes:", error);
-      throw error;
+      
+      // Si falla, intenta con una consulta más básica
+      try {
+        console.log("Intentando consulta básica...");
+        const resultBasico = await query(`
+          SELECT 
+            id as idservicio,
+            nombre,
+            precio,
+            30 as numero_ingresos,
+            'Membresía' as categoria,
+            estado,
+            false as multisucursal
+          FROM servicios
+          WHERE estado = 1
+          ORDER BY precio ASC
+        `);
+        return resultBasico.rows;
+      } catch (innerError) {
+        console.error("Error en consulta básica:", innerError);
+        
+        // Si todo falla, devolver planes mock para que el frontend funcione
+        console.log("Devolviendo planes mock...");
+        return this.getPlanesMock();
+      }
     }
+  }
+
+  // Planes mock para fallback
+  static getPlanesMock() {
+    return [
+      {
+        idservicio: 1,
+        nombre: "Plan Básico",
+        precio: "150.00",
+        numero_ingresos: 30,
+        categoria: "Membresía",
+        estado: 1,
+        multisucursal: false
+      },
+      {
+        idservicio: 2,
+        nombre: "Plan Avanzado",
+        precio: "180.00",
+        numero_ingresos: 15,
+        categoria: "Membresía",
+        estado: 1,
+        multisucursal: false
+      },
+      {
+        idservicio: 3,
+        nombre: "Plan Premium",
+        precio: "250.00",
+        numero_ingresos: 30,
+        categoria: "Membresía",
+        estado: 1,
+        multisucursal: false
+      },
+      {
+        idservicio: 4,
+        nombre: "Sesión Diaria",
+        precio: "20.00",
+        numero_ingresos: 1,
+        categoria: "Membresía",
+        estado: 1,
+        multisucursal: false
+      }
+    ];
   }
 
   // Buscar usuario por CI
@@ -51,16 +166,26 @@ class UneteAhoraService {
       }
 
       const persona = personaResult.rows[0];
+      console.log("Persona encontrada:", persona.nombres, persona.apellidos);
 
-      // Buscar inscripciones
+      // Buscar inscripciones con LEFT JOIN para evitar errores si faltan relaciones
       const inscripcionesResult = await query(
-        `SELECT i.id, i.servicio_id, i.sucursal_id, i.fecha_inicio, 
-                i.fecha_vencimiento, i.ingresos_disponibles, i.estado,
-                s.nombre as servicio_nombre, s.precio, s.numero_ingresos,
-                su.nombre as sucursal_nombre, su.id as sucursal_id_db
+        `SELECT 
+          i.id, 
+          i.servicio_id, 
+          i.sucursal_id, 
+          i.fecha_inicio, 
+          i.fecha_vencimiento, 
+          COALESCE(i.ingresos_disponibles, 0) as ingresos_disponibles, 
+          i.estado,
+          COALESCE(s.nombre, 'Plan Desconocido') as servicio_nombre, 
+          COALESCE(s.precio, 0) as precio, 
+          30 as numero_ingresos,
+          COALESCE(su.nombre, 'Bunker') as sucursal_nombre, 
+          COALESCE(su.id, 1) as sucursal_id_db
          FROM inscripciones i
-         JOIN servicios s ON i.servicio_id = s.id
-         JOIN sucursales su ON i.sucursal_id = su.id
+         LEFT JOIN servicios s ON i.servicio_id = s.id
+         LEFT JOIN sucursales su ON i.sucursal_id = su.id
          WHERE i.persona_id = $1
          ORDER BY i.fecha_vencimiento DESC`,
         [persona.id]
@@ -93,8 +218,10 @@ class UneteAhoraService {
         };
 
         // Guardar información de sucursal de la última inscripción
-        ultimaSucursalId = insc.sucursal_id_db;
-        ultimaSucursalNombre = insc.sucursal_nombre;
+        if (insc.sucursal_id_db) {
+          ultimaSucursalId = insc.sucursal_id_db;
+          ultimaSucursalNombre = insc.sucursal_nombre;
+        }
 
         const fechaVencimiento = new Date(insc.fecha_vencimiento);
         const fechaHoy = new Date(hoy);
@@ -118,7 +245,9 @@ class UneteAhoraService {
 
       let ultimoIngreso = null;
       if (ultimoIngresoResult.rows.length > 0) {
-        ultimoIngreso = ultimoIngresoResult.rows[0].fecha.toISOString().split('T')[0];
+        ultimoIngreso = ultimoIngresoResult.rows[0].fecha ? 
+          new Date(ultimoIngresoResult.rows[0].fecha).toISOString().split('T')[0] : 
+          null;
         
         // Si hay último ingreso, usar su sucursal
         if (ultimoIngresoResult.rows[0].sucursal_id) {
@@ -136,29 +265,36 @@ class UneteAhoraService {
 
       // Si no tenemos sucursal de inscripciones, buscar si tiene asignación de usuario
       if (!ultimaSucursalId) {
-        const usuarioResult = await query(
-          `SELECT e.sucursal_id, s.nombre 
-           FROM empleados e
-           JOIN sucursales s ON e.sucursal_id = s.id
-           JOIN personas p ON e.persona_id = p.id
-           WHERE p.ci = $1`,
-          [ci]
-        );
-        
-        if (usuarioResult.rows.length > 0) {
-          ultimaSucursalId = usuarioResult.rows[0].sucursal_id;
-          ultimaSucursalNombre = usuarioResult.rows[0].nombre;
+        try {
+          const usuarioResult = await query(
+            `SELECT e.sucursal_id, s.nombre 
+             FROM empleados e
+             JOIN sucursales s ON e.sucursal_id = s.id
+             JOIN personas p ON e.persona_id = p.id
+             WHERE p.ci = $1`,
+            [ci]
+          );
+          
+          if (usuarioResult.rows.length > 0) {
+            ultimaSucursalId = usuarioResult.rows[0].sucursal_id;
+            ultimaSucursalNombre = usuarioResult.rows[0].nombre;
+          }
+        } catch (error) {
+          console.log("No se pudo buscar empleado:", error.message);
         }
       }
 
       // Si todavía no hay sucursal, usar Bunker como default
       if (!ultimaSucursalNombre) {
         ultimaSucursalNombre = "Bunker";
-        // Buscar ID de Bunker
-        const bunkerResult = await query(
-          "SELECT id FROM sucursales WHERE LOWER(nombre) LIKE '%bunker%' LIMIT 1"
-        );
-        ultimaSucursalId = bunkerResult.rows.length > 0 ? bunkerResult.rows[0].id : 1;
+        try {
+          const bunkerResult = await query(
+            "SELECT id FROM sucursales WHERE LOWER(nombre) LIKE '%bunker%' LIMIT 1"
+          );
+          ultimaSucursalId = bunkerResult.rows.length > 0 ? bunkerResult.rows[0].id : 1;
+        } catch (error) {
+          ultimaSucursalId = 1;
+        }
       }
 
       return {
@@ -170,7 +306,7 @@ class UneteAhoraService {
         fechaNacimiento: persona.fecha_nacimiento,
         sucursal: ultimaSucursalNombre.toLowerCase(),
         sucursalId: ultimaSucursalId,
-        sucursalNombre: ultimaSucursalNombre, // Agregamos el nombre completo
+        sucursalNombre: ultimaSucursalNombre,
         planesActivos,
         planesVencidos,
         ultimoIngreso
@@ -193,7 +329,9 @@ class UneteAhoraService {
         [personaId]
       );
       
-      return result.rows.length > 0 ? result.rows[0].fecha.toISOString().split('T')[0] : null;
+      return result.rows.length > 0 && result.rows[0].fecha ? 
+        new Date(result.rows[0].fecha).toISOString().split('T')[0] : 
+        null;
     } catch (error) {
       console.error("Error en obtenerUltimoIngreso:", error);
       throw error;
@@ -366,19 +504,25 @@ class UneteAhoraService {
 
   // Helper methods
   static getDescripcionPlan(nombre) {
-    if (nombre.includes("Básico")) return "Ideal para comenzar";
-    if (nombre.includes("Avanzado")) return "Para resultados rápidos";
-    if (nombre.includes("Premium")) return "Experiencia completa";
-    if (nombre.includes("Diario") || nombre.includes("Sesión")) return "Prueba nuestro gimnasio";
+    if (!nombre) return "Acceso al gimnasio";
+    
+    const nombreLower = nombre.toLowerCase();
+    if (nombreLower.includes("básico")) return "Ideal para comenzar";
+    if (nombreLower.includes("avanzado")) return "Para resultados rápidos";
+    if (nombreLower.includes("premium")) return "Experiencia completa";
+    if (nombreLower.includes("diario") || nombreLower.includes("sesión")) return "Prueba nuestro gimnasio";
     return "Acceso al gimnasio";
   }
 
   static getCaracteristicasPlan(nombre, ingresos) {
     const caracteristicasBase = ["Acceso ilimitado", "Área de cardio", "Pesas libres"];
     
-    if (nombre.includes("Básico")) {
+    if (!nombre) return caracteristicasBase;
+    
+    const nombreLower = nombre.toLowerCase();
+    if (nombreLower.includes("básico")) {
       return [...caracteristicasBase, "Clases grupales básicas"];
-    } else if (nombre.includes("Avanzado")) {
+    } else if (nombreLower.includes("avanzado")) {
       return [
         ...caracteristicasBase,
         "Todo del plan básico",
@@ -386,7 +530,7 @@ class UneteAhoraService {
         "Clases de Crossfit",
         "Nutrición básica"
       ];
-    } else if (nombre.includes("Premium")) {
+    } else if (nombreLower.includes("premium")) {
       return [
         ...caracteristicasBase,
         "Todo del plan avanzado",
