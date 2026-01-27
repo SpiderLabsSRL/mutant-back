@@ -3,7 +3,6 @@ const router = express.Router();
 const UneteAhoraController = require("../controllers/UneteAhoraController");
 
 // Rutas para la funcionalidad de Únete Ahora
-router.get("/sucursales", UneteAhoraController.getSucursales);
 router.get("/buscar-usuario/:ci", UneteAhoraController.buscarUsuarioPorCI);
 router.post("/registrar", UneteAhoraController.registrarUsuario);
 

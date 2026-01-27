@@ -1,20 +1,6 @@
 const UneteAhoraService = require("../services/UneteAhoraService");
 
 class UneteAhoraController {
-  // Obtener todas las sucursales activas
-  static async getSucursales(req, res) {
-    try {
-      const sucursales = await UneteAhoraService.getSucursales();
-      res.json(sucursales);
-    } catch (error) {
-      console.error("Error en getSucursales:", error);
-      res.status(500).json({ 
-        error: "Error al obtener sucursales",
-        detalles: error.message 
-      });
-    }
-  }
-
   // Buscar usuario por CI
   static async buscarUsuarioPorCI(req, res) {
     try {
