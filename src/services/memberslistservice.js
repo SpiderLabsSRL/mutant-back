@@ -1,9 +1,9 @@
 const { query } = require("../../db");
 
-// Obtener miembros con paginación y filtros - CORREGIDO para evitar servicios duplicados
+// Obtener miembros con paginación y filtros - ACTUALIZADO con paginación fija de 10
 const getMembers = async (
-  page,
-  limit,
+  page = 1,
+  limit = 10, // Establecer 10 por defecto
   searchTerm,
   serviceFilter,
   statusFilter,
@@ -23,7 +23,10 @@ const getMembers = async (
       userRol,
     });
 
-    const offset = (page - 1) * limit;
+    // Validar y asegurar que el límite sea 10
+    const itemsPerPage = 10;
+    const currentPage = Math.max(1, parseInt(page) || 1);
+    const offset = (currentPage - 1) * itemsPerPage;
 
     let whereConditions = [];
     let queryParams = [];
@@ -82,7 +85,7 @@ const getMembers = async (
         ? `WHERE ${whereConditions.join(" AND ")}`
         : "";
 
-    // Subconsulta para obtener la última inscripción por servicio, persona y sucursal - CORREGIDO
+    // Subconsulta para obtener la última inscripción por servicio, persona y sucursal
     const membersQuery = `
       WITH UltimasInscripciones AS (
         SELECT 
@@ -125,37 +128,47 @@ const getMembers = async (
         INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
         ${whereClause}
         ORDER BY ui.persona_id, ui.sucursal_id, ui.servicio_id, ui.ultima_fecha DESC
+      ),
+      PersonasUnicas AS (
+        SELECT DISTINCT ON (persona_id, sucursal_id)
+          persona_id,
+          CONCAT(nombres, ' ', apellidos) as name,
+          ci,
+          telefono,
+          fecha_nacimiento,
+          sucursal_id,
+          sucursal_name
+        FROM ServiciosUnicos
+        ORDER BY persona_id, sucursal_id
       )
       SELECT 
-        persona_id as id,
-        CONCAT(nombres, ' ', apellidos) as name,
-        ci,
-        telefono as phone,
-        TO_CHAR(fecha_nacimiento, 'YYYY-MM-DD') as birthDate,
-        sucursal_id,
-        sucursal_name,
-        servicio_id,
-        servicio_nombre,
-        ingresos_disponibles,
-        TO_CHAR(fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
-        servicio_status,
-        TO_CHAR(fecha_inicio, 'YYYY-MM-DD') as registrationDate,
+        pu.persona_id as id,
+        pu.name,
+        pu.ci,
+        pu.telefono as phone,
+        TO_CHAR(pu.fecha_nacimiento, 'YYYY-MM-DD') as birthDate,
+        pu.sucursal_id,
+        pu.sucursal_name,
+        TO_CHAR(MIN(su.fecha_inicio), 'YYYY-MM-DD') as registrationDate,
         CASE 
           WHEN EXISTS (
             SELECT 1 FROM inscripciones i2 
-            WHERE i2.persona_id = persona_id 
-            AND i2.sucursal_id = sucursal_id
+            WHERE i2.persona_id = pu.persona_id 
+            AND i2.sucursal_id = pu.sucursal_id
             AND i2.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
             AND (i2.ingresos_disponibles > 0 OR i2.ingresos_disponibles IS NULL)
           ) THEN 'active'
           ELSE 'inactive'
         END as member_status
-      FROM ServiciosUnicos
-      ORDER BY nombres, apellidos, servicio_nombre
+      FROM PersonasUnicas pu
+      LEFT JOIN ServiciosUnicos su ON pu.persona_id = su.persona_id AND pu.sucursal_id = su.sucursal_id
+      GROUP BY pu.persona_id, pu.name, pu.ci, pu.telefono, pu.fecha_nacimiento, 
+               pu.sucursal_id, pu.sucursal_name
+      ORDER BY pu.name
       LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}
     `;
 
-    // Consulta para contar total - CORREGIDA
+    // Consulta para contar total
     const countQuery = `
       WITH UltimasInscripciones AS (
         SELECT 
@@ -166,20 +179,27 @@ const getMembers = async (
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
         GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
+      ),
+      PersonasUnicas AS (
+        SELECT DISTINCT ON (p.id, ui.sucursal_id)
+          p.id as persona_id,
+          ui.sucursal_id
+        FROM personas p
+        INNER JOIN UltimasInscripciones ui ON p.id = ui.persona_id
+        INNER JOIN inscripciones i ON p.id = i.persona_id 
+          AND i.servicio_id = ui.servicio_id 
+          AND i.sucursal_id = ui.sucursal_id 
+          AND i.fecha_inicio = ui.ultima_fecha
+        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
+        ${whereClause}
+        ORDER BY p.id, ui.sucursal_id
       )
-      SELECT COUNT(DISTINCT CONCAT(p.id, '-', i.sucursal_id))
-      FROM personas p
-      INNER JOIN UltimasInscripciones ui ON p.id = ui.persona_id
-      INNER JOIN inscripciones i ON p.id = i.persona_id 
-        AND i.servicio_id = ui.servicio_id 
-        AND i.sucursal_id = ui.sucursal_id 
-        AND i.fecha_inicio = ui.ultima_fecha
-      INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
-      INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
-      ${whereClause}
+      SELECT COUNT(*) as total_count
+      FROM PersonasUnicas
     `;
 
-    queryParams.push(limit, offset);
+    queryParams.push(itemsPerPage, offset);
 
     console.log("Ejecutando consulta members:", membersQuery);
     console.log("Parámetros:", queryParams);
@@ -187,48 +207,72 @@ const getMembers = async (
     const membersResult = await query(membersQuery, queryParams);
     const countResult = await query(countQuery, queryParams.slice(0, -2));
 
-    // Agrupar servicios por persona y sucursal - CORREGIDO para evitar duplicados
-    const membersMap = new Map();
+    const totalCount = parseInt(countResult.rows[0]?.total_count || 0);
+    console.log("Total de miembros encontrados:", totalCount);
 
-    membersResult.rows.forEach((row) => {
-      const key = `${row.id}-${row.sucursal_id}`;
-
-      if (!membersMap.has(key)) {
-        membersMap.set(key, {
-          id: row.id.toString(),
-          name: row.name || "",
-          ci: row.ci || "",
-          phone: row.phone || "",
-          birthDate: row.birthdate || "",
-          sucursal: row.sucursal_id ? row.sucursal_id.toString() : "",
-          status: row.member_status || "inactive",
-          registrationDate: row.registrationdate || "",
-          services: [],
-        });
-      }
-
-      const member = membersMap.get(key);
-
-      // Verificar si el servicio ya existe antes de agregarlo
-      const servicioExistente = member.services.find(
-        service => service.name === row.servicio_nombre
-      );
-
-      if (!servicioExistente) {
-        member.services.push({
-          name: row.servicio_nombre,
-          expirationDate: row.fecha_vencimiento,
-          status: row.servicio_status,
-          ingresos_disponibles: row.ingresos_disponibles,
-        });
-      }
-    });
-
-    const members = Array.from(membersMap.values());
+    // Ahora obtener los servicios para cada miembro
+    const membersWithServices = [];
+    
+    for (const member of membersResult.rows) {
+      const servicesQuery = `
+        WITH UltimasInscripciones AS (
+          SELECT 
+            i.persona_id,
+            i.servicio_id,
+            i.sucursal_id,
+            MAX(i.fecha_inicio) as ultima_fecha
+          FROM inscripciones i
+          INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+          WHERE i.persona_id = $1 AND i.sucursal_id = $2
+          GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
+        )
+        SELECT 
+          s.nombre as servicio_nombre,
+          i.ingresos_disponibles,
+          TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
+          CASE 
+            WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
+                 AND (i.ingresos_disponibles > 0 OR i.ingresos_disponibles IS NULL) 
+                 THEN 'active'
+            ELSE 'inactive'
+          END as servicio_status
+        FROM UltimasInscripciones ui
+        INNER JOIN inscripciones i ON ui.persona_id = i.persona_id 
+          AND ui.servicio_id = i.servicio_id 
+          AND ui.sucursal_id = i.sucursal_id 
+          AND ui.ultima_fecha = i.fecha_inicio
+        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        ORDER BY s.nombre
+      `;
+      
+      const servicesResult = await query(servicesQuery, [member.id, member.sucursal_id]);
+      
+      const memberData = {
+        id: member.id.toString(),
+        name: member.name || "",
+        ci: member.ci || "",
+        phone: member.phone || "",
+        birthDate: member.birthdate || "",
+        sucursal: member.sucursal_id ? member.sucursal_id.toString() : "",
+        status: member.member_status || "inactive",
+        registrationDate: member.registrationdate || "",
+        services: servicesResult.rows.map(service => ({
+          name: service.servicio_nombre,
+          expirationDate: service.fecha_vencimiento,
+          status: service.servicio_status,
+          ingresos_disponibles: service.ingresos_disponibles,
+        })),
+      };
+      
+      membersWithServices.push(memberData);
+    }
 
     return {
-      members,
-      totalCount: parseInt(countResult.rows[0]?.count || 0),
+      members: membersWithServices,
+      totalCount,
+      currentPage,
+      totalPages: Math.ceil(totalCount / itemsPerPage),
+      itemsPerPage,
     };
   } catch (error) {
     console.error("Error en getMembers service:", error);
@@ -238,7 +282,7 @@ const getMembers = async (
   }
 };
 
-// Obtener todos los miembros (sin paginación) - CORREGIDO para evitar servicios duplicados
+// Obtener todos los miembros para exportar (sin paginación)
 const getAllMembers = async (
   searchTerm,
   serviceFilter,
@@ -305,7 +349,7 @@ const getAllMembers = async (
         ? `WHERE ${whereConditions.join(" AND ")}`
         : "";
 
-    // Subconsulta para obtener la última inscripción por servicio, persona y sucursal - CORREGIDO
+    // Subconsulta para obtener la última inscripción por servicio, persona y sucursal
     const queryText = `
       WITH UltimasInscripciones AS (
         SELECT 
@@ -382,7 +426,7 @@ const getAllMembers = async (
 
     const result = await query(queryText, queryParams);
 
-    // Agrupar servicios por persona y sucursal - CORREGIDO para evitar duplicados
+    // Agrupar servicios por persona y sucursal
     const membersMap = new Map();
 
     result.rows.forEach((row) => {
@@ -428,7 +472,7 @@ const getAllMembers = async (
   }
 };
 
-// Editar miembro - MODIFICADO para permitir letras y números en CI
+// Editar miembro
 const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
   try {
     // Verificar si el CI ya existe en otro miembro ACTIVO
@@ -489,7 +533,7 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
   }
 };
 
-// Eliminar miembro - MODIFICADO para cambiar estado a 1 en lugar de borrar
+// Eliminar miembro
 const deleteMember = async (id) => {
   try {
     // Verificar si el miembro existe y está activo
