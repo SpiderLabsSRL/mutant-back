@@ -4,7 +4,7 @@ class UneteAhoraService {
   // Buscar usuario por CI
   static async buscarUsuarioPorCI(ci) {
     try {
-      // Buscar persona por CI - SOLO si no está eliminado (estado != 0)
+      // Buscar persona por CI - SOLO si no está eliminado (estado != 1)
       const personaResult = await query(
         `SELECT p.id, p.nombres, p.apellidos, p.ci, p.telefono, p.fecha_nacimiento
          FROM personas p
@@ -18,7 +18,7 @@ class UneteAhoraService {
 
       const persona = personaResult.rows[0];
 
-      // Buscar inscripciones activas (estado = 1) de la persona
+      // Buscar TODAS las inscripciones activas (estado = 1) de la persona
       const inscripcionesResult = await query(
         `SELECT 
           i.id,
@@ -35,25 +35,74 @@ class UneteAhoraService {
          JOIN sucursales su ON i.sucursal_id = su.id
          WHERE i.persona_id = $1 
            AND i.estado = 1 -- Solo inscripciones activas
-         ORDER BY i.fecha_vencimiento DESC, i.id DESC`, // Ordenar por fecha de vencimiento y ID para obtener la última
+         ORDER BY i.fecha_vencimiento DESC, i.id DESC`,
         [persona.id],
       );
 
-      const inscripciones = inscripcionesResult.rows;
+      const todasInscripciones = inscripcionesResult.rows;
 
-      // Obtener la última inscripción (la más reciente)
-      let ultimaInscripcion = null;
-      if (inscripciones.length > 0) {
-        ultimaInscripcion = inscripciones[0]; // Primera fila por ORDER BY DESC
+      // Si no hay inscripciones activas
+      if (todasInscripciones.length === 0) {
+        return {
+          id: persona.id,
+          ci: persona.ci,
+          nombre: persona.nombres,
+          apellido: persona.apellidos,
+          celular: persona.telefono || "",
+          fechaNacimiento: persona.fecha_nacimiento,
+          inscripciones: [],
+          tieneInscripcionActiva: false,
+          ultimasInscripciones: [],
+        };
       }
 
-      // Determinar si tiene inscripción activa (vencimiento >= hoy)
+      // Agrupar inscripciones por servicio_id para obtener solo la última de cada servicio
+      const inscripcionesPorServicio = new Map();
+
+      todasInscripciones.forEach((inscripcion) => {
+        const servicioId = inscripcion.servicio_id;
+
+        // Si no existe este servicio en el mapa, o si esta inscripción es más reciente
+        if (!inscripcionesPorServicio.has(servicioId)) {
+          inscripcionesPorServicio.set(servicioId, inscripcion);
+        } else {
+          const existente = inscripcionesPorServicio.get(servicioId);
+          const fechaExistente = new Date(existente.fecha_vencimiento);
+          const fechaNueva = new Date(inscripcion.fecha_vencimiento);
+
+          // Mantener la que tenga fecha de vencimiento más reciente
+          if (fechaNueva > fechaExistente) {
+            inscripcionesPorServicio.set(servicioId, inscripcion);
+          }
+        }
+      });
+
+      // Convertir el mapa a array y ordenar por fecha de vencimiento descendente
+      const ultimasInscripciones = Array.from(
+        inscripcionesPorServicio.values(),
+      ).sort(
+        (a, b) => new Date(b.fecha_vencimiento) - new Date(a.fecha_vencimiento),
+      );
+
+      // Determinar si tiene al menos una inscripción activa (vencimiento >= hoy)
+      const hoy = new Date();
       let tieneInscripcionActiva = false;
-      if (ultimaInscripcion) {
-        const hoy = new Date();
-        const vencimiento = new Date(ultimaInscripcion.fecha_vencimiento);
-        tieneInscripcionActiva = vencimiento >= hoy;
-      }
+      const inscripcionesConEstado = ultimasInscripciones.map((inscripcion) => {
+        const vencimiento = new Date(inscripcion.fecha_vencimiento);
+        const activa = vencimiento >= hoy;
+
+        if (activa) {
+          tieneInscripcionActiva = true;
+        }
+
+        return {
+          ...inscripcion,
+          activa: activa,
+          dias_restantes: Math.ceil(
+            (vencimiento - hoy) / (1000 * 60 * 60 * 24),
+          ),
+        };
+      });
 
       return {
         id: persona.id,
@@ -62,9 +111,9 @@ class UneteAhoraService {
         apellido: persona.apellidos,
         celular: persona.telefono || "",
         fechaNacimiento: persona.fecha_nacimiento,
-        inscripciones: inscripciones,
+        inscripciones: todasInscripciones, // Todas las inscripciones activas
         tieneInscripcionActiva: tieneInscripcionActiva,
-        ultimaInscripcion: ultimaInscripcion,
+        ultimasInscripciones: inscripcionesConEstado, // Última inscripción por cada servicio
       };
     } catch (error) {
       console.error("Error en buscarUsuarioPorCI:", error);
