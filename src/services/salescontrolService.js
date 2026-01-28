@@ -30,6 +30,7 @@ const getSales = async (filters = {}) => {
             (SELECT CAST(value AS NUMERIC) FROM jsonb_each_text(vp.detalle_pago::jsonb) WHERE key = 'qr')
           ELSE 0 
         END as qr,
+        vp.descripcion_descuento as "descripcionDescuento",
         vp.descripcion_descuento as "justificacionDescuento"
       FROM ventas_productos vp
       INNER JOIN empleados e ON vp.empleado_id = e.id
@@ -93,7 +94,7 @@ const getSales = async (filters = {}) => {
       queryStr += ` AND DATE(vp.fecha) = CURRENT_DATE`;
     }
 
-    queryStr += ` GROUP BY vp.id, vp.fecha, p_emp.nombres, p_emp.apellidos, s.nombre, vp.forma_pago, vp.detalle_pago`;
+    queryStr += ` GROUP BY vp.id, vp.fecha, p_emp.nombres, p_emp.apellidos, s.nombre, vp.forma_pago, vp.detalle_pago, vp.descripcion_descuento`;
 
     // Query para ventas de servicios
     let queryStrServicios = `
@@ -121,6 +122,7 @@ const getSales = async (filters = {}) => {
             (SELECT CAST(value AS NUMERIC) FROM jsonb_each_text(vs.detalle_pago::jsonb) WHERE key = 'qr')
           ELSE 0 
         END as qr,
+        vs.descripcion_descuento as "descripcionDescuento",
         vs.descripcion_descuento as "justificacionDescuento"
       FROM ventas_servicios vs
       INNER JOIN personas p_cli ON vs.persona_id = p_cli.id
@@ -188,7 +190,7 @@ const getSales = async (filters = {}) => {
       queryStrServicios += ` AND DATE(vs.fecha) = CURRENT_DATE`;
     }
 
-    queryStrServicios += ` GROUP BY vs.id, vs.fecha, p_cli.nombres, p_cli.apellidos, p_emp.nombres, p_emp.apellidos, s.nombre, vs.forma_pago, vs.detalle_pago`;
+    queryStrServicios += ` GROUP BY vs.id, vs.fecha, p_cli.nombres, p_cli.apellidos, p_emp.nombres, p_emp.apellidos, s.nombre, vs.forma_pago, vs.detalle_pago, vs.descripcion_descuento`;
 
     // Ejecutar ambas consultas
     console.log("🔄 Ejecutando consulta de productos...");
@@ -208,16 +210,6 @@ const getSales = async (filters = {}) => {
     console.log(
       `📊 Total de ventas encontradas: ${allSales.length} (${productSalesResult.rows.length} productos, ${serviceSalesResult.rows.length} servicios)`,
     );
-
-    // DEBUG: Mostrar las primeras 5 ventas
-    if (allSales.length > 0) {
-      console.log("🔍 Primeras 5 ventas encontradas:");
-      allSales.slice(0, 5).forEach((sale, index) => {
-        console.log(
-          `${index + 1}. ID: ${sale.id}, Empleado: ${sale.empleado}, Total: ${sale.total}`,
-        );
-      });
-    }
 
     return allSales;
   } catch (error) {
@@ -275,6 +267,7 @@ const getSaleDetails = async (saleId, saleType) => {
         ...sale,
         items: detailsResult.rows,
         tipo: "producto",
+        descripcionDescuento: sale.descripcion_descuento
       };
     } else {
       // Detalles de venta de servicios
@@ -324,6 +317,7 @@ const getSaleDetails = async (saleId, saleType) => {
         ...sale,
         items: detailsResult.rows,
         tipo: "servicio",
+        descripcionDescuento: sale.descripcion_descuento
       };
     }
   } catch (error) {
