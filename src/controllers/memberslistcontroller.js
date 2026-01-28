@@ -1,93 +1,72 @@
 const membersListService = require("../services/memberslistservice");
 
-// Ruta de prueba
-const testRoute = async (req, res) => {
-  try {
-    res.json({
-      success: true,
-      message: "Ruta de members funcionando correctamente",
-      user: req.user,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error("Error en testRoute:", error);
-    res.status(500).json({
-      success: false,
-      message: "Error en ruta de prueba",
-      error: error.message,
-    });
-  }
-};
-
-// Obtener miembros con paginación y filtros
+// Obtener miembros con paginación
 const getMembers = async (req, res) => {
   try {
-    console.log("Query parameters recibidos:", req.query);
-    console.log("Usuario autenticado:", req.user);
-
     const {
       page = 1,
-      limit = 20,
+      limit = 10,
       searchTerm = "",
       serviceFilter = "all",
       statusFilter = "all",
       sucursalFilter = "all",
     } = req.query;
 
-    // Validar parámetros
-    if (isNaN(page) || page < 1) {
-      return res.status(400).json({
-        success: false,
-        message: "El parámetro page debe ser un número mayor a 0",
-      });
-    }
-
-    if (isNaN(limit) || limit < 1) {
-      return res.status(400).json({
-        success: false,
-        message: "El parámetro limit debe ser un número mayor a 0",
-      });
-    }
-
-    // Obtener información del usuario autenticado
-    const userSucursalId = req.user.idsucursal;
-    const userRol = req.user.rol;
-
-    const result = await membersListService.getMembers(
-      parseInt(page),
-      parseInt(limit),
+    console.log("Controlador getMembers - Parámetros recibidos:", {
+      page,
+      limit,
       searchTerm,
       serviceFilter,
       statusFilter,
       sucursalFilter,
-      userSucursalId,
-      userRol
+      userSucursalId: req.user?.sucursal_id,
+      userRol: req.user?.rol,
+    });
+
+    // Validar parámetros de paginación
+    const pageNum = parseInt(page) || 1;
+    const limitNum = 10; // Fijo en 10
+    const search = searchTerm || "";
+    const service = serviceFilter || "all";
+    const status = statusFilter || "all";
+    const sucursal = sucursalFilter || "all";
+
+    const result = await membersListService.getMembers(
+      pageNum,
+      limitNum,
+      search,
+      service,
+      status,
+      sucursal,
+      req.user?.sucursal_id,
+      req.user?.rol
     );
 
-    console.log(
-      `Encontrados ${result.members.length} miembros de ${result.totalCount} totales`
-    );
+    console.log("Resultado de getMembers:", {
+      totalCount: result.totalCount,
+      currentPage: result.currentPage,
+      totalPages: result.totalPages,
+      itemsPerPage: result.itemsPerPage,
+      membersCount: result.members.length,
+    });
 
     res.json({
       success: true,
-      members: result.members,
-      totalCount: result.totalCount,
+      ...result,
     });
   } catch (error) {
     console.error("Error en getMembers controller:", error);
     res.status(500).json({
       success: false,
-      message: "Error interno del servidor al obtener miembros",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: error.message || "Error al obtener miembros",
+      error: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
   }
 };
 
-// Obtener todos los miembros (sin paginación)
+// Obtener todos los miembros para exportar (sin paginación)
 const getAllMembers = async (req, res) => {
   try {
-    console.log("Query parameters para todos los miembros:", req.query);
-
     const {
       searchTerm = "",
       serviceFilter = "all",
@@ -95,28 +74,35 @@ const getAllMembers = async (req, res) => {
       sucursalFilter = "all",
     } = req.query;
 
-    // Obtener información del usuario autenticado
-    const userSucursalId = req.user.idsucursal;
-    const userRol = req.user.rol;
-
-    const result = await membersListService.getAllMembers(
+    console.log("Controlador getAllMembers - Parámetros recibidos:", {
       searchTerm,
       serviceFilter,
       statusFilter,
       sucursalFilter,
-      userSucursalId,
-      userRol
+      userSucursalId: req.user?.sucursal_id,
+      userRol: req.user?.rol,
+    });
+
+    const members = await membersListService.getAllMembers(
+      searchTerm || "",
+      serviceFilter || "all",
+      statusFilter || "all",
+      sucursalFilter || "all",
+      req.user?.sucursal_id,
+      req.user?.rol
     );
 
-    console.log(`Encontrados ${result.length} miembros en total`);
+    console.log("Resultado de getAllMembers:", {
+      membersCount: members.length,
+    });
 
-    res.json(result);
+    res.json(members);
   } catch (error) {
     console.error("Error en getAllMembers controller:", error);
     res.status(500).json({
       success: false,
-      message: "Error interno del servidor al obtener todos los miembros",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: error.message || "Error al obtener todos los miembros",
+      error: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
   }
 };
@@ -127,56 +113,25 @@ const editMember = async (req, res) => {
     const { id } = req.params;
     const { nombres, apellidos, ci, phone, birthDate } = req.body;
 
-    console.log("Editando miembro:", {
+    console.log("Controlador editMember - Datos recibidos:", {
       id,
       nombres,
       apellidos,
       ci,
       phone,
       birthDate,
+      userRol: req.user?.rol,
     });
 
+    // Validar datos requeridos
     if (!nombres || !apellidos || !ci || !phone || !birthDate) {
       return res.status(400).json({
         success: false,
-        message:
-          "Todos los campos son obligatorios: nombres, apellidos, ci, phone, birthDate",
+        message: "Todos los campos son requeridos",
       });
     }
 
-    // NUEVA VALIDACIÓN: Permitir números y letras en CI
-    if (!/^[a-zA-Z0-9]+$/.test(ci)) {
-      return res.status(400).json({
-        success: false,
-        message: "La cédula de identidad solo puede contener letras y números",
-      });
-    }
-
-    // NUEVA VALIDACIÓN: Longitud entre 7 y 12 caracteres
-    if (ci.length < 7 || ci.length > 12) {
-      return res.status(400).json({
-        success: false,
-        message: "La cédula de identidad debe tener entre 7 y 12 caracteres",
-      });
-    }
-
-    // NUEVA VALIDACIÓN: No puede ser solo letras
-    if (!/\d/.test(ci)) {
-      return res.status(400).json({
-        success: false,
-        message: "La cédula de identidad debe contener al menos un número",
-      });
-    }
-
-    // Validar formato de teléfono
-    if (!/^[\d\s\-\+\(\)]+$/.test(phone)) {
-      return res.status(400).json({
-        success: false,
-        message: "El formato del teléfono no es válido",
-      });
-    }
-
-    const updatedMember = await membersListService.editMember(
+    const result = await membersListService.editMember(
       id,
       nombres,
       apellidos,
@@ -188,12 +143,11 @@ const editMember = async (req, res) => {
     res.json({
       success: true,
       message: "Miembro actualizado exitosamente",
-      member: updatedMember,
+      data: result,
     });
   } catch (error) {
     console.error("Error en editMember controller:", error);
 
-    // Manejar específicamente el error de CI duplicado
     if (error.message.includes("La persona ya existe")) {
       return res.status(409).json({
         success: false,
@@ -202,48 +156,37 @@ const editMember = async (req, res) => {
       });
     }
 
-    if (error.message.includes("no encontrado")) {
-      return res.status(404).json({
-        success: false,
-        message: error.message,
-      });
-    }
-
     res.status(500).json({
       success: false,
-      message: "Error interno del servidor al editar miembro",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: error.message || "Error al editar miembro",
+      error: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
   }
 };
 
-// Eliminar miembro - MODIFICADO para cambiar estado en lugar de borrar
+// Eliminar miembro
 const deleteMember = async (req, res) => {
   try {
     const { id } = req.params;
-    console.log("Eliminando miembro ID:", id);
 
-    const deletedMember = await membersListService.deleteMember(id);
+    console.log("Controlador deleteMember - ID recibido:", {
+      id,
+      userRol: req.user?.rol,
+    });
+
+    const result = await membersListService.deleteMember(id);
 
     res.json({
       success: true,
-      message: "Miembro eliminado exitosamente (cambiado a estado inactivo)",
-      member: deletedMember,
+      message: "Miembro eliminado exitosamente",
+      data: result,
     });
   } catch (error) {
     console.error("Error en deleteMember controller:", error);
-
-    if (error.message.includes("no encontrado")) {
-      return res.status(404).json({
-        success: false,
-        message: error.message,
-      });
-    }
-
     res.status(500).json({
       success: false,
-      message: "Error interno del servidor al eliminar miembro",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: error.message || "Error al eliminar miembro",
+      error: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
   }
 };
@@ -251,6 +194,8 @@ const deleteMember = async (req, res) => {
 // Obtener servicios disponibles
 const getAvailableServices = async (req, res) => {
   try {
+    console.log("Controlador getAvailableServices - Usuario:", req.user);
+
     const services = await membersListService.getAvailableServices();
 
     res.json(services);
@@ -258,14 +203,17 @@ const getAvailableServices = async (req, res) => {
     console.error("Error en getAvailableServices controller:", error);
     res.status(500).json({
       success: false,
-      message: "Error interno del servidor al obtener servicios disponibles",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: error.message || "Error al obtener servicios disponibles",
+      error: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
   }
 };
 
+// Obtener sucursales disponibles
 const getAvailableBranches = async (req, res) => {
   try {
+    console.log("Controlador getAvailableBranches - Usuario:", req.user);
+
     const branches = await membersListService.getAvailableBranches();
 
     res.json(branches);
@@ -273,18 +221,27 @@ const getAvailableBranches = async (req, res) => {
     console.error("Error en getAvailableBranches controller:", error);
     res.status(500).json({
       success: false,
-      message: "Error interno del servidor al obtener sucursales disponibles",
-      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+      message: error.message || "Error al obtener sucursales disponibles",
+      error: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
   }
 };
 
+// Ruta de prueba
+const testRoute = async (req, res) => {
+  res.json({
+    success: true,
+    message: "Ruta de prueba funcionando",
+    timestamp: new Date().toISOString(),
+  });
+};
+
 module.exports = {
-  testRoute,
   getMembers,
   getAllMembers,
   editMember,
   deleteMember,
   getAvailableServices,
   getAvailableBranches,
+  testRoute,
 };
