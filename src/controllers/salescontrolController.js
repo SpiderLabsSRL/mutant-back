@@ -10,6 +10,7 @@ const getSales = async (req, res) => {
       endDate,
       sucursal,
       empleadoId,
+      userId, // Agregado para debug
     } = req.query;
 
     console.log("🔍 Filtros recibidos en sales controller:", {
@@ -19,16 +20,21 @@ const getSales = async (req, res) => {
       endDate,
       sucursal,
       empleadoId,
+      userId,
     });
 
+    // Limpiar parámetros no deseados que puedan causar el error JSON
     const filters = {
       dateFilterType,
       specificDate,
       startDate,
       endDate,
       sucursal: sucursal === "all" ? null : sucursal,
-      empleadoId,
+      empleadoId: empleadoId || null, // Usar empleadoId si viene
     };
+
+    // Debug: verificar si hay parámetros extra
+    console.log("🔍 Todos los parámetros recibidos:", req.query);
 
     const sales = await salesService.getSales(filters);
 
