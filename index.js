@@ -17,7 +17,7 @@ const corsOptions = {
 
     if (
       allowedOrigins.some((allowedOrigin) =>
-        origin.includes(allowedOrigin.replace(/https?:\/\//, ""))
+        origin.includes(allowedOrigin.replace(/https?:\/\//, "")),
       )
     ) {
       return callback(null, true);
@@ -38,8 +38,8 @@ app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
 // ✅ CONFIGURACIÓN CORREGIDA: Aumentar límite para TODAS las rutas
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ limit: '10mb', extended: true }));
+app.use(express.json({ limit: "10mb" }));
+app.use(express.urlencoded({ limit: "10mb", extended: true }));
 
 // Rutas
 const loginRoutes = require("./src/routes/loginroutes");
@@ -48,16 +48,17 @@ const membersListRoutes = require("./src/routes/memberslistroutes");
 const ProductRoutes = require("./src/routes/productsRoutes");
 const EmployeeRoutes = require("./src/routes/employeeRoutes");
 const cashRoutes = require("./src/routes/cashRoutes");
-const servicesRoutes = require("./src/routes/servicesRoutes"); 
+const servicesRoutes = require("./src/routes/servicesRoutes");
 const ReportsRoutes = require("./src/routes/reportsRoutes");
 const AccessRoutes = require("./src/routes/accessRoutes");
 const RegisterMemberRoutes = require("./src/routes/RegisterMemberRoutes");
-const salesControlRoutes = require('./src/routes/salescontrolRoutes');
-const newtransactionRoutes = require('./src/routes/newtransactionRoutes');
+const salesControlRoutes = require("./src/routes/salescontrolRoutes");
+const newtransactionRoutes = require("./src/routes/newtransactionRoutes");
 const sellProductsRoutes = require("./src/routes/sellProductsRoutes");
 const suscripcionRoutes = require("./src/routes/suscripcionRoutes");
 const pendientesRoutes = require("./src/routes/pendientesRoutes");
 const UneteAhoraRoutes = require("./src/routes/UneteAhoraRoutes");
+const Planes = require("./src/routes/PlanesRoutes");
 
 // ✅ CONFIGURACIÓN CORREGIDA: Usar las rutas SIN duplicar middleware
 app.use("/api/reminders", remindersRoutes);
@@ -70,12 +71,13 @@ app.use("/api/services", servicesRoutes);
 app.use("/api/reports", ReportsRoutes);
 app.use("/api/access", AccessRoutes);
 app.use("/api/inscription", RegisterMemberRoutes);
-app.use('/api/sales', salesControlRoutes);
-app.use('/api', newtransactionRoutes);
+app.use("/api/sales", salesControlRoutes);
+app.use("/api", newtransactionRoutes);
 app.use("/api/sell-products", sellProductsRoutes);
 app.use("/api/suscripcion", suscripcionRoutes);
 app.use("/api/pendientes", pendientesRoutes);
 app.use("/api/unete-ahora", UneteAhoraRoutes);
+app.use("/api/planes", Planes);
 
 // Manejador de errores global
 app.use((err, req, res, next) => {
@@ -91,7 +93,7 @@ app.use((err, req, res, next) => {
 app.use("*", (req, res) => {
   res.status(404).json({
     success: false,
-    message: `Ruta no encontrada: ${req.originalUrl}`
+    message: `Ruta no encontrada: ${req.originalUrl}`,
   });
 });
 
