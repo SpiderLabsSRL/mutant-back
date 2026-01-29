@@ -5,6 +5,31 @@ const getSales = async (filters = {}) => {
   try {
     console.log("🔍 Filtros recibidos en sales service:", filters);
 
+    // Función para validar y parsear JSON de forma segura
+    const safeJsonParse = (jsonString) => {
+      if (!jsonString) return null;
+      try {
+        return JSON.parse(jsonString);
+      } catch (e) {
+        console.warn("⚠️ JSON inválido detectado:", jsonString);
+        return null;
+      }
+    };
+
+    // Función para extraer valores del detalle_pago de forma segura
+    const getPaymentDetail = (formaPago, detallePago, tipo) => {
+      if (formaPago === tipo) return "total";
+
+      if (formaPago === "mixto" && detallePago) {
+        const parsed = safeJsonParse(detallePago);
+        if (parsed && typeof parsed === "object" && parsed[tipo]) {
+          return `'${parsed[tipo]}'::numeric`;
+        }
+      }
+
+      return "0";
+    };
+
     let queryStr = `
       SELECT 
         vp.id,
@@ -20,14 +45,32 @@ const getSales = async (filters = {}) => {
         vp.forma_pago as "formaPago",
         CASE 
           WHEN vp.forma_pago = 'efectivo' THEN vp.total
-          WHEN vp.forma_pago = 'mixto' THEN 
-            (SELECT CAST(value AS NUMERIC) FROM jsonb_each_text(vp.detalle_pago::jsonb) WHERE key = 'efectivo')
+          WHEN vp.forma_pago = 'mixto' AND vp.detalle_pago IS NOT NULL 
+          THEN (
+            CASE 
+              WHEN vp.detalle_pago::text ~ '^\{.*\}$' 
+              THEN COALESCE(
+                (vp.detalle_pago::json->>'efectivo')::numeric,
+                0
+              )
+              ELSE 0
+            END
+          )
           ELSE 0 
         END as efectivo,
         CASE 
           WHEN vp.forma_pago = 'qr' THEN vp.total
-          WHEN vp.forma_pago = 'mixto' THEN 
-            (SELECT CAST(value AS NUMERIC) FROM jsonb_each_text(vp.detalle_pago::jsonb) WHERE key = 'qr')
+          WHEN vp.forma_pago = 'mixto' AND vp.detalle_pago IS NOT NULL
+          THEN (
+            CASE 
+              WHEN vp.detalle_pago::text ~ '^\{.*\}$'
+              THEN COALESCE(
+                (vp.detalle_pago::json->>'qr')::numeric,
+                0
+              )
+              ELSE 0
+            END
+          )
           ELSE 0 
         END as qr,
         vp.descripcion_descuento as "descripcionDescuento",
@@ -51,7 +94,7 @@ const getSales = async (filters = {}) => {
       paramCount++;
     }
 
-    // Filtro por empleado (usar usuario_id en lugar de empleado_id si es necesario)
+    // Filtro por empleado
     if (filters.empleadoId) {
       console.log(`🔄 Filtro por empleadoId: ${filters.empleadoId}`);
 
@@ -112,14 +155,32 @@ const getSales = async (filters = {}) => {
         vs.forma_pago as "formaPago",
         CASE 
           WHEN vs.forma_pago = 'efectivo' THEN vs.total
-          WHEN vs.forma_pago = 'mixto' THEN 
-            (SELECT CAST(value AS NUMERIC) FROM jsonb_each_text(vs.detalle_pago::jsonb) WHERE key = 'efectivo')
+          WHEN vs.forma_pago = 'mixto' AND vs.detalle_pago IS NOT NULL 
+          THEN (
+            CASE 
+              WHEN vs.detalle_pago::text ~ '^\{.*\}$'
+              THEN COALESCE(
+                (vs.detalle_pago::json->>'efectivo')::numeric,
+                0
+              )
+              ELSE 0
+            END
+          )
           ELSE 0 
         END as efectivo,
         CASE 
           WHEN vs.forma_pago = 'qr' THEN vs.total
-          WHEN vs.forma_pago = 'mixto' THEN 
-            (SELECT CAST(value AS NUMERIC) FROM jsonb_each_text(vs.detalle_pago::jsonb) WHERE key = 'qr')
+          WHEN vs.forma_pago = 'mixto' AND vs.detalle_pago IS NOT NULL
+          THEN (
+            CASE 
+              WHEN vs.detalle_pago::text ~ '^\{.*\}$'
+              THEN COALESCE(
+                (vs.detalle_pago::json->>'qr')::numeric,
+                0
+              )
+              ELSE 0
+            END
+          )
           ELSE 0 
         END as qr,
         vs.descripcion_descuento as "descripcionDescuento",
@@ -145,7 +206,7 @@ const getSales = async (filters = {}) => {
       paramCountServicios++;
     }
 
-    // Filtro por empleado (usar usuario_id en lugar de empleado_id)
+    // Filtro por empleado
     if (filters.empleadoId) {
       console.log(
         `🔄 Filtro por empleadoId (servicios): ${filters.empleadoId}`,
@@ -192,12 +253,20 @@ const getSales = async (filters = {}) => {
 
     queryStrServicios += ` GROUP BY vs.id, vs.fecha, p_cli.nombres, p_cli.apellidos, p_emp.nombres, p_emp.apellidos, s.nombre, vs.forma_pago, vs.detalle_pago, vs.descripcion_descuento`;
 
-    // Ejecutar ambas consultas
     console.log("🔄 Ejecutando consulta de productos...");
+    console.log("Query productos:", queryStr.substring(0, 500) + "...");
+    console.log("Params productos:", params);
+
     const productSalesResult = await query(queryStr, params);
     console.log(`✅ Productos encontrados: ${productSalesResult.rows.length}`);
 
     console.log("🔄 Ejecutando consulta de servicios...");
+    console.log(
+      "Query servicios:",
+      queryStrServicios.substring(0, 500) + "...",
+    );
+    console.log("Params servicios:", paramsServicios);
+
     const serviceSalesResult = await query(queryStrServicios, paramsServicios);
     console.log(`✅ Servicios encontrados: ${serviceSalesResult.rows.length}`);
 
@@ -211,10 +280,60 @@ const getSales = async (filters = {}) => {
       `📊 Total de ventas encontradas: ${allSales.length} (${productSalesResult.rows.length} productos, ${serviceSalesResult.rows.length} servicios)`,
     );
 
+    // Depurar si hay registros con JSON inválido
+    const problematicSales = allSales.filter((sale) => {
+      return sale.formaPago === "mixto" && (!sale.efectivo || !sale.qr);
+    });
+
+    if (problematicSales.length > 0) {
+      console.warn(
+        `⚠️ ${problematicSales.length} ventas con detalle_pago problemático encontradas`,
+      );
+      problematicSales.forEach((sale) => {
+        console.log(
+          `Venta ID ${sale.id}: formaPago=${sale.formaPago}, efectivo=${sale.efectivo}, qr=${sale.qr}`,
+        );
+      });
+    }
+
     return allSales;
   } catch (error) {
     console.error("❌ Error in getSales service:", error);
-    throw error;
+    console.error("Stack trace:", error.stack);
+
+    // Intentar con una consulta más simple para debug
+    try {
+      console.log("🔄 Intentando consulta simple para debug...");
+      const simpleQuery = `
+        SELECT 
+          vp.id,
+          vp.fecha,
+          NULL as cliente,
+          'Empleado' as empleado,
+          'Sucursal' as sucursal,
+          'producto' as tipo,
+          'Producto' as detalle,
+          vp.subtotal::text,
+          vp.descuento::text,
+          vp.total::text,
+          vp.forma_pago as "formaPago",
+          0 as efectivo,
+          0 as qr,
+          NULL as "descripcionDescuento",
+          NULL as "justificacionDescuento"
+        FROM ventas_productos vp 
+        WHERE vp.subtotal > 0 
+        LIMIT 5
+      `;
+      const debugResult = await query(simpleQuery, []);
+      console.log(
+        `✅ Consulta simple exitosa: ${debugResult.rows.length} registros`,
+      );
+      return debugResult.rows;
+    } catch (debugError) {
+      console.error("❌ Error incluso en consulta simple:", debugError);
+      throw error; // Re-lanzar el error original
+    }
   }
 };
 
@@ -267,7 +386,7 @@ const getSaleDetails = async (saleId, saleType) => {
         ...sale,
         items: detailsResult.rows,
         tipo: "producto",
-        descripcionDescuento: sale.descripcion_descuento
+        descripcionDescuento: sale.descripcion_descuento,
       };
     } else {
       // Detalles de venta de servicios
@@ -317,7 +436,7 @@ const getSaleDetails = async (saleId, saleType) => {
         ...sale,
         items: detailsResult.rows,
         tipo: "servicio",
-        descripcionDescuento: sale.descripcion_descuento
+        descripcionDescuento: sale.descripcion_descuento,
       };
     }
   } catch (error) {
