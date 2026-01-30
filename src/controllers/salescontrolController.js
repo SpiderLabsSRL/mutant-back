@@ -1,4 +1,3 @@
-// backend/controllers/salescontrolController.js
 const salesService = require("../services/salescontrolService");
 
 const getSales = async (req, res) => {
@@ -10,7 +9,8 @@ const getSales = async (req, res) => {
       endDate,
       sucursal,
       empleadoId,
-      userId, // Agregado para debug
+      page = 1,
+      pageSize = 20,
     } = req.query;
 
     console.log("🔍 Filtros recibidos en sales controller:", {
@@ -20,45 +20,56 @@ const getSales = async (req, res) => {
       endDate,
       sucursal,
       empleadoId,
-      userId,
+      page,
+      pageSize,
     });
 
-    // Limpiar parámetros no deseados que puedan causar el error JSON
+    // Validar que para filtros de rango o específico, las fechas estén presentes
+    if (dateFilterType === "range") {
+      if (!startDate || !endDate) {
+        return res.status(400).json({
+          error: "Para rango de fechas, debe especificar fecha inicio y fecha fin",
+        });
+      }
+      
+      // Validar que la fecha inicio no sea mayor a la fecha fin
+      if (new Date(startDate) > new Date(endDate)) {
+        return res.status(400).json({
+          error: "La fecha inicio no puede ser mayor a la fecha fin",
+        });
+      }
+    }
+
+    if (dateFilterType === "specific" && !specificDate) {
+      return res.status(400).json({
+        error: "Para fecha específica, debe seleccionar una fecha",
+      });
+    }
+
+    // Preparar filtros
     const filters = {
       dateFilterType,
       specificDate,
       startDate,
       endDate,
       sucursal: sucursal === "all" ? null : sucursal,
-      empleadoId: empleadoId || null, // Usar empleadoId si viene
+      empleadoId: empleadoId || null,
     };
 
-    // Debug: verificar si hay parámetros extra
-    console.log("🔍 Todos los parámetros recibidos:", req.query);
+    // Validar página
+    const pageNum = Math.max(1, parseInt(page));
+    const pageSizeNum = Math.max(1, Math.min(parseInt(pageSize), 100));
 
-    const sales = await salesService.getSales(filters);
+    console.log(`📄 Solicitando página ${pageNum} con ${pageSizeNum} registros`);
 
-    console.log(`✅ Ventas obtenidas: ${sales.length} registros`);
+    const result = await salesService.getSales(filters, pageNum, pageSizeNum);
 
-    // Convertir strings a números
-    const processedSales = sales.map((sale) => ({
-      ...sale,
-      id: sale.id.toString(),
-      subtotal: parseFloat(sale.subtotal) || 0,
-      descuento: parseFloat(sale.descuento) || 0,
-      total: parseFloat(sale.total) || 0,
-      efectivo: sale.efectivo ? parseFloat(sale.efectivo) : 0,
-      qr: sale.qr ? parseFloat(sale.qr) : 0,
-      fecha: new Date(sale.fecha).toLocaleString("es-BO", {
-        year: "numeric",
-        month: "2-digit",
-        day: "2-digit",
-        hour: "2-digit",
-        minute: "2-digit",
-      }),
-    }));
+    console.log(`✅ Ventas obtenidas: ${result.sales.length} registros de página ${pageNum}`);
 
-    res.json(processedSales);
+    res.json({
+      sales: result.sales,
+      pagination: result.pagination,
+    });
   } catch (error) {
     console.error("❌ Error in getSales controller:", error);
     res.status(500).json({

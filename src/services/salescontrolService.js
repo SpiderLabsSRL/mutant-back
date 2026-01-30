@@ -1,9 +1,11 @@
-// backend/services/salescontrolService.js
 const { query } = require("../../db");
 
-const getSales = async (filters = {}) => {
+const getSales = async (filters = {}, page = 1, pageSize = 20) => {
   try {
     console.log("🔍 Filtros recibidos en sales service:", filters);
+    console.log("📄 Paginación:", { page, pageSize });
+
+    const offset = (page - 1) * pageSize;
 
     // Función para validar y parsear JSON de forma segura
     const safeJsonParse = (jsonString) => {
@@ -16,21 +18,92 @@ const getSales = async (filters = {}) => {
       }
     };
 
-    // Función para extraer valores del detalle_pago de forma segura
-    const getPaymentDetail = (formaPago, detallePago, tipo) => {
-      if (formaPago === tipo) return "total";
+    // Preparar condiciones WHERE
+    let whereConditions = [];
+    let params = [];
+    let paramCount = 1;
 
-      if (formaPago === "mixto" && detallePago) {
-        const parsed = safeJsonParse(detallePago);
-        if (parsed && typeof parsed === "object" && parsed[tipo]) {
-          return `'${parsed[tipo]}'::numeric`;
-        }
+    // Filtro por sucursal
+    if (filters.sucursal && filters.sucursal !== "all") {
+      whereConditions.push(`vp.sucursal_id = $${paramCount}`);
+      params.push(filters.sucursal);
+      paramCount++;
+    }
+
+    // Filtro por empleado (solo para recepcionistas)
+    if (filters.empleadoId) {
+      console.log(`🔄 Filtro por empleadoId: ${filters.empleadoId}`);
+
+      // Obtener el empleado_id correcto desde la tabla usuarios
+      const usuarioResult = await query(
+        "SELECT empleado_id FROM usuarios WHERE id = $1",
+        [filters.empleadoId],
+      );
+
+      if (usuarioResult.rows.length > 0) {
+        const empleadoIdReal = usuarioResult.rows[0].empleado_id;
+        console.log(
+          `🔍 usuario_id ${filters.empleadoId} → empleado_id ${empleadoIdReal}`,
+        );
+
+        whereConditions.push(`vp.empleado_id = $${paramCount}`);
+        params.push(empleadoIdReal);
+        paramCount++;
+      } else {
+        console.log(
+          `⚠️ Usuario ${filters.empleadoId} no encontrado, ignorando filtro`,
+        );
       }
+    }
 
-      return "0";
-    };
+    // Filtro por fecha
+    if (filters.dateFilterType === "specific" && filters.specificDate) {
+      whereConditions.push(`DATE(vp.fecha) = $${paramCount}`);
+      params.push(filters.specificDate);
+      paramCount++;
+    } else if (
+      filters.dateFilterType === "range" &&
+      filters.startDate &&
+      filters.endDate
+    ) {
+      whereConditions.push(`DATE(vp.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`);
+      params.push(filters.startDate, filters.endDate);
+      paramCount += 2;
+    } else if (filters.dateFilterType === "today") {
+      whereConditions.push(`DATE(vp.fecha) = CURRENT_DATE`);
+    } else if (filters.dateFilterType === "yesterday") {
+      whereConditions.push(`DATE(vp.fecha) = CURRENT_DATE - INTERVAL '1 day'`);
+    } else if (filters.dateFilterType === "thisWeek") {
+      whereConditions.push(`DATE(vp.fecha) >= DATE_TRUNC('week', CURRENT_DATE)`);
+      whereConditions.push(`DATE(vp.fecha) <= CURRENT_DATE`);
+    } else if (filters.dateFilterType === "lastWeek") {
+      whereConditions.push(`DATE(vp.fecha) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
+      whereConditions.push(`DATE(vp.fecha) < DATE_TRUNC('week', CURRENT_DATE)`);
+    } else if (filters.dateFilterType === "thisMonth") {
+      whereConditions.push(`DATE(vp.fecha) >= DATE_TRUNC('month', CURRENT_DATE)`);
+      whereConditions.push(`DATE(vp.fecha) <= CURRENT_DATE`);
+    } else if (filters.dateFilterType === "lastMonth") {
+      whereConditions.push(`DATE(vp.fecha) >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
+      whereConditions.push(`DATE(vp.fecha) < DATE_TRUNC('month', CURRENT_DATE)`);
+    }
+    // Para "all" no agregamos filtro de fecha
 
-    let queryStr = `
+    // Construir WHERE clause
+    const whereClause = whereConditions.length > 0 
+      ? `WHERE ${whereConditions.join(' AND ')}` 
+      : '';
+
+    // Query para contar total (sin LIMIT para paginación)
+    const countQuery = `
+      SELECT COUNT(*) as total_count FROM (
+        SELECT vp.id FROM ventas_productos vp ${whereClause}
+        UNION ALL
+        SELECT vs.id FROM ventas_servicios vs ${whereClause.replace(/vp\./g, 'vs.')}
+      ) as total
+    `;
+
+    // Query para ventas de productos (con paginación)
+    let queryStrProductos = `
       SELECT 
         vp.id,
         vp.fecha,
@@ -81,65 +154,14 @@ const getSales = async (filters = {}) => {
       INNER JOIN sucursales s ON vp.sucursal_id = s.id
       INNER JOIN detalle_venta_productos dp ON vp.id = dp.venta_producto_id
       INNER JOIN productos pro ON dp.producto_id = pro.id
-      WHERE vp.subtotal > 0
+      ${whereClause}
+      GROUP BY vp.id, vp.fecha, p_emp.nombres, p_emp.apellidos, s.nombre, 
+               vp.forma_pago, vp.detalle_pago, vp.descripcion_descuento
+      ORDER BY vp.fecha DESC
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `;
 
-    let params = [];
-    let paramCount = 1;
-
-    // Filtro por sucursal
-    if (filters.sucursal) {
-      queryStr += ` AND vp.sucursal_id = $${paramCount}`;
-      params.push(filters.sucursal);
-      paramCount++;
-    }
-
-    // Filtro por empleado
-    if (filters.empleadoId) {
-      console.log(`🔄 Filtro por empleadoId: ${filters.empleadoId}`);
-
-      // Obtener el empleado_id correcto desde la tabla usuarios
-      const usuarioResult = await query(
-        "SELECT empleado_id FROM usuarios WHERE id = $1",
-        [filters.empleadoId],
-      );
-
-      if (usuarioResult.rows.length > 0) {
-        const empleadoIdReal = usuarioResult.rows[0].empleado_id;
-        console.log(
-          `🔍 usuario_id ${filters.empleadoId} → empleado_id ${empleadoIdReal}`,
-        );
-
-        queryStr += ` AND vp.empleado_id = $${paramCount}`;
-        params.push(empleadoIdReal);
-        paramCount++;
-      } else {
-        console.log(
-          `⚠️ Usuario ${filters.empleadoId} no encontrado, ignorando filtro`,
-        );
-      }
-    }
-
-    // Filtro por fecha
-    if (filters.dateFilterType === "specific" && filters.specificDate) {
-      queryStr += ` AND DATE(vp.fecha) = $${paramCount}`;
-      params.push(filters.specificDate);
-      paramCount++;
-    } else if (
-      filters.dateFilterType === "range" &&
-      filters.startDate &&
-      filters.endDate
-    ) {
-      queryStr += ` AND DATE(vp.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`;
-      params.push(filters.startDate, filters.endDate);
-      paramCount += 2;
-    } else if (filters.dateFilterType === "today") {
-      queryStr += ` AND DATE(vp.fecha) = CURRENT_DATE`;
-    }
-
-    queryStr += ` GROUP BY vp.id, vp.fecha, p_emp.nombres, p_emp.apellidos, s.nombre, vp.forma_pago, vp.detalle_pago, vp.descripcion_descuento`;
-
-    // Query para ventas de servicios
+    // Query para ventas de servicios (con paginación)
     let queryStrServicios = `
       SELECT 
         vs.id,
@@ -193,81 +215,32 @@ const getSales = async (filters = {}) => {
       INNER JOIN detalle_venta_servicios dvs ON vs.id = dvs.venta_servicio_id
       INNER JOIN inscripciones ins ON dvs.inscripcion_id = ins.id
       INNER JOIN servicios ser ON ins.servicio_id = ser.id
-      WHERE vs.subtotal > 0
+      ${whereClause.replace(/vp\./g, 'vs.')}
+      GROUP BY vs.id, vs.fecha, p_cli.nombres, p_cli.apellidos, 
+               p_emp.nombres, p_emp.apellidos, s.nombre, 
+               vs.forma_pago, vs.detalle_pago, vs.descripcion_descuento
+      ORDER BY vs.fecha DESC
+      LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `;
 
-    let paramsServicios = [];
-    let paramCountServicios = 1;
+    // Parámetros para paginación
+    params.push(pageSize, offset);
 
-    // Filtro por sucursal
-    if (filters.sucursal) {
-      queryStrServicios += ` AND vs.sucursal_id = $${paramCountServicios}`;
-      paramsServicios.push(filters.sucursal);
-      paramCountServicios++;
-    }
+    console.log("🔄 Ejecutando consultas...");
+    console.log("Query productos:", queryStrProductos.substring(0, 300) + "...");
+    console.log("Params:", params);
 
-    // Filtro por empleado
-    if (filters.empleadoId) {
-      console.log(
-        `🔄 Filtro por empleadoId (servicios): ${filters.empleadoId}`,
-      );
+    // Obtener total de registros
+    const countResult = await query(countQuery, params.slice(0, params.length - 2));
+    const totalCount = parseInt(countResult.rows[0]?.total_count || 0);
 
-      // Obtener el empleado_id correcto desde la tabla usuarios
-      const usuarioResult = await query(
-        "SELECT empleado_id FROM usuarios WHERE id = $1",
-        [filters.empleadoId],
-      );
+    // Ejecutar consultas en paralelo
+    const [productSalesResult, serviceSalesResult] = await Promise.all([
+      query(queryStrProductos, params),
+      query(queryStrServicios, params),
+    ]);
 
-      if (usuarioResult.rows.length > 0) {
-        const empleadoIdReal = usuarioResult.rows[0].empleado_id;
-        console.log(
-          `🔍 usuario_id ${filters.empleadoId} → empleado_id ${empleadoIdReal} (servicios)`,
-        );
-
-        queryStrServicios += ` AND vs.empleado_id = $${paramCountServicios}`;
-        paramsServicios.push(empleadoIdReal);
-        paramCountServicios++;
-      } else {
-        console.log(
-          `⚠️ Usuario ${filters.empleadoId} no encontrado, ignorando filtro (servicios)`,
-        );
-      }
-    }
-
-    // Filtro por fecha
-    if (filters.dateFilterType === "specific" && filters.specificDate) {
-      queryStrServicios += ` AND DATE(vs.fecha) = $${paramCountServicios}`;
-      paramsServicios.push(filters.specificDate);
-      paramCountServicios++;
-    } else if (
-      filters.dateFilterType === "range" &&
-      filters.startDate &&
-      filters.endDate
-    ) {
-      queryStrServicios += ` AND DATE(vs.fecha) BETWEEN $${paramCountServicios} AND $${paramCountServicios + 1}`;
-      paramsServicios.push(filters.startDate, filters.endDate);
-      paramCountServicios += 2;
-    } else if (filters.dateFilterType === "today") {
-      queryStrServicios += ` AND DATE(vs.fecha) = CURRENT_DATE`;
-    }
-
-    queryStrServicios += ` GROUP BY vs.id, vs.fecha, p_cli.nombres, p_cli.apellidos, p_emp.nombres, p_emp.apellidos, s.nombre, vs.forma_pago, vs.detalle_pago, vs.descripcion_descuento`;
-
-    console.log("🔄 Ejecutando consulta de productos...");
-    console.log("Query productos:", queryStr.substring(0, 500) + "...");
-    console.log("Params productos:", params);
-
-    const productSalesResult = await query(queryStr, params);
     console.log(`✅ Productos encontrados: ${productSalesResult.rows.length}`);
-
-    console.log("🔄 Ejecutando consulta de servicios...");
-    console.log(
-      "Query servicios:",
-      queryStrServicios.substring(0, 500) + "...",
-    );
-    console.log("Params servicios:", paramsServicios);
-
-    const serviceSalesResult = await query(queryStrServicios, paramsServicios);
     console.log(`✅ Servicios encontrados: ${serviceSalesResult.rows.length}`);
 
     // Combinar resultados
@@ -277,63 +250,31 @@ const getSales = async (filters = {}) => {
     allSales.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
 
     console.log(
-      `📊 Total de ventas encontradas: ${allSales.length} (${productSalesResult.rows.length} productos, ${serviceSalesResult.rows.length} servicios)`,
+      `📊 Ventas encontradas: ${allSales.length} de ${totalCount} totales (página ${page})`,
     );
 
-    // Depurar si hay registros con JSON inválido
-    const problematicSales = allSales.filter((sale) => {
-      return sale.formaPago === "mixto" && (!sale.efectivo || !sale.qr);
-    });
-
-    if (problematicSales.length > 0) {
-      console.warn(
-        `⚠️ ${problematicSales.length} ventas con detalle_pago problemático encontradas`,
-      );
-      problematicSales.forEach((sale) => {
-        console.log(
-          `Venta ID ${sale.id}: formaPago=${sale.formaPago}, efectivo=${sale.efectivo}, qr=${sale.qr}`,
-        );
-      });
-    }
-
-    return allSales;
+    return {
+      sales: allSales.map((sale) => ({
+        ...sale,
+        id: sale.id.toString(),
+        subtotal: parseFloat(sale.subtotal) || 0,
+        descuento: parseFloat(sale.descuento) || 0,
+        total: parseFloat(sale.total) || 0,
+        efectivo: sale.efectivo ? parseFloat(sale.efectivo) : 0,
+        qr: sale.qr ? parseFloat(sale.qr) : 0,
+        fecha: sale.fecha, // Mantener fecha original de la BD
+      })),
+      pagination: {
+        page,
+        pageSize,
+        total: totalCount,
+        totalPages: Math.ceil(totalCount / pageSize),
+      },
+    };
   } catch (error) {
     console.error("❌ Error in getSales service:", error);
     console.error("Stack trace:", error.stack);
-
-    // Intentar con una consulta más simple para debug
-    try {
-      console.log("🔄 Intentando consulta simple para debug...");
-      const simpleQuery = `
-        SELECT 
-          vp.id,
-          vp.fecha,
-          NULL as cliente,
-          'Empleado' as empleado,
-          'Sucursal' as sucursal,
-          'producto' as tipo,
-          'Producto' as detalle,
-          vp.subtotal::text,
-          vp.descuento::text,
-          vp.total::text,
-          vp.forma_pago as "formaPago",
-          0 as efectivo,
-          0 as qr,
-          NULL as "descripcionDescuento",
-          NULL as "justificacionDescuento"
-        FROM ventas_productos vp 
-        WHERE vp.subtotal > 0 
-        LIMIT 5
-      `;
-      const debugResult = await query(simpleQuery, []);
-      console.log(
-        `✅ Consulta simple exitosa: ${debugResult.rows.length} registros`,
-      );
-      return debugResult.rows;
-    } catch (debugError) {
-      console.error("❌ Error incluso en consulta simple:", debugError);
-      throw error; // Re-lanzar el error original
-    }
+    throw error;
   }
 };
 
