@@ -79,6 +79,75 @@ const getSales = async (req, res) => {
   }
 };
 
+// NUEVA FUNCIÓN: Obtener totales de ventas (sin paginación)
+const getTotals = async (req, res) => {
+  try {
+    const {
+      dateFilterType,
+      specificDate,
+      startDate,
+      endDate,
+      sucursal,
+      empleadoId,
+    } = req.query;
+
+    console.log("📊 Filtros recibidos para totales:", {
+      dateFilterType,
+      specificDate,
+      startDate,
+      endDate,
+      sucursal,
+      empleadoId,
+    });
+
+    // Validar que para filtros de rango o específico, las fechas estén presentes
+    if (dateFilterType === "range") {
+      if (!startDate || !endDate) {
+        return res.status(400).json({
+          error: "Para rango de fechas, debe especificar fecha inicio y fecha fin",
+        });
+      }
+      
+      if (new Date(startDate) > new Date(endDate)) {
+        return res.status(400).json({
+          error: "La fecha inicio no puede ser mayor a la fecha fin",
+        });
+      }
+    }
+
+    if (dateFilterType === "specific" && !specificDate) {
+      return res.status(400).json({
+        error: "Para fecha específica, debe seleccionar una fecha",
+      });
+    }
+
+    // Preparar filtros
+    const filters = {
+      dateFilterType,
+      specificDate,
+      startDate,
+      endDate,
+      sucursal: sucursal === "all" ? null : sucursal,
+      empleadoId: empleadoId || null,
+    };
+
+    console.log("📊 Calculando totales con filtros:", filters);
+
+    // Llamar al servicio para obtener totales
+    const totals = await salesService.getTotals(filters);
+
+    console.log("✅ Totales calculados:", totals);
+
+    res.json(totals);
+  } catch (error) {
+    console.error("❌ Error in getTotals controller:", error);
+    res.status(500).json({
+      error: error.message || "Error al calcular los totales",
+      details: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+};
+
 const getSaleDetails = async (req, res) => {
   try {
     const { id } = req.params;
@@ -120,6 +189,7 @@ const getSucursales = async (req, res) => {
 
 module.exports = {
   getSales,
+  getTotals, // Exportar nueva función
   getSaleDetails,
   getSucursales,
 };

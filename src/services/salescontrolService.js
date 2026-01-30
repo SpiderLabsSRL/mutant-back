@@ -7,34 +7,38 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
 
     const offset = (page - 1) * pageSize;
 
-    // Función para validar y parsear JSON de forma segura
-    const safeJsonParse = (jsonString) => {
-      if (!jsonString) return null;
-      try {
-        return JSON.parse(jsonString);
-      } catch (e) {
-        console.warn("⚠️ JSON inválido detectado:", jsonString);
-        return null;
-      }
-    };
+    // Preparar condiciones WHERE para productos
+    let whereConditionsProductos = [];
+    let paramsProductos = [];
+    let paramCountProductos = 1;
 
-    // Preparar condiciones WHERE
-    let whereConditions = [];
-    let params = [];
-    let paramCount = 1;
+    // Preparar condiciones WHERE para servicios
+    let whereConditionsServicios = [];
+    let paramsServicios = [];
+    let paramCountServicios = 1;
 
-    // Filtro por sucursal
+    // Condición base para ambas consultas
+    const baseConditionProductos = "vp.subtotal > 0";
+    const baseConditionServicios = "vs.subtotal > 0";
+
+    // Filtro por sucursal - PRODUCTOS
     if (filters.sucursal && filters.sucursal !== "all") {
-      whereConditions.push(`vp.sucursal_id = $${paramCount}`);
-      params.push(filters.sucursal);
-      paramCount++;
+      whereConditionsProductos.push(`vp.sucursal_id = $${paramCountProductos}`);
+      paramsProductos.push(filters.sucursal);
+      paramCountProductos++;
     }
 
-    // Filtro por empleado (solo para recepcionistas)
+    // Filtro por sucursal - SERVICIOS
+    if (filters.sucursal && filters.sucursal !== "all") {
+      whereConditionsServicios.push(`vs.sucursal_id = $${paramCountServicios}`);
+      paramsServicios.push(filters.sucursal);
+      paramCountServicios++;
+    }
+
+    // Filtro por empleado (solo para recepcionistas) - PRODUCTOS
     if (filters.empleadoId) {
       console.log(`🔄 Filtro por empleadoId: ${filters.empleadoId}`);
 
-      // Obtener el empleado_id correcto desde la tabla usuarios
       const usuarioResult = await query(
         "SELECT empleado_id FROM usuarios WHERE id = $1",
         [filters.empleadoId],
@@ -46,60 +50,92 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
           `🔍 usuario_id ${filters.empleadoId} → empleado_id ${empleadoIdReal}`,
         );
 
-        whereConditions.push(`vp.empleado_id = $${paramCount}`);
-        params.push(empleadoIdReal);
-        paramCount++;
-      } else {
-        console.log(
-          `⚠️ Usuario ${filters.empleadoId} no encontrado, ignorando filtro`,
-        );
+        whereConditionsProductos.push(`vp.empleado_id = $${paramCountProductos}`);
+        paramsProductos.push(empleadoIdReal);
+        paramCountProductos++;
       }
     }
 
-    // Filtro por fecha
-    if (filters.dateFilterType === "specific" && filters.specificDate) {
-      whereConditions.push(`DATE(vp.fecha) = $${paramCount}`);
-      params.push(filters.specificDate);
-      paramCount++;
-    } else if (
-      filters.dateFilterType === "range" &&
-      filters.startDate &&
-      filters.endDate
-    ) {
-      whereConditions.push(`DATE(vp.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`);
-      params.push(filters.startDate, filters.endDate);
-      paramCount += 2;
-    } else if (filters.dateFilterType === "today") {
-      whereConditions.push(`DATE(vp.fecha) = CURRENT_DATE`);
-    } else if (filters.dateFilterType === "yesterday") {
-      whereConditions.push(`DATE(vp.fecha) = CURRENT_DATE - INTERVAL '1 day'`);
-    } else if (filters.dateFilterType === "thisWeek") {
-      whereConditions.push(`DATE(vp.fecha) >= DATE_TRUNC('week', CURRENT_DATE)`);
-      whereConditions.push(`DATE(vp.fecha) <= CURRENT_DATE`);
-    } else if (filters.dateFilterType === "lastWeek") {
-      whereConditions.push(`DATE(vp.fecha) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
-      whereConditions.push(`DATE(vp.fecha) < DATE_TRUNC('week', CURRENT_DATE)`);
-    } else if (filters.dateFilterType === "thisMonth") {
-      whereConditions.push(`DATE(vp.fecha) >= DATE_TRUNC('month', CURRENT_DATE)`);
-      whereConditions.push(`DATE(vp.fecha) <= CURRENT_DATE`);
-    } else if (filters.dateFilterType === "lastMonth") {
-      whereConditions.push(`DATE(vp.fecha) >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
-      whereConditions.push(`DATE(vp.fecha) < DATE_TRUNC('month', CURRENT_DATE)`);
+    // Filtro por empleado (solo para recepcionistas) - SERVICIOS
+    if (filters.empleadoId) {
+      const usuarioResult = await query(
+        "SELECT empleado_id FROM usuarios WHERE id = $1",
+        [filters.empleadoId],
+      );
+
+      if (usuarioResult.rows.length > 0) {
+        const empleadoIdReal = usuarioResult.rows[0].empleado_id;
+        whereConditionsServicios.push(`vs.empleado_id = $${paramCountServicios}`);
+        paramsServicios.push(empleadoIdReal);
+        paramCountServicios++;
+      }
     }
-    // Para "all" no agregamos filtro de fecha
 
-    // Construir WHERE clause
-    const whereClause = whereConditions.length > 0 
-      ? `WHERE ${whereConditions.join(' AND ')}` 
-      : '';
+    // Función para agregar filtros de fecha
+    const addDateFilters = (whereConditions, params, paramCount, tableAlias) => {
+      let newParamCount = paramCount;
+      
+      if (filters.dateFilterType === "specific" && filters.specificDate) {
+        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
+        params.push(filters.specificDate);
+        newParamCount++;
+      } else if (
+        filters.dateFilterType === "range" &&
+        filters.startDate &&
+        filters.endDate
+      ) {
+        whereConditions.push(`DATE(${tableAlias}.fecha) BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
+        params.push(filters.startDate, filters.endDate);
+        newParamCount += 2;
+      } else if (filters.dateFilterType === "today") {
+        whereConditions.push(`DATE(${tableAlias}.fecha) = CURRENT_DATE`);
+      } else if (filters.dateFilterType === "yesterday") {
+        whereConditions.push(`DATE(${tableAlias}.fecha) = CURRENT_DATE - INTERVAL '1 day'`);
+      } else if (filters.dateFilterType === "thisWeek") {
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('week', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= CURRENT_DATE`);
+      } else if (filters.dateFilterType === "lastWeek") {
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) < DATE_TRUNC('week', CURRENT_DATE)`);
+      } else if (filters.dateFilterType === "thisMonth") {
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('month', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= CURRENT_DATE`);
+      } else if (filters.dateFilterType === "lastMonth") {
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) < DATE_TRUNC('month', CURRENT_DATE)`);
+      }
+      // Para "all" no agregamos filtro de fecha
+      
+      return newParamCount;
+    };
 
-    // Query para contar total (sin LIMIT para paginación)
-    const countQuery = `
-      SELECT COUNT(*) as total_count FROM (
-        SELECT vp.id FROM ventas_productos vp ${whereClause}
-        UNION ALL
-        SELECT vs.id FROM ventas_servicios vs ${whereClause.replace(/vp\./g, 'vs.')}
-      ) as total
+    // Agregar filtros de fecha - PRODUCTOS
+    paramCountProductos = addDateFilters(whereConditionsProductos, paramsProductos, paramCountProductos, "vp");
+
+    // Agregar filtros de fecha - SERVICIOS
+    paramCountServicios = addDateFilters(whereConditionsServicios, paramsServicios, paramCountServicios, "vs");
+
+    // Construir WHERE clauses
+    const whereClauseProductos = whereConditionsProductos.length > 0 
+      ? `WHERE ${baseConditionProductos} AND ${whereConditionsProductos.join(' AND ')}` 
+      : `WHERE ${baseConditionProductos}`;
+
+    const whereClauseServicios = whereConditionsServicios.length > 0 
+      ? `WHERE ${baseConditionServicios} AND ${whereConditionsServicios.join(' AND ')}` 
+      : `WHERE ${baseConditionServicios}`;
+
+    // Query para contar total de productos
+    const countQueryProductos = `
+      SELECT COUNT(DISTINCT vp.id) as total_count 
+      FROM ventas_productos vp
+      ${whereClauseProductos}
+    `;
+
+    // Query para contar total de servicios
+    const countQueryServicios = `
+      SELECT COUNT(DISTINCT vs.id) as total_count 
+      FROM ventas_servicios vs
+      ${whereClauseServicios}
     `;
 
     // Query para ventas de productos (con paginación)
@@ -154,11 +190,11 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       INNER JOIN sucursales s ON vp.sucursal_id = s.id
       INNER JOIN detalle_venta_productos dp ON vp.id = dp.venta_producto_id
       INNER JOIN productos pro ON dp.producto_id = pro.id
-      ${whereClause}
+      ${whereClauseProductos}
       GROUP BY vp.id, vp.fecha, p_emp.nombres, p_emp.apellidos, s.nombre, 
                vp.forma_pago, vp.detalle_pago, vp.descripcion_descuento
       ORDER BY vp.fecha DESC
-      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+      LIMIT $${paramCountProductos} OFFSET $${paramCountProductos + 1}
     `;
 
     // Query para ventas de servicios (con paginación)
@@ -215,33 +251,41 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       INNER JOIN detalle_venta_servicios dvs ON vs.id = dvs.venta_servicio_id
       INNER JOIN inscripciones ins ON dvs.inscripcion_id = ins.id
       INNER JOIN servicios ser ON ins.servicio_id = ser.id
-      ${whereClause.replace(/vp\./g, 'vs.')}
+      ${whereClauseServicios}
       GROUP BY vs.id, vs.fecha, p_cli.nombres, p_cli.apellidos, 
                p_emp.nombres, p_emp.apellidos, s.nombre, 
                vs.forma_pago, vs.detalle_pago, vs.descripcion_descuento
       ORDER BY vs.fecha DESC
-      LIMIT $${paramCount} OFFSET $${paramCount + 1}
+      LIMIT $${paramCountServicios} OFFSET $${paramCountServicios + 1}
     `;
 
-    // Parámetros para paginación
-    params.push(pageSize, offset);
+    // Parámetros para paginación - PRODUCTOS
+    const paramsProductosPaginados = [...paramsProductos, pageSize, offset];
+
+    // Parámetros para paginación - SERVICIOS
+    const paramsServiciosPaginados = [...paramsServicios, pageSize, offset];
 
     console.log("🔄 Ejecutando consultas...");
-    console.log("Query productos:", queryStrProductos.substring(0, 300) + "...");
-    console.log("Params:", params);
-
-    // Obtener total de registros
-    const countResult = await query(countQuery, params.slice(0, params.length - 2));
-    const totalCount = parseInt(countResult.rows[0]?.total_count || 0);
 
     // Ejecutar consultas en paralelo
-    const [productSalesResult, serviceSalesResult] = await Promise.all([
-      query(queryStrProductos, params),
-      query(queryStrServicios, params),
+    const [
+      countProductosResult,
+      countServiciosResult,
+      productSalesResult,
+      serviceSalesResult
+    ] = await Promise.all([
+      query(countQueryProductos, paramsProductos),
+      query(countQueryServicios, paramsServicios),
+      query(queryStrProductos, paramsProductosPaginados),
+      query(queryStrServicios, paramsServiciosPaginados)
     ]);
 
-    console.log(`✅ Productos encontrados: ${productSalesResult.rows.length}`);
-    console.log(`✅ Servicios encontrados: ${serviceSalesResult.rows.length}`);
+    const totalProductos = parseInt(countProductosResult.rows[0]?.total_count || 0);
+    const totalServicios = parseInt(countServiciosResult.rows[0]?.total_count || 0);
+    const totalCount = totalProductos + totalServicios;
+
+    console.log(`✅ Productos encontrados: ${productSalesResult.rows.length} de ${totalProductos} totales`);
+    console.log(`✅ Servicios encontrados: ${serviceSalesResult.rows.length} de ${totalServicios} totales`);
 
     // Combinar resultados
     let allSales = [...productSalesResult.rows, ...serviceSalesResult.rows];
@@ -262,7 +306,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         total: parseFloat(sale.total) || 0,
         efectivo: sale.efectivo ? parseFloat(sale.efectivo) : 0,
         qr: sale.qr ? parseFloat(sale.qr) : 0,
-        fecha: sale.fecha, // Mantener fecha original de la BD
+        fecha: sale.fecha,
       })),
       pagination: {
         page,
@@ -278,6 +322,260 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
   }
 };
 
+// NUEVA FUNCIÓN: Obtener totales de ventas (sin paginación)
+const getTotals = async (filters = {}) => {
+  try {
+    console.log("📊 Calculando totales con filtros:", filters);
+
+    // Preparar condiciones WHERE para productos
+    let whereConditionsProductos = [];
+    let paramsProductos = [];
+    let paramCountProductos = 1;
+
+    // Preparar condiciones WHERE para servicios
+    let whereConditionsServicios = [];
+    let paramsServicios = [];
+    let paramCountServicios = 1;
+
+    // Condición base para ambas consultas
+    const baseConditionProductos = "vp.subtotal > 0";
+    const baseConditionServicios = "vs.subtotal > 0";
+
+    // Filtro por sucursal - PRODUCTOS
+    if (filters.sucursal && filters.sucursal !== "all") {
+      whereConditionsProductos.push(`vp.sucursal_id = $${paramCountProductos}`);
+      paramsProductos.push(filters.sucursal);
+      paramCountProductos++;
+    }
+
+    // Filtro por sucursal - SERVICIOS
+    if (filters.sucursal && filters.sucursal !== "all") {
+      whereConditionsServicios.push(`vs.sucursal_id = $${paramCountServicios}`);
+      paramsServicios.push(filters.sucursal);
+      paramCountServicios++;
+    }
+
+    // Filtro por empleado (solo para recepcionistas) - PRODUCTOS
+    if (filters.empleadoId) {
+      console.log(`🔄 Filtro por empleadoId: ${filters.empleadoId}`);
+
+      const usuarioResult = await query(
+        "SELECT empleado_id FROM usuarios WHERE id = $1",
+        [filters.empleadoId],
+      );
+
+      if (usuarioResult.rows.length > 0) {
+        const empleadoIdReal = usuarioResult.rows[0].empleado_id;
+        console.log(
+          `🔍 usuario_id ${filters.empleadoId} → empleado_id ${empleadoIdReal}`,
+        );
+
+        whereConditionsProductos.push(`vp.empleado_id = $${paramCountProductos}`);
+        paramsProductos.push(empleadoIdReal);
+        paramCountProductos++;
+      }
+    }
+
+    // Filtro por empleado (solo para recepcionistas) - SERVICIOS
+    if (filters.empleadoId) {
+      const usuarioResult = await query(
+        "SELECT empleado_id FROM usuarios WHERE id = $1",
+        [filters.empleadoId],
+      );
+
+      if (usuarioResult.rows.length > 0) {
+        const empleadoIdReal = usuarioResult.rows[0].empleado_id;
+        whereConditionsServicios.push(`vs.empleado_id = $${paramCountServicios}`);
+        paramsServicios.push(empleadoIdReal);
+        paramCountServicios++;
+      }
+    }
+
+    // Función para agregar filtros de fecha
+    const addDateFilters = (whereConditions, params, paramCount, tableAlias) => {
+      let newParamCount = paramCount;
+      
+      if (filters.dateFilterType === "specific" && filters.specificDate) {
+        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
+        params.push(filters.specificDate);
+        newParamCount++;
+      } else if (
+        filters.dateFilterType === "range" &&
+        filters.startDate &&
+        filters.endDate
+      ) {
+        whereConditions.push(`DATE(${tableAlias}.fecha) BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
+        params.push(filters.startDate, filters.endDate);
+        newParamCount += 2;
+      } else if (filters.dateFilterType === "today") {
+        whereConditions.push(`DATE(${tableAlias}.fecha) = CURRENT_DATE`);
+      } else if (filters.dateFilterType === "yesterday") {
+        whereConditions.push(`DATE(${tableAlias}.fecha) = CURRENT_DATE - INTERVAL '1 day'`);
+      } else if (filters.dateFilterType === "thisWeek") {
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('week', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= CURRENT_DATE`);
+      } else if (filters.dateFilterType === "lastWeek") {
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) < DATE_TRUNC('week', CURRENT_DATE)`);
+      } else if (filters.dateFilterType === "thisMonth") {
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('month', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= CURRENT_DATE`);
+      } else if (filters.dateFilterType === "lastMonth") {
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) < DATE_TRUNC('month', CURRENT_DATE)`);
+      }
+      // Para "all" no agregamos filtro de fecha
+      
+      return newParamCount;
+    };
+
+    // Agregar filtros de fecha - PRODUCTOS
+    paramCountProductos = addDateFilters(whereConditionsProductos, paramsProductos, paramCountProductos, "vp");
+
+    // Agregar filtros de fecha - SERVICIOS
+    paramCountServicios = addDateFilters(whereConditionsServicios, paramsServicios, paramCountServicios, "vs");
+
+    // Construir WHERE clauses
+    const whereClauseProductos = whereConditionsProductos.length > 0 
+      ? `WHERE ${baseConditionProductos} AND ${whereConditionsProductos.join(' AND ')}` 
+      : `WHERE ${baseConditionProductos}`;
+
+    const whereClauseServicios = whereConditionsServicios.length > 0 
+      ? `WHERE ${baseConditionServicios} AND ${whereConditionsServicios.join(' AND ')}` 
+      : `WHERE ${baseConditionServicios}`;
+
+    // Query para totales de productos
+    const totalsQueryProductos = `
+      SELECT 
+        COALESCE(SUM(vp.total), 0) as total_productos,
+        COALESCE(SUM(
+          CASE 
+            WHEN vp.forma_pago = 'efectivo' THEN vp.total
+            WHEN vp.forma_pago = 'mixto' AND vp.detalle_pago IS NOT NULL 
+            THEN (
+              CASE 
+                WHEN vp.detalle_pago::text ~ '^\{.*\}$' 
+                THEN COALESCE(
+                  (vp.detalle_pago::json->>'efectivo')::numeric,
+                  0
+                )
+                ELSE 0
+              END
+            )
+            ELSE 0 
+          END
+        ), 0) as efectivo_productos,
+        COALESCE(SUM(
+          CASE 
+            WHEN vp.forma_pago = 'qr' THEN vp.total
+            WHEN vp.forma_pago = 'mixto' AND vp.detalle_pago IS NOT NULL
+            THEN (
+              CASE 
+                WHEN vp.detalle_pago::text ~ '^\{.*\}$'
+                THEN COALESCE(
+                  (vp.detalle_pago::json->>'qr')::numeric,
+                  0
+                )
+                ELSE 0
+              END
+            )
+            ELSE 0 
+          END
+        ), 0) as qr_productos
+      FROM ventas_productos vp
+      ${whereClauseProductos}
+    `;
+
+    // Query para totales de servicios
+    const totalsQueryServicios = `
+      SELECT 
+        COALESCE(SUM(vs.total), 0) as total_servicios,
+        COALESCE(SUM(
+          CASE 
+            WHEN vs.forma_pago = 'efectivo' THEN vs.total
+            WHEN vs.forma_pago = 'mixto' AND vs.detalle_pago IS NOT NULL 
+            THEN (
+              CASE 
+                WHEN vs.detalle_pago::text ~ '^\{.*\}$'
+                THEN COALESCE(
+                  (vs.detalle_pago::json->>'efectivo')::numeric,
+                  0
+                )
+                ELSE 0
+              END
+            )
+            ELSE 0 
+          END
+        ), 0) as efectivo_servicios,
+        COALESCE(SUM(
+          CASE 
+            WHEN vs.forma_pago = 'qr' THEN vs.total
+            WHEN vs.forma_pago = 'mixto' AND vs.detalle_pago IS NOT NULL
+            THEN (
+              CASE 
+                WHEN vs.detalle_pago::text ~ '^\{.*\}$'
+                THEN COALESCE(
+                  (vs.detalle_pago::json->>'qr')::numeric,
+                  0
+                )
+                ELSE 0
+              END
+            )
+            ELSE 0 
+          END
+        ), 0) as qr_servicios
+      FROM ventas_servicios vs
+      ${whereClauseServicios}
+    `;
+
+    // Ejecutar consultas en paralelo
+    const [totalesProductosResult, totalesServiciosResult] = await Promise.all([
+      query(totalsQueryProductos, paramsProductos),
+      query(totalsQueryServicios, paramsServicios)
+    ]);
+
+    const totalProductos = parseFloat(totalesProductosResult.rows[0]?.total_productos || 0);
+    const efectivoProductos = parseFloat(totalesProductosResult.rows[0]?.efectivo_productos || 0);
+    const qrProductos = parseFloat(totalesProductosResult.rows[0]?.qr_productos || 0);
+
+    const totalServicios = parseFloat(totalesServiciosResult.rows[0]?.total_servicios || 0);
+    const efectivoServicios = parseFloat(totalesServiciosResult.rows[0]?.efectivo_servicios || 0);
+    const qrServicios = parseFloat(totalesServiciosResult.rows[0]?.qr_servicios || 0);
+
+    const totalGeneral = totalProductos + totalServicios;
+    const efectivoGeneral = efectivoProductos + efectivoServicios;
+    const qrGeneral = qrProductos + qrServicios;
+
+    console.log("📊 Resultados de totales:", {
+      totalProductos,
+      efectivoProductos,
+      qrProductos,
+      totalServicios,
+      efectivoServicios,
+      qrServicios,
+      totalGeneral,
+      efectivoGeneral,
+      qrGeneral
+    });
+
+    return {
+      totalGeneral,
+      efectivoGeneral,
+      qrGeneral,
+      totalProductos,
+      efectivoProductos,
+      qrProductos,
+      totalServicios,
+      efectivoServicios,
+      qrServicios,
+    };
+  } catch (error) {
+    console.error("❌ Error in getTotals service:", error);
+    console.error("Stack trace:", error.stack);
+    throw error;
+  }
+};
+
 const getSaleDetails = async (saleId, saleType) => {
   try {
     console.log(
@@ -285,7 +583,6 @@ const getSaleDetails = async (saleId, saleType) => {
     );
 
     if (saleType === "producto") {
-      // Detalles de venta de productos
       const saleResult = await query(
         `SELECT 
           vp.*,
@@ -306,11 +603,7 @@ const getSaleDetails = async (saleId, saleType) => {
       }
 
       const sale = saleResult.rows[0];
-      console.log(
-        `✅ Venta encontrada: ID ${sale.id}, Empleado: ${sale.empleado_nombre}`,
-      );
 
-      // Detalles de productos vendidos
       const detailsResult = await query(
         `SELECT 
           dp.*,
@@ -330,7 +623,6 @@ const getSaleDetails = async (saleId, saleType) => {
         descripcionDescuento: sale.descripcion_descuento,
       };
     } else {
-      // Detalles de venta de servicios
       const saleResult = await query(
         `SELECT 
           vs.*,
@@ -353,11 +645,7 @@ const getSaleDetails = async (saleId, saleType) => {
       }
 
       const sale = saleResult.rows[0];
-      console.log(
-        `✅ Venta encontrada: ID ${sale.id}, Empleado: ${sale.empleado_nombre}`,
-      );
 
-      // Detalles de servicios vendidos
       const detailsResult = await query(
         `SELECT 
           dvs.*,
@@ -407,6 +695,7 @@ const getSucursales = async () => {
 
 module.exports = {
   getSales,
+  getTotals, // Exportar nueva función
   getSaleDetails,
   getSucursales,
 };
