@@ -138,11 +138,11 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       ${whereClauseServicios}
     `;
 
-    // Query para ventas de productos (con paginación)
+    // Query para ventas de productos (con paginación) - MODIFICADA: Formatear fecha en SQL
     let queryStrProductos = `
       SELECT 
         vp.id,
-        vp.fecha,
+        TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha,
         NULL as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
@@ -197,11 +197,11 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       LIMIT $${paramCountProductos} OFFSET $${paramCountProductos + 1}
     `;
 
-    // Query para ventas de servicios (con paginación)
+    // Query para ventas de servicios (con paginación) - MODIFICADA: Formatear fecha en SQL
     let queryStrServicios = `
       SELECT 
         vs.id,
-        vs.fecha,
+        TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha,
         CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
@@ -290,23 +290,53 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
     // Combinar resultados
     let allSales = [...productSalesResult.rows, ...serviceSalesResult.rows];
 
-    // Ordenar por fecha descendente
-    allSales.sort((a, b) => new Date(b.fecha) - new Date(a.fecha));
+    // Ordenar por fecha descendente - MODIFICADO para usar fecha original
+    allSales.sort((a, b) => {
+      // Parsear fechas formateadas para ordenar
+      const dateA = parseDateFromString(a.fecha);
+      const dateB = parseDateFromString(b.fecha);
+      return dateB - dateA;
+    });
 
     console.log(
       `📊 Ventas encontradas: ${allSales.length} de ${totalCount} totales (página ${page})`,
     );
 
+    // Función auxiliar para parsear fecha desde string formateado
+    function parseDateFromString(dateStr) {
+      try {
+        // Formato: "DD/MM/YYYY, HH24:MI:SS"
+        const parts = dateStr.split(', ');
+        const datePart = parts[0]; // "DD/MM/YYYY"
+        const timePart = parts[1]; // "HH24:MI:SS"
+        
+        const [day, month, year] = datePart.split('/');
+        const [hours, minutes, seconds] = timePart.split(':');
+        
+        return new Date(
+          parseInt(year),
+          parseInt(month) - 1, // Meses en JS son 0-indexed
+          parseInt(day),
+          parseInt(hours),
+          parseInt(minutes),
+          parseInt(seconds)
+        );
+      } catch (e) {
+        console.warn("⚠️ Error parseando fecha:", dateStr, e);
+        return new Date();
+      }
+    }
+
     return {
       sales: allSales.map((sale) => ({
         ...sale,
         id: sale.id.toString(),
+        fecha: sale.fecha, // Ya viene formateada desde SQL
         subtotal: parseFloat(sale.subtotal) || 0,
         descuento: parseFloat(sale.descuento) || 0,
         total: parseFloat(sale.total) || 0,
         efectivo: sale.efectivo ? parseFloat(sale.efectivo) : 0,
         qr: sale.qr ? parseFloat(sale.qr) : 0,
-        fecha: sale.fecha,
       })),
       pagination: {
         page,
@@ -586,6 +616,7 @@ const getSaleDetails = async (saleId, saleType) => {
       const saleResult = await query(
         `SELECT 
           vp.*,
+          TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
           u.username as usuario_creador
@@ -618,6 +649,7 @@ const getSaleDetails = async (saleId, saleType) => {
 
       return {
         ...sale,
+        fecha: sale.fecha_formateada, // Usar fecha formateada
         items: detailsResult.rows,
         tipo: "producto",
         descripcionDescuento: sale.descripcion_descuento,
@@ -626,6 +658,7 @@ const getSaleDetails = async (saleId, saleType) => {
       const saleResult = await query(
         `SELECT 
           vs.*,
+          TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
           CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente_nombre,
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
@@ -663,6 +696,7 @@ const getSaleDetails = async (saleId, saleType) => {
 
       return {
         ...sale,
+        fecha: sale.fecha_formateada, // Usar fecha formateada
         items: detailsResult.rows,
         tipo: "servicio",
         descripcionDescuento: sale.descripcion_descuento,
