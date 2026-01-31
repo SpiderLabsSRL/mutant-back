@@ -49,51 +49,18 @@ exports.getTransactionsByCashBox = async (cashBoxId, filters = {}, page = 1, pag
     let params = [cashBoxId];
     let paramCount = 2;
 
-    // Filtro por fecha - CORREGIDO
-    if (filters.dateFilterType) {
-      switch (filters.dateFilterType) {
-        case "specific":
-          if (filters.specificDate) {
-            whereConditions.push(`DATE(tc.fecha) = $${paramCount}`);
-            params.push(filters.specificDate);
-            paramCount++;
-          }
-          break;
-        case "range":
-          if (filters.startDate && filters.endDate) {
-            whereConditions.push(`DATE(tc.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`);
-            params.push(filters.startDate, filters.endDate);
-            paramCount += 2;
-          }
-          break;
-        case "today":
-          whereConditions.push(`DATE(tc.fecha) = CURRENT_DATE`);
-          break;
-        case "yesterday":
-          whereConditions.push(`DATE(tc.fecha) = CURRENT_DATE - INTERVAL '1 day'`);
-          break;
-        case "thisWeek":
-          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('week', CURRENT_DATE)`);
-          whereConditions.push(`DATE(tc.fecha) <= CURRENT_DATE`);
-          break;
-        case "lastWeek":
-          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
-          whereConditions.push(`DATE(tc.fecha) < DATE_TRUNC('week', CURRENT_DATE)`);
-          break;
-        case "thisMonth":
-          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('month', CURRENT_DATE)`);
-          whereConditions.push(`DATE(tc.fecha) <= CURRENT_DATE`);
-          break;
-        case "lastMonth":
-          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
-          whereConditions.push(`DATE(tc.fecha) < DATE_TRUNC('month', CURRENT_DATE)`);
-          break;
-        case "all":
-        default:
-          // No agregar filtro de fecha
-          break;
-      }
+    // Filtro por fecha - SIMPLIFICADO
+    if (filters.dateFilterType === "specific" && filters.specificDate) {
+      whereConditions.push(`DATE(tc.fecha) = $${paramCount}`);
+      params.push(filters.specificDate);
+      paramCount++;
+    } else if (filters.dateFilterType === "range" && filters.startDate && filters.endDate) {
+      whereConditions.push(`DATE(tc.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`);
+      params.push(filters.startDate, filters.endDate);
+      paramCount += 2;
     }
+    // Para "today", "yesterday", etc. el frontend ya los convierte a "specific" o "range"
+    // Para "all" no agregamos filtro de fecha
 
     // Construir WHERE clause
     const whereClause = whereConditions.length > 0 
@@ -158,7 +125,6 @@ exports.getTransactionsByCashBox = async (cashBoxId, filters = {}, page = 1, pag
   }
 };
 
-// NUEVA FUNCIÓN: Obtener totales de transacciones (sin paginación)
 exports.getTransactionTotals = async (cashBoxId, filters = {}) => {
   try {
     console.log("📊 Calculando totales de transacciones con filtros:", filters);
@@ -168,51 +134,17 @@ exports.getTransactionTotals = async (cashBoxId, filters = {}) => {
     let params = [cashBoxId];
     let paramCount = 2;
 
-    // Filtro por fecha - CORREGIDO
-    if (filters.dateFilterType) {
-      switch (filters.dateFilterType) {
-        case "specific":
-          if (filters.specificDate) {
-            whereConditions.push(`DATE(tc.fecha) = $${paramCount}`);
-            params.push(filters.specificDate);
-            paramCount++;
-          }
-          break;
-        case "range":
-          if (filters.startDate && filters.endDate) {
-            whereConditions.push(`DATE(tc.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`);
-            params.push(filters.startDate, filters.endDate);
-            paramCount += 2;
-          }
-          break;
-        case "today":
-          whereConditions.push(`DATE(tc.fecha) = CURRENT_DATE`);
-          break;
-        case "yesterday":
-          whereConditions.push(`DATE(tc.fecha) = CURRENT_DATE - INTERVAL '1 day'`);
-          break;
-        case "thisWeek":
-          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('week', CURRENT_DATE)`);
-          whereConditions.push(`DATE(tc.fecha) <= CURRENT_DATE`);
-          break;
-        case "lastWeek":
-          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
-          whereConditions.push(`DATE(tc.fecha) < DATE_TRUNC('week', CURRENT_DATE)`);
-          break;
-        case "thisMonth":
-          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('month', CURRENT_DATE)`);
-          whereConditions.push(`DATE(tc.fecha) <= CURRENT_DATE`);
-          break;
-        case "lastMonth":
-          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
-          whereConditions.push(`DATE(tc.fecha) < DATE_TRUNC('month', CURRENT_DATE)`);
-          break;
-        case "all":
-        default:
-          // No agregar filtro de fecha
-          break;
-      }
+    // Filtro por fecha - SIMPLIFICADO
+    if (filters.dateFilterType === "specific" && filters.specificDate) {
+      whereConditions.push(`DATE(tc.fecha) = $${paramCount}`);
+      params.push(filters.specificDate);
+      paramCount++;
+    } else if (filters.dateFilterType === "range" && filters.startDate && filters.endDate) {
+      whereConditions.push(`DATE(tc.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`);
+      params.push(filters.startDate, filters.endDate);
+      paramCount += 2;
     }
+    // Para "all" no agregamos filtro de fecha
 
     // Construir WHERE clause
     const whereClause = whereConditions.length > 0 

@@ -54,30 +54,9 @@ exports.getTransactionsByCashBox = async (req, res) => {
       pageSize,
     });
 
-    // Validar que para filtros de rango o específico, las fechas estén presentes
-    if (dateFilterType === "range") {
-      if (!startDate || !endDate) {
-        return res.status(400).json({
-          error: "Para rango de fechas, debe especificar fecha inicio y fecha fin",
-        });
-      }
-      
-      if (new Date(startDate) > new Date(endDate)) {
-        return res.status(400).json({
-          error: "La fecha inicio no puede ser mayor a la fecha fin",
-        });
-      }
-    }
-
-    if (dateFilterType === "specific" && !specificDate) {
-      return res.status(400).json({
-        error: "Para fecha específica, debe seleccionar una fecha",
-      });
-    }
-
     // Preparar filtros
     const filters = {
-      dateFilterType: dateFilterType || "all",
+      dateFilterType,
       specificDate,
       startDate,
       endDate,
@@ -108,7 +87,6 @@ exports.getTransactionsByCashBox = async (req, res) => {
   }
 };
 
-// NUEVA FUNCIÓN: Obtener totales de transacciones (sin paginación)
 exports.getTransactionTotals = async (req, res) => {
   try {
     const {
@@ -127,30 +105,9 @@ exports.getTransactionTotals = async (req, res) => {
       endDate,
     });
 
-    // Validar que para filtros de rango o específico, las fechas estén presentes
-    if (dateFilterType === "range") {
-      if (!startDate || !endDate) {
-        return res.status(400).json({
-          error: "Para rango de fechas, debe especificar fecha inicio y fecha fin",
-        });
-      }
-      
-      if (new Date(startDate) > new Date(endDate)) {
-        return res.status(400).json({
-          error: "La fecha inicio no puede ser mayor a la fecha fin",
-        });
-      }
-    }
-
-    if (dateFilterType === "specific" && !specificDate) {
-      return res.status(400).json({
-        error: "Para fecha específica, debe seleccionar una fecha",
-      });
-    }
-
     // Preparar filtros
     const filters = {
-      dateFilterType: dateFilterType || "all",
+      dateFilterType,
       specificDate,
       startDate,
       endDate,
@@ -168,7 +125,6 @@ exports.getTransactionTotals = async (req, res) => {
     console.error("❌ Error in getTransactionTotals:", error);
     res.status(500).json({
       error: error.message || "Error al calcular los totales de transacciones",
-      details: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
   }
 };
