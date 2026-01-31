@@ -88,6 +88,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         params.push(filters.startDate, filters.endDate);
         newParamCount += 2;
       } else if (filters.dateFilterType === "today") {
+        // MODIFICADO: Filtrar por fecha de hoy usando CURRENT_DATE
         whereConditions.push(`DATE(${tableAlias}.fecha) = CURRENT_DATE`);
       } else if (filters.dateFilterType === "yesterday") {
         whereConditions.push(`DATE(${tableAlias}.fecha) = CURRENT_DATE - INTERVAL '1 day'`);
@@ -438,6 +439,7 @@ const getTotals = async (filters = {}) => {
         params.push(filters.startDate, filters.endDate);
         newParamCount += 2;
       } else if (filters.dateFilterType === "today") {
+        // MODIFICADO: Filtrar por fecha de hoy usando CURRENT_DATE
         whereConditions.push(`DATE(${tableAlias}.fecha) = CURRENT_DATE`);
       } else if (filters.dateFilterType === "yesterday") {
         whereConditions.push(`DATE(${tableAlias}.fecha) = CURRENT_DATE - INTERVAL '1 day'`);
