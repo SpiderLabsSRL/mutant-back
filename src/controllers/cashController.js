@@ -107,6 +107,71 @@ exports.getTransactionsByCashBox = async (req, res) => {
   }
 };
 
+// NUEVA FUNCIÓN: Obtener totales de transacciones (sin paginación)
+exports.getTransactionTotals = async (req, res) => {
+  try {
+    const {
+      cashBoxId,
+      dateFilterType,
+      specificDate,
+      startDate,
+      endDate,
+    } = req.query;
+
+    console.log("📊 Filtros recibidos para totales de transacciones:", {
+      cashBoxId,
+      dateFilterType,
+      specificDate,
+      startDate,
+      endDate,
+    });
+
+    // Validar que para filtros de rango o específico, las fechas estén presentes
+    if (dateFilterType === "range") {
+      if (!startDate || !endDate) {
+        return res.status(400).json({
+          error: "Para rango de fechas, debe especificar fecha inicio y fecha fin",
+        });
+      }
+      
+      if (new Date(startDate) > new Date(endDate)) {
+        return res.status(400).json({
+          error: "La fecha inicio no puede ser mayor a la fecha fin",
+        });
+      }
+    }
+
+    if (dateFilterType === "specific" && !specificDate) {
+      return res.status(400).json({
+        error: "Para fecha específica, debe seleccionar una fecha",
+      });
+    }
+
+    // Preparar filtros
+    const filters = {
+      dateFilterType,
+      specificDate,
+      startDate,
+      endDate,
+    };
+
+    console.log("📊 Calculando totales de transacciones con filtros:", filters);
+
+    // Llamar al servicio para obtener totales
+    const totals = await cashService.getTransactionTotals(cashBoxId, filters);
+
+    console.log("✅ Totales de transacciones calculados:", totals);
+
+    res.json(totals);
+  } catch (error) {
+    console.error("❌ Error in getTransactionTotals:", error);
+    res.status(500).json({
+      error: error.message || "Error al calcular los totales de transacciones",
+      details: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+};
+
 exports.getLactobarTransactions = async (req, res) => {
   try {
     const { branchId } = req.params;

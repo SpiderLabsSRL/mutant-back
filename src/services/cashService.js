@@ -93,7 +93,7 @@ exports.getTransactionsByCashBox = async (cashBoxId, filters = {}, page = 1, pag
       ${whereClause}
     `;
 
-    // Query para obtener transacciones con paginación
+    // Query para obtener transacciones con paginación - MODIFICADA: Formatear fecha en SQL
     const transactionsQuery = `
       SELECT 
         tc.id, 
@@ -101,7 +101,7 @@ exports.getTransactionsByCashBox = async (cashBoxId, filters = {}, page = 1, pag
         tc.tipo, 
         tc.descripcion, 
         tc.monto, 
-        tc.fecha, 
+        TO_CHAR(tc.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha,
         tc.usuario_id,
         CONCAT(p.nombres, ' ', p.apellidos) as empleado_nombre
       FROM transacciones_caja tc
@@ -117,8 +117,6 @@ exports.getTransactionsByCashBox = async (cashBoxId, filters = {}, page = 1, pag
     params.push(pageSize, offset);
 
     console.log("🔄 Ejecutando consultas para transacciones...");
-    console.log("Query transacciones:", transactionsQuery.substring(0, 200) + "...");
-    console.log("Params:", params);
 
     // Ejecutar consultas
     const [countResult, transactionsResult] = await Promise.all([
@@ -144,6 +142,92 @@ exports.getTransactionsByCashBox = async (cashBoxId, filters = {}, page = 1, pag
   }
 };
 
+// NUEVA FUNCIÓN: Obtener totales de transacciones (sin paginación)
+exports.getTransactionTotals = async (cashBoxId, filters = {}) => {
+  try {
+    console.log("📊 Calculando totales de transacciones con filtros:", filters);
+
+    // Preparar condiciones WHERE
+    let whereConditions = ["tc.caja_id = $1"];
+    let params = [cashBoxId];
+    let paramCount = 2;
+
+    // Filtro por fecha
+    if (filters.dateFilterType === "specific" && filters.specificDate) {
+      whereConditions.push(`DATE(tc.fecha) = $${paramCount}`);
+      params.push(filters.specificDate);
+      paramCount++;
+    } else if (
+      filters.dateFilterType === "range" &&
+      filters.startDate &&
+      filters.endDate
+    ) {
+      whereConditions.push(`DATE(tc.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`);
+      params.push(filters.startDate, filters.endDate);
+      paramCount += 2;
+    } else if (filters.dateFilterType === "today") {
+      whereConditions.push(`DATE(tc.fecha) = CURRENT_DATE`);
+    } else if (filters.dateFilterType === "yesterday") {
+      whereConditions.push(`DATE(tc.fecha) = CURRENT_DATE - INTERVAL '1 day'`);
+    } else if (filters.dateFilterType === "thisWeek") {
+      whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('week', CURRENT_DATE)`);
+      whereConditions.push(`DATE(tc.fecha) <= CURRENT_DATE`);
+    } else if (filters.dateFilterType === "lastWeek") {
+      whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
+      whereConditions.push(`DATE(tc.fecha) < DATE_TRUNC('week', CURRENT_DATE)`);
+    } else if (filters.dateFilterType === "thisMonth") {
+      whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('month', CURRENT_DATE)`);
+      whereConditions.push(`DATE(tc.fecha) <= CURRENT_DATE`);
+    } else if (filters.dateFilterType === "lastMonth") {
+      whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
+      whereConditions.push(`DATE(tc.fecha) < DATE_TRUNC('month', CURRENT_DATE)`);
+    }
+    // Para "all" no agregamos filtro de fecha
+
+    // Construir WHERE clause
+    const whereClause = whereConditions.length > 0 
+      ? `WHERE ${whereConditions.join(' AND ')}` 
+      : 'WHERE tc.caja_id = $1';
+
+    // Query para totales de ingresos
+    const ingresosQuery = `
+      SELECT COALESCE(SUM(tc.monto), 0) as total_ingresos
+      FROM transacciones_caja tc
+      ${whereClause} AND tc.tipo IN ('ingreso', 'apertura')
+    `;
+
+    // Query para totales de egresos
+    const egresosQuery = `
+      SELECT COALESCE(SUM(tc.monto), 0) as total_egresos
+      FROM transacciones_caja tc
+      ${whereClause} AND tc.tipo IN ('egreso', 'cierre')
+    `;
+
+    // Ejecutar consultas en paralelo
+    const [ingresosResult, egresosResult] = await Promise.all([
+      query(ingresosQuery, params),
+      query(egresosQuery, params)
+    ]);
+
+    const totalIngresos = parseFloat(ingresosResult.rows[0]?.total_ingresos || 0);
+    const totalEgresos = parseFloat(egresosResult.rows[0]?.total_egresos || 0);
+
+    console.log("📊 Resultados de totales de transacciones:", {
+      totalIngresos,
+      totalEgresos
+    });
+
+    return {
+      totalIngresos,
+      totalEgresos,
+      totalCaja: 0, // Este se calcula con otra función
+    };
+  } catch (error) {
+    console.error("❌ Error en getTransactionTotals service:", error);
+    throw error;
+  }
+};
+
 exports.getLactobarTransactionsByBranch = async (branchId) => {
   const result = await query(
     `SELECT 
@@ -152,7 +236,7 @@ exports.getLactobarTransactionsByBranch = async (branchId) => {
       tc.tipo, 
       tc.descripcion, 
       tc.monto, 
-      tc.fecha, 
+      TO_CHAR(tc.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha,
       tc.usuario_id,
       CONCAT(p.nombres, ' ', p.apellidos) as empleado_nombre
      FROM transacciones_caja tc

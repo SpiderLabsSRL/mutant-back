@@ -14,6 +14,9 @@ router.get("/cashboxes/:cashBoxId/status", cashController.getCashBoxStatus);
 // Rutas para transacciones
 router.get("/cashboxes/:cashBoxId/transactions", cashController.getTransactionsByCashBox);
 
+// NUEVA RUTA: Obtener totales de transacciones (sin paginación)
+router.get("/totals", cashController.getTransactionTotals);
+
 // Ruta específica para transacciones de lactobar
 router.get("/branches/:branchId/lactobar/transactions", cashController.getLactobarTransactions);
 
