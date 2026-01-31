@@ -71,12 +71,13 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       }
     }
 
-    // Función para agregar filtros de fecha
+    // Función para agregar filtros de fecha - CORREGIDA PARA ZONAS HORARIAS
     const addDateFilters = (whereConditions, params, paramCount, tableAlias) => {
       let newParamCount = paramCount;
       
       if (filters.dateFilterType === "specific" && filters.specificDate) {
-        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
+        // Convertir a fecha sin hora para comparación exacta
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') = $${newParamCount}`);
         params.push(filters.specificDate);
         newParamCount++;
       } else if (
@@ -84,26 +85,27 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         filters.startDate &&
         filters.endDate
       ) {
-        whereConditions.push(`DATE(${tableAlias}.fecha) BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
+        // Rango con zona horaria UTC
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
         params.push(filters.startDate, filters.endDate);
         newParamCount += 2;
       } else if (filters.dateFilterType === "today") {
-        // MODIFICADO: Filtrar por fecha de hoy usando CURRENT_DATE
-        whereConditions.push(`DATE(${tableAlias}.fecha) = CURRENT_DATE`);
+        // FIX CRÍTICO: Usar CURRENT_DATE con zona horaria UTC para consistencia
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') = CURRENT_DATE`);
       } else if (filters.dateFilterType === "yesterday") {
-        whereConditions.push(`DATE(${tableAlias}.fecha) = CURRENT_DATE - INTERVAL '1 day'`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') = CURRENT_DATE - INTERVAL '1 day'`);
       } else if (filters.dateFilterType === "thisWeek") {
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('week', CURRENT_DATE)`);
-        whereConditions.push(`DATE(${tableAlias}.fecha) <= CURRENT_DATE`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('week', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') <= CURRENT_DATE`);
       } else if (filters.dateFilterType === "lastWeek") {
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha) < DATE_TRUNC('week', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') < DATE_TRUNC('week', CURRENT_DATE)`);
       } else if (filters.dateFilterType === "thisMonth") {
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('month', CURRENT_DATE)`);
-        whereConditions.push(`DATE(${tableAlias}.fecha) <= CURRENT_DATE`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('month', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') <= CURRENT_DATE`);
       } else if (filters.dateFilterType === "lastMonth") {
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha) < DATE_TRUNC('month', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') < DATE_TRUNC('month', CURRENT_DATE)`);
       }
       // Para "all" no agregamos filtro de fecha
       
@@ -139,11 +141,11 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       ${whereClauseServicios}
     `;
 
-    // Query para ventas de productos (con paginación) - MODIFICADA: Formatear fecha en SQL
+    // Query para ventas de productos (con paginación) - CON ZONA HORARIA UTC
     let queryStrProductos = `
       SELECT 
         vp.id,
-        TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+        TO_CHAR(vp.fecha AT TIME ZONE 'UTC', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
         NULL as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
@@ -198,11 +200,11 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       LIMIT $${paramCountProductos} OFFSET $${paramCountProductos + 1}
     `;
 
-    // Query para ventas de servicios (con paginación) - MODIFICADA: Formatear fecha en SQL
+    // Query para ventas de servicios (con paginación) - CON ZONA HORARIA UTC
     let queryStrServicios = `
       SELECT 
         vs.id,
-        TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+        TO_CHAR(vs.fecha AT TIME ZONE 'UTC', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
         CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
@@ -267,6 +269,8 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
     const paramsServiciosPaginados = [...paramsServicios, pageSize, offset];
 
     console.log("🔄 Ejecutando consultas...");
+    console.log("📍 WHERE Productos:", whereClauseProductos);
+    console.log("📍 WHERE Servicios:", whereClauseServicios);
 
     // Ejecutar consultas en paralelo
     const [
@@ -291,9 +295,8 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
     // Combinar resultados
     let allSales = [...productSalesResult.rows, ...serviceSalesResult.rows];
 
-    // Ordenar por fecha descendente - MODIFICADO para usar fecha original
+    // Ordenar por fecha descendente
     allSales.sort((a, b) => {
-      // Parsear fechas formateadas para ordenar
       const dateA = parseDateFromString(a.fecha);
       const dateB = parseDateFromString(b.fecha);
       return dateB - dateA;
@@ -353,7 +356,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
   }
 };
 
-// NUEVA FUNCIÓN: Obtener totales de ventas (sin paginación)
+// NUEVA FUNCIÓN: Obtener totales de ventas (sin paginación) - CORREGIDA
 const getTotals = async (filters = {}) => {
   try {
     console.log("📊 Calculando totales con filtros:", filters);
@@ -422,12 +425,12 @@ const getTotals = async (filters = {}) => {
       }
     }
 
-    // Función para agregar filtros de fecha
+    // Función para agregar filtros de fecha - CORREGIDA CON ZONA HORARIA
     const addDateFilters = (whereConditions, params, paramCount, tableAlias) => {
       let newParamCount = paramCount;
       
       if (filters.dateFilterType === "specific" && filters.specificDate) {
-        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') = $${newParamCount}`);
         params.push(filters.specificDate);
         newParamCount++;
       } else if (
@@ -435,26 +438,26 @@ const getTotals = async (filters = {}) => {
         filters.startDate &&
         filters.endDate
       ) {
-        whereConditions.push(`DATE(${tableAlias}.fecha) BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
         params.push(filters.startDate, filters.endDate);
         newParamCount += 2;
       } else if (filters.dateFilterType === "today") {
-        // MODIFICADO: Filtrar por fecha de hoy usando CURRENT_DATE
-        whereConditions.push(`DATE(${tableAlias}.fecha) = CURRENT_DATE`);
+        // FIX CRÍTICO: Usar CURRENT_DATE con zona horaria UTC
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') = CURRENT_DATE`);
       } else if (filters.dateFilterType === "yesterday") {
-        whereConditions.push(`DATE(${tableAlias}.fecha) = CURRENT_DATE - INTERVAL '1 day'`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') = CURRENT_DATE - INTERVAL '1 day'`);
       } else if (filters.dateFilterType === "thisWeek") {
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('week', CURRENT_DATE)`);
-        whereConditions.push(`DATE(${tableAlias}.fecha) <= CURRENT_DATE`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('week', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') <= CURRENT_DATE`);
       } else if (filters.dateFilterType === "lastWeek") {
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha) < DATE_TRUNC('week', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') < DATE_TRUNC('week', CURRENT_DATE)`);
       } else if (filters.dateFilterType === "thisMonth") {
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('month', CURRENT_DATE)`);
-        whereConditions.push(`DATE(${tableAlias}.fecha) <= CURRENT_DATE`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('month', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') <= CURRENT_DATE`);
       } else if (filters.dateFilterType === "lastMonth") {
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha) < DATE_TRUNC('month', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') < DATE_TRUNC('month', CURRENT_DATE)`);
       }
       // Para "all" no agregamos filtro de fecha
       
@@ -476,7 +479,7 @@ const getTotals = async (filters = {}) => {
       ? `WHERE ${baseConditionServicios} AND ${whereConditionsServicios.join(' AND ')}` 
       : `WHERE ${baseConditionServicios}`;
 
-    // Query para totales de productos
+    // Query para totales de productos - CORREGIDA CON ZONA HORARIA
     const totalsQueryProductos = `
       SELECT 
         COALESCE(SUM(vp.total), 0) as total_productos,
@@ -518,7 +521,7 @@ const getTotals = async (filters = {}) => {
       ${whereClauseProductos}
     `;
 
-    // Query para totales de servicios
+    // Query para totales de servicios - CORREGIDA CON ZONA HORARIA
     const totalsQueryServicios = `
       SELECT 
         COALESCE(SUM(vs.total), 0) as total_servicios,
@@ -559,6 +562,9 @@ const getTotals = async (filters = {}) => {
       FROM ventas_servicios vs
       ${whereClauseServicios}
     `;
+
+    console.log("📊 Consulta productos:", totalsQueryProductos);
+    console.log("📊 Consulta servicios:", totalsQueryServicios);
 
     // Ejecutar consultas en paralelo
     const [totalesProductosResult, totalesServiciosResult] = await Promise.all([
@@ -618,7 +624,7 @@ const getSaleDetails = async (saleId, saleType) => {
       const saleResult = await query(
         `SELECT 
           vp.*,
-          TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
+          TO_CHAR(vp.fecha AT TIME ZONE 'UTC', 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
           u.username as usuario_creador
@@ -660,7 +666,7 @@ const getSaleDetails = async (saleId, saleType) => {
       const saleResult = await query(
         `SELECT 
           vs.*,
-          TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
+          TO_CHAR(vs.fecha AT TIME ZONE 'UTC', 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
           CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente_nombre,
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
@@ -731,7 +737,7 @@ const getSucursales = async () => {
 
 module.exports = {
   getSales,
-  getTotals, // Exportar nueva función
+  getTotals,
   getSaleDetails,
   getSucursales,
 };

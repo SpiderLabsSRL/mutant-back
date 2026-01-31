@@ -3,7 +3,7 @@ const salesService = require("../services/salescontrolService");
 const getSales = async (req, res) => {
   try {
     const {
-      dateFilterType,
+      dateFilterType = "today", // VALOR POR DEFECTO: today
       specificDate,
       startDate,
       endDate,
@@ -46,9 +46,9 @@ const getSales = async (req, res) => {
       });
     }
 
-    // Preparar filtros
+    // Preparar filtros - CON VALOR POR DEFECTO
     const filters = {
-      dateFilterType,
+      dateFilterType: dateFilterType || "today", // Asegurar que siempre tenga valor
       specificDate,
       startDate,
       endDate,
@@ -61,6 +61,7 @@ const getSales = async (req, res) => {
     const pageSizeNum = Math.max(1, Math.min(parseInt(pageSize), 100));
 
     console.log(`📄 Solicitando página ${pageNum} con ${pageSizeNum} registros`);
+    console.log(`📅 Filtro activo: ${filters.dateFilterType}`);
 
     const result = await salesService.getSales(filters, pageNum, pageSizeNum);
 
@@ -83,7 +84,7 @@ const getSales = async (req, res) => {
 const getTotals = async (req, res) => {
   try {
     const {
-      dateFilterType,
+      dateFilterType = "today", // VALOR POR DEFECTO: today
       specificDate,
       startDate,
       endDate,
@@ -121,9 +122,9 @@ const getTotals = async (req, res) => {
       });
     }
 
-    // Preparar filtros
+    // Preparar filtros - CON VALOR POR DEFECTO
     const filters = {
-      dateFilterType,
+      dateFilterType: dateFilterType || "today", // Asegurar que siempre tenga valor
       specificDate,
       startDate,
       endDate,
@@ -189,7 +190,7 @@ const getSucursales = async (req, res) => {
 
 module.exports = {
   getSales,
-  getTotals, // Exportar nueva función
+  getTotals,
   getSaleDetails,
   getSucursales,
 };
