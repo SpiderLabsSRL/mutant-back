@@ -45,6 +45,7 @@ exports.getTransactionsByCashBox = async (req, res) => {
     } = req.query;
 
     console.log("🔍 Filtros recibidos en getTransactionsByCashBox:", {
+      cashBoxId,
       dateFilterType,
       specificDate,
       startDate,
@@ -76,7 +77,7 @@ exports.getTransactionsByCashBox = async (req, res) => {
 
     // Preparar filtros
     const filters = {
-      dateFilterType,
+      dateFilterType: dateFilterType || "all",
       specificDate,
       startDate,
       endDate,
@@ -149,7 +150,7 @@ exports.getTransactionTotals = async (req, res) => {
 
     // Preparar filtros
     const filters = {
-      dateFilterType,
+      dateFilterType: dateFilterType || "all",
       specificDate,
       startDate,
       endDate,

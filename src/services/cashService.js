@@ -49,37 +49,51 @@ exports.getTransactionsByCashBox = async (cashBoxId, filters = {}, page = 1, pag
     let params = [cashBoxId];
     let paramCount = 2;
 
-    // Filtro por fecha
-    if (filters.dateFilterType === "specific" && filters.specificDate) {
-      whereConditions.push(`DATE(tc.fecha) = $${paramCount}`);
-      params.push(filters.specificDate);
-      paramCount++;
-    } else if (
-      filters.dateFilterType === "range" &&
-      filters.startDate &&
-      filters.endDate
-    ) {
-      whereConditions.push(`DATE(tc.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`);
-      params.push(filters.startDate, filters.endDate);
-      paramCount += 2;
-    } else if (filters.dateFilterType === "today") {
-      whereConditions.push(`DATE(tc.fecha) = CURRENT_DATE`);
-    } else if (filters.dateFilterType === "yesterday") {
-      whereConditions.push(`DATE(tc.fecha) = CURRENT_DATE - INTERVAL '1 day'`);
-    } else if (filters.dateFilterType === "thisWeek") {
-      whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('week', CURRENT_DATE)`);
-      whereConditions.push(`DATE(tc.fecha) <= CURRENT_DATE`);
-    } else if (filters.dateFilterType === "lastWeek") {
-      whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
-      whereConditions.push(`DATE(tc.fecha) < DATE_TRUNC('week', CURRENT_DATE)`);
-    } else if (filters.dateFilterType === "thisMonth") {
-      whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('month', CURRENT_DATE)`);
-      whereConditions.push(`DATE(tc.fecha) <= CURRENT_DATE`);
-    } else if (filters.dateFilterType === "lastMonth") {
-      whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
-      whereConditions.push(`DATE(tc.fecha) < DATE_TRUNC('month', CURRENT_DATE)`);
+    // Filtro por fecha - CORREGIDO
+    if (filters.dateFilterType) {
+      switch (filters.dateFilterType) {
+        case "specific":
+          if (filters.specificDate) {
+            whereConditions.push(`DATE(tc.fecha) = $${paramCount}`);
+            params.push(filters.specificDate);
+            paramCount++;
+          }
+          break;
+        case "range":
+          if (filters.startDate && filters.endDate) {
+            whereConditions.push(`DATE(tc.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`);
+            params.push(filters.startDate, filters.endDate);
+            paramCount += 2;
+          }
+          break;
+        case "today":
+          whereConditions.push(`DATE(tc.fecha) = CURRENT_DATE`);
+          break;
+        case "yesterday":
+          whereConditions.push(`DATE(tc.fecha) = CURRENT_DATE - INTERVAL '1 day'`);
+          break;
+        case "thisWeek":
+          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('week', CURRENT_DATE)`);
+          whereConditions.push(`DATE(tc.fecha) <= CURRENT_DATE`);
+          break;
+        case "lastWeek":
+          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
+          whereConditions.push(`DATE(tc.fecha) < DATE_TRUNC('week', CURRENT_DATE)`);
+          break;
+        case "thisMonth":
+          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('month', CURRENT_DATE)`);
+          whereConditions.push(`DATE(tc.fecha) <= CURRENT_DATE`);
+          break;
+        case "lastMonth":
+          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
+          whereConditions.push(`DATE(tc.fecha) < DATE_TRUNC('month', CURRENT_DATE)`);
+          break;
+        case "all":
+        default:
+          // No agregar filtro de fecha
+          break;
+      }
     }
-    // Para "all" no agregamos filtro de fecha
 
     // Construir WHERE clause
     const whereClause = whereConditions.length > 0 
@@ -93,7 +107,7 @@ exports.getTransactionsByCashBox = async (cashBoxId, filters = {}, page = 1, pag
       ${whereClause}
     `;
 
-    // Query para obtener transacciones con paginación - MODIFICADA: Formatear fecha en SQL
+    // Query para obtener transacciones con paginación
     const transactionsQuery = `
       SELECT 
         tc.id, 
@@ -117,6 +131,8 @@ exports.getTransactionsByCashBox = async (cashBoxId, filters = {}, page = 1, pag
     params.push(pageSize, offset);
 
     console.log("🔄 Ejecutando consultas para transacciones...");
+    console.log("Where clause:", whereClause);
+    console.log("Params:", params);
 
     // Ejecutar consultas
     const [countResult, transactionsResult] = await Promise.all([
@@ -152,37 +168,51 @@ exports.getTransactionTotals = async (cashBoxId, filters = {}) => {
     let params = [cashBoxId];
     let paramCount = 2;
 
-    // Filtro por fecha
-    if (filters.dateFilterType === "specific" && filters.specificDate) {
-      whereConditions.push(`DATE(tc.fecha) = $${paramCount}`);
-      params.push(filters.specificDate);
-      paramCount++;
-    } else if (
-      filters.dateFilterType === "range" &&
-      filters.startDate &&
-      filters.endDate
-    ) {
-      whereConditions.push(`DATE(tc.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`);
-      params.push(filters.startDate, filters.endDate);
-      paramCount += 2;
-    } else if (filters.dateFilterType === "today") {
-      whereConditions.push(`DATE(tc.fecha) = CURRENT_DATE`);
-    } else if (filters.dateFilterType === "yesterday") {
-      whereConditions.push(`DATE(tc.fecha) = CURRENT_DATE - INTERVAL '1 day'`);
-    } else if (filters.dateFilterType === "thisWeek") {
-      whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('week', CURRENT_DATE)`);
-      whereConditions.push(`DATE(tc.fecha) <= CURRENT_DATE`);
-    } else if (filters.dateFilterType === "lastWeek") {
-      whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
-      whereConditions.push(`DATE(tc.fecha) < DATE_TRUNC('week', CURRENT_DATE)`);
-    } else if (filters.dateFilterType === "thisMonth") {
-      whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('month', CURRENT_DATE)`);
-      whereConditions.push(`DATE(tc.fecha) <= CURRENT_DATE`);
-    } else if (filters.dateFilterType === "lastMonth") {
-      whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
-      whereConditions.push(`DATE(tc.fecha) < DATE_TRUNC('month', CURRENT_DATE)`);
+    // Filtro por fecha - CORREGIDO
+    if (filters.dateFilterType) {
+      switch (filters.dateFilterType) {
+        case "specific":
+          if (filters.specificDate) {
+            whereConditions.push(`DATE(tc.fecha) = $${paramCount}`);
+            params.push(filters.specificDate);
+            paramCount++;
+          }
+          break;
+        case "range":
+          if (filters.startDate && filters.endDate) {
+            whereConditions.push(`DATE(tc.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`);
+            params.push(filters.startDate, filters.endDate);
+            paramCount += 2;
+          }
+          break;
+        case "today":
+          whereConditions.push(`DATE(tc.fecha) = CURRENT_DATE`);
+          break;
+        case "yesterday":
+          whereConditions.push(`DATE(tc.fecha) = CURRENT_DATE - INTERVAL '1 day'`);
+          break;
+        case "thisWeek":
+          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('week', CURRENT_DATE)`);
+          whereConditions.push(`DATE(tc.fecha) <= CURRENT_DATE`);
+          break;
+        case "lastWeek":
+          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
+          whereConditions.push(`DATE(tc.fecha) < DATE_TRUNC('week', CURRENT_DATE)`);
+          break;
+        case "thisMonth":
+          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('month', CURRENT_DATE)`);
+          whereConditions.push(`DATE(tc.fecha) <= CURRENT_DATE`);
+          break;
+        case "lastMonth":
+          whereConditions.push(`DATE(tc.fecha) >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
+          whereConditions.push(`DATE(tc.fecha) < DATE_TRUNC('month', CURRENT_DATE)`);
+          break;
+        case "all":
+        default:
+          // No agregar filtro de fecha
+          break;
+      }
     }
-    // Para "all" no agregamos filtro de fecha
 
     // Construir WHERE clause
     const whereClause = whereConditions.length > 0 
@@ -203,6 +233,10 @@ exports.getTransactionTotals = async (cashBoxId, filters = {}) => {
       ${whereClause} AND tc.tipo IN ('egreso', 'cierre')
     `;
 
+    console.log("🔄 Ejecutando consultas para totales...");
+    console.log("Where clause:", whereClause);
+    console.log("Params:", params);
+
     // Ejecutar consultas en paralelo
     const [ingresosResult, egresosResult] = await Promise.all([
       query(ingresosQuery, params),
@@ -220,7 +254,7 @@ exports.getTransactionTotals = async (cashBoxId, filters = {}) => {
     return {
       totalIngresos,
       totalEgresos,
-      totalCaja: 0, // Este se calcula con otra función
+      totalCaja: 0,
     };
   } catch (error) {
     console.error("❌ Error en getTransactionTotals service:", error);
