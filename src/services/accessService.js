@@ -66,11 +66,11 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
   if (typeFilter === "all" || typeFilter === "cliente") {
     const clientParams = [searchParam];
     let clientSql = `
-      WITH ultimas_inscripciones AS (
-        SELECT DISTINCT ON (i.persona_id, i.servicio_id)
+      WITH ultimas_inscripciones_activas AS (
+        SELECT 
+          i.id as idinscripcion,
           i.persona_id,
           i.servicio_id,
-          i.id as idinscripcion,
           i.ingresos_disponibles,
           i.fecha_inicio,
           i.fecha_vencimiento,
@@ -78,6 +78,8 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
           i.sucursal_id,
           s.nombre as nombre_servicio,
           s.multisucursal,
+          s.numero_ingresos as servicio_ingresos_ilimitados,
+          ROW_NUMBER() OVER (PARTITION BY i.servicio_id, i.persona_id ORDER BY i.fecha_inicio DESC) as rn,
           CASE 
             WHEN i.fecha_vencimiento::date < TIMEZONE('America/La_Paz', NOW())::date THEN 'vencido'
             ELSE 'activo'
@@ -85,8 +87,17 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id
         WHERE i.estado = 1
-        AND s.estado = 1  -- Filtrar servicios eliminados
-        ORDER BY i.servicio_id, i.persona_id, i.fecha_inicio DESC
+        AND s.estado = 1
+        -- Filtrar solo servicios activos (no vencidos y con ingresos disponibles o ilimitados)
+        AND (
+          i.fecha_vencimiento::date >= TIMEZONE('America/La_Paz', NOW())::date
+          OR s.numero_ingresos IS NULL -- Servicios ilimitados siempre están activos si no están vencidos
+        )
+        AND (
+          i.ingresos_disponibles > 0 
+          OR i.ingresos_disponibles IS NULL 
+          OR s.numero_ingresos IS NULL
+        )
       )
       SELECT 
         p.id as idpersona,
@@ -108,29 +119,50 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
               'estado', ui.estado,
               'sucursal_id', ui.sucursal_id,
               'multisucursal', ui.multisucursal,
-              'estado_servicio', ui.estado_servicio
+              'estado_servicio', ui.estado_servicio,
+              'servicio_ingresos_ilimitados', (ui.servicio_ingresos_ilimitados IS NULL)
             ) ORDER BY ui.fecha_vencimiento DESC
-          ) FILTER (WHERE ui.idinscripcion IS NOT NULL),
+          ) FILTER (
+            WHERE ui.idinscripcion IS NOT NULL 
+            AND ui.rn = 1 
+            AND ui.estado_servicio = 'activo'
+            -- SOLO MOSTRAR SERVICIOS DE LA SUCURSAL ACTUAL O MULTISUCURSALES
+            AND (ui.sucursal_id = $2 OR ui.multisucursal = TRUE)
+          ),
           '[]'
         ) as servicios
       FROM personas p
-      LEFT JOIN ultimas_inscripciones ui ON p.id = ui.persona_id
+      LEFT JOIN ultimas_inscripciones_activas ui ON p.id = ui.persona_id
       WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
       AND p.estado = 0
     `;
 
-    if (branchId) {
-      clientSql += ` AND (ui.sucursal_id = $2 OR ui.multisucursal = TRUE)`;
-      clientParams.push(branchId);
-    }
-
-    clientSql += ` GROUP BY p.id HAVING COUNT(ui.idinscripcion) > 0`;
+    clientParams.push(branchId);
+    clientSql += ` GROUP BY p.id`;
 
     const clientResult = await query(clientSql, clientParams);
-    results.push(...clientResult.rows);
+    
+    // Filtrar resultados que tengan al menos un servicio activo para esta sucursal
+    const filteredClients = clientResult.rows.filter(row => {
+      if (row.servicios && row.servicios.length > 0) {
+        try {
+          // Asegurar que servicios es un array
+          const serviciosArray = Array.isArray(row.servicios) ? row.servicios : JSON.parse(row.servicios);
+          return serviciosArray.some(servicio => 
+            servicio.estado_servicio === 'activo' && 
+            (servicio.sucursal_id === branchId || servicio.multisucursal === true)
+          );
+        } catch (e) {
+          return false;
+        }
+      }
+      return false;
+    });
+    
+    results.push(...filteredClients);
   }
 
-  // Empleados
+  // Empleados - Solo de la sucursal actual
   if (typeFilter === "all" || typeFilter === "empleado") {
     const employeeParams = [searchParam];
     let employeeSql = `
@@ -153,6 +185,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
             WHERE ra.persona_id = p.id 
             AND ra.tipo_persona = 'empleado' 
             AND ra.detalle LIKE '%Entrada%'
+            AND ra.sucursal_id = $2
           ),
           'ultimo_registro_salida', (
             SELECT MAX(ra.fecha) 
@@ -160,6 +193,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
             WHERE ra.persona_id = p.id 
             AND ra.tipo_persona = 'empleado' 
             AND ra.detalle LIKE '%Salida%'
+            AND ra.sucursal_id = $2
           ),
           'estado_actual', CASE 
             WHEN EXISTS (
@@ -167,12 +201,14 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
               WHERE ra.persona_id = p.id 
               AND ra.tipo_persona = 'empleado' 
               AND ra.detalle LIKE '%Entrada%'
+              AND ra.sucursal_id = $2
               AND ra.fecha > COALESCE((
                 SELECT MAX(ra2.fecha) 
                 FROM registros_acceso ra2 
                 WHERE ra2.persona_id = p.id 
                 AND ra2.tipo_persona = 'empleado' 
                 AND ra2.detalle LIKE '%Salida%'
+                AND ra2.sucursal_id = $2
               ), '1900-01-01')
             ) THEN 'in' 
             ELSE 'out' 
@@ -183,13 +219,10 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
       AND e.estado = 1
       AND p.estado = 0
+      AND e.sucursal_id = $2  -- Solo empleados de esta sucursal
     `;
 
-    if (branchId) {
-      employeeSql += ` AND e.sucursal_id = $2`;
-      employeeParams.push(branchId);
-    }
-
+    employeeParams.push(branchId);
     const employeeResult = await query(employeeSql, employeeParams);
     results.push(...employeeResult.rows);
   }
