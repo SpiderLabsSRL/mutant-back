@@ -1,9 +1,11 @@
-name: Keep-alive Render (Bolivia Time)
-
 on:
   schedule:
-    # Cada 15 minutos solo en horario laboral Bolivia (8 AM - 10 PM)
-    - cron: '*/15 12-2 * * *'  # 8:00 AM - 10:00 PM Bolivia (12:00 - 02:00 UTC)
+    # 8:00 AM - 7:59 PM Bolivia (12:00 - 23:59 UTC)
+    - cron: '*/15 12-23 * * *'
+    
+    # 8:00 PM - 9:59 PM Bolivia (00:00 - 02:59 UTC)
+    - cron: '*/15 0-2 * * *'
+
   workflow_dispatch:
 
 jobs:
