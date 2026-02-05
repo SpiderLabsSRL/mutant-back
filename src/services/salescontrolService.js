@@ -50,7 +50,9 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
           `🔍 usuario_id ${filters.empleadoId} → empleado_id ${empleadoIdReal}`,
         );
 
-        whereConditionsProductos.push(`vp.empleado_id = $${paramCountProductos}`);
+        whereConditionsProductos.push(
+          `vp.empleado_id = $${paramCountProductos}`,
+        );
         paramsProductos.push(empleadoIdReal);
         paramCountProductos++;
       }
@@ -65,18 +67,25 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
 
       if (usuarioResult.rows.length > 0) {
         const empleadoIdReal = usuarioResult.rows[0].empleado_id;
-        whereConditionsServicios.push(`vs.empleado_id = $${paramCountServicios}`);
+        whereConditionsServicios.push(
+          `vs.empleado_id = $${paramCountServicios}`,
+        );
         paramsServicios.push(empleadoIdReal);
         paramCountServicios++;
       }
     }
 
-    // Función para agregar filtros de fecha - SIMPLIFICADA
-    const addDateFilters = (whereConditions, params, paramCount, tableAlias) => {
+    // Función para agregar filtros de fecha - MODIFICADA para usar las fechas como vienen del frontend
+    const addDateFilters = (
+      whereConditions,
+      params,
+      paramCount,
+      tableAlias,
+    ) => {
       let newParamCount = paramCount;
-      
+
       if (filters.dateFilterType === "specific" && filters.specificDate) {
-        // Para fechas específicas, usa la fecha que viene del frontend
+        // Para fecha específica: usar exactamente la fecha que viene del frontend
         whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
         params.push(filters.specificDate);
         newParamCount++;
@@ -85,72 +94,102 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         filters.startDate &&
         filters.endDate
       ) {
-        // Para rangos, usa las fechas que vienen del frontend
-        whereConditions.push(`DATE(${tableAlias}.fecha) BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
+        // Para rango: usar exactamente las fechas que vienen del frontend
+        whereConditions.push(
+          `DATE(${tableAlias}.fecha) BETWEEN $${newParamCount} AND $${newParamCount + 1}`,
+        );
         params.push(filters.startDate, filters.endDate);
         newParamCount += 2;
       } else if (filters.dateFilterType === "today") {
-        // IMPORTANTE: Si dateFilterType es "today" pero NO hay specificDate,
-        // entonces usa NOW() en zona Bolivia
+        // IMPORTANTE: Si es "today", usar la fecha específica que envía el frontend
         if (filters.specificDate) {
-          // Si el frontend envió una fecha específica, úsala
-          console.log(`📅 Usando fecha específica para HOY: ${filters.specificDate}`);
+          console.log(
+            `📅 Usando fecha específica para HOY desde frontend: ${filters.specificDate}`,
+          );
           whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
           params.push(filters.specificDate);
           newParamCount++;
         } else {
-          // Si no hay fecha específica, usa NOW() en zona Bolivia
-          console.log("📅 Usando NOW() en zona Bolivia para HOY");
-          whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = DATE(NOW() AT TIME ZONE 'America/La_Paz')`);
+          // Fallback: usar la fecha de hoy sin conversión de zona horaria
+          console.log("📅 Usando CURRENT_DATE (fecha del servidor) para HOY");
+          whereConditions.push(`DATE(${tableAlias}.fecha) = CURRENT_DATE`);
         }
       } else if (filters.dateFilterType === "yesterday") {
-        // Para "yesterday", usa la fecha que viene del frontend
+        // IMPORTANTE: Si es "yesterday", usar la fecha específica que envía el frontend
         if (filters.specificDate) {
-          console.log(`📅 Usando fecha específica para AYER: ${filters.specificDate}`);
+          console.log(
+            `📅 Usando fecha específica para AYER desde frontend: ${filters.specificDate}`,
+          );
           whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
           params.push(filters.specificDate);
           newParamCount++;
         } else {
-          // Si no hay fecha específica, calcula ayer en zona Bolivia
-          console.log("📅 Calculando AYER en zona Bolivia");
-          whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = DATE(NOW() AT TIME ZONE 'America/La_Paz' - INTERVAL '1 day')`);
+          // Fallback: usar la fecha de ayer sin conversión de zona horaria
+          console.log("📅 Calculando AYER usando CURRENT_DATE");
+          whereConditions.push(
+            `DATE(${tableAlias}.fecha) = CURRENT_DATE - INTERVAL '1 day'`,
+          );
         }
       } else if (filters.dateFilterType === "thisWeek") {
-        // Esta semana en zona Bolivia
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('week', NOW() AT TIME ZONE 'America/La_Paz')`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') <= DATE(NOW() AT TIME ZONE 'America/La_Paz')`);
+        // Esta semana usando CURRENT_DATE (sin conversión de zona horaria)
+        whereConditions.push(
+          `DATE(${tableAlias}.fecha) >= DATE_TRUNC('week', CURRENT_DATE)`,
+        );
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= CURRENT_DATE`);
       } else if (filters.dateFilterType === "lastWeek") {
-        // Semana pasada en zona Bolivia
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('week', NOW() AT TIME ZONE 'America/La_Paz') - INTERVAL '7 days'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') < DATE_TRUNC('week', NOW() AT TIME ZONE 'America/La_Paz')`);
+        // Semana pasada usando CURRENT_DATE (sin conversión de zona horaria)
+        whereConditions.push(
+          `DATE(${tableAlias}.fecha) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`,
+        );
+        whereConditions.push(
+          `DATE(${tableAlias}.fecha) < DATE_TRUNC('week', CURRENT_DATE)`,
+        );
       } else if (filters.dateFilterType === "thisMonth") {
-        // Este mes en zona Bolivia
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('month', NOW() AT TIME ZONE 'America/La_Paz')`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') <= DATE(NOW() AT TIME ZONE 'America/La_Paz')`);
+        // Este mes usando CURRENT_DATE (sin conversión de zona horaria)
+        whereConditions.push(
+          `DATE(${tableAlias}.fecha) >= DATE_TRUNC('month', CURRENT_DATE)`,
+        );
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= CURRENT_DATE`);
       } else if (filters.dateFilterType === "lastMonth") {
-        // Mes pasado en zona Bolivia
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('month', NOW() AT TIME ZONE 'America/La_Paz') - INTERVAL '1 month'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') < DATE_TRUNC('month', NOW() AT TIME ZONE 'America/La_Paz')`);
+        // Mes pasado usando CURRENT_DATE (sin conversión de zona horaria)
+        whereConditions.push(
+          `DATE(${tableAlias}.fecha) >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`,
+        );
+        whereConditions.push(
+          `DATE(${tableAlias}.fecha) < DATE_TRUNC('month', CURRENT_DATE)`,
+        );
       }
       // Para "all" no agregamos filtro de fecha
-      
+
       return newParamCount;
     };
 
     // Agregar filtros de fecha - PRODUCTOS
-    paramCountProductos = addDateFilters(whereConditionsProductos, paramsProductos, paramCountProductos, "vp");
+    paramCountProductos = addDateFilters(
+      whereConditionsProductos,
+      paramsProductos,
+      paramCountProductos,
+      "vp",
+    );
 
     // Agregar filtros de fecha - SERVICIOS
-    paramCountServicios = addDateFilters(whereConditionsServicios, paramsServicios, paramCountServicios, "vs");
+    paramCountServicios = addDateFilters(
+      whereConditionsServicios,
+      paramsServicios,
+      paramCountServicios,
+      "vs",
+    );
 
     // Construir WHERE clauses
-    const whereClauseProductos = whereConditionsProductos.length > 0 
-      ? `WHERE ${baseConditionProductos} AND ${whereConditionsProductos.join(' AND ')}` 
-      : `WHERE ${baseConditionProductos}`;
+    const whereClauseProductos =
+      whereConditionsProductos.length > 0
+        ? `WHERE ${baseConditionProductos} AND ${whereConditionsProductos.join(" AND ")}`
+        : `WHERE ${baseConditionProductos}`;
 
-    const whereClauseServicios = whereConditionsServicios.length > 0 
-      ? `WHERE ${baseConditionServicios} AND ${whereConditionsServicios.join(' AND ')}` 
-      : `WHERE ${baseConditionServicios}`;
+    const whereClauseServicios =
+      whereConditionsServicios.length > 0
+        ? `WHERE ${baseConditionServicios} AND ${whereConditionsServicios.join(" AND ")}`
+        : `WHERE ${baseConditionServicios}`;
 
     // Query para contar total de productos
     const countQueryProductos = `
@@ -166,11 +205,11 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       ${whereClauseServicios}
     `;
 
-    // Query para ventas de productos (con paginación) - CON ZONA HORARIA
+    // Query para ventas de productos (con paginación) - SIN CONVERSIÓN DE ZONA HORARIA
     let queryStrProductos = `
       SELECT 
         vp.id,
-        TO_CHAR(vp.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+        TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha, -- SIN TIME ZONE CONVERSION
         NULL as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
@@ -225,11 +264,11 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       LIMIT $${paramCountProductos} OFFSET $${paramCountProductos + 1}
     `;
 
-    // Query para ventas de servicios (con paginación) - CON ZONA HORARIA
+    // Query para ventas de servicios (con paginación) - SIN CONVERSIÓN DE ZONA HORARIA
     let queryStrServicios = `
       SELECT 
         vs.id,
-        TO_CHAR(vs.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+        TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha, -- SIN TIME ZONE CONVERSION
         CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
@@ -302,20 +341,28 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       countProductosResult,
       countServiciosResult,
       productSalesResult,
-      serviceSalesResult
+      serviceSalesResult,
     ] = await Promise.all([
       query(countQueryProductos, paramsProductos),
       query(countQueryServicios, paramsServicios),
       query(queryStrProductos, paramsProductosPaginados),
-      query(queryStrServicios, paramsServiciosPaginados)
+      query(queryStrServicios, paramsServiciosPaginados),
     ]);
 
-    const totalProductos = parseInt(countProductosResult.rows[0]?.total_count || 0);
-    const totalServicios = parseInt(countServiciosResult.rows[0]?.total_count || 0);
+    const totalProductos = parseInt(
+      countProductosResult.rows[0]?.total_count || 0,
+    );
+    const totalServicios = parseInt(
+      countServiciosResult.rows[0]?.total_count || 0,
+    );
     const totalCount = totalProductos + totalServicios;
 
-    console.log(`✅ Productos encontrados: ${productSalesResult.rows.length} de ${totalProductos} totales`);
-    console.log(`✅ Servicios encontrados: ${serviceSalesResult.rows.length} de ${totalServicios} totales`);
+    console.log(
+      `✅ Productos encontrados: ${productSalesResult.rows.length} de ${totalProductos} totales`,
+    );
+    console.log(
+      `✅ Servicios encontrados: ${serviceSalesResult.rows.length} de ${totalServicios} totales`,
+    );
 
     // Combinar resultados
     let allSales = [...productSalesResult.rows, ...serviceSalesResult.rows];
@@ -334,20 +381,20 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
     // Función auxiliar para parsear fecha desde string formateado
     function parseDateFromString(dateStr) {
       try {
-        const parts = dateStr.split(', ');
+        const parts = dateStr.split(", ");
         const datePart = parts[0];
         const timePart = parts[1];
-        
-        const [day, month, year] = datePart.split('/');
-        const [hours, minutes, seconds] = timePart.split(':');
-        
+
+        const [day, month, year] = datePart.split("/");
+        const [hours, minutes, seconds] = timePart.split(":");
+
         return new Date(
           parseInt(year),
           parseInt(month) - 1,
           parseInt(day),
           parseInt(hours),
           parseInt(minutes),
-          parseInt(seconds)
+          parseInt(seconds),
         );
       } catch (e) {
         console.warn("⚠️ Error parseando fecha:", dateStr, e);
@@ -359,7 +406,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       sales: allSales.map((sale) => ({
         ...sale,
         id: sale.id.toString(),
-        fecha: sale.fecha,
+        fecha: sale.fecha, // Fecha SIN modificaciones
         subtotal: parseFloat(sale.subtotal) || 0,
         descuento: parseFloat(sale.descuento) || 0,
         total: parseFloat(sale.total) || 0,
@@ -428,7 +475,9 @@ const getTotals = async (filters = {}) => {
           `🔍 usuario_id ${filters.empleadoId} → empleado_id ${empleadoIdReal}`,
         );
 
-        whereConditionsProductos.push(`vp.empleado_id = $${paramCountProductos}`);
+        whereConditionsProductos.push(
+          `vp.empleado_id = $${paramCountProductos}`,
+        );
         paramsProductos.push(empleadoIdReal);
         paramCountProductos++;
       }
@@ -443,16 +492,23 @@ const getTotals = async (filters = {}) => {
 
       if (usuarioResult.rows.length > 0) {
         const empleadoIdReal = usuarioResult.rows[0].empleado_id;
-        whereConditionsServicios.push(`vs.empleado_id = $${paramCountServicios}`);
+        whereConditionsServicios.push(
+          `vs.empleado_id = $${paramCountServicios}`,
+        );
         paramsServicios.push(empleadoIdReal);
         paramCountServicios++;
       }
     }
 
-    // Función para agregar filtros de fecha - MISMAS REGLAS
-    const addDateFilters = (whereConditions, params, paramCount, tableAlias) => {
+    // Función para agregar filtros de fecha - MISMAS REGLAS MODIFICADAS
+    const addDateFilters = (
+      whereConditions,
+      params,
+      paramCount,
+      tableAlias,
+    ) => {
       let newParamCount = paramCount;
-      
+
       if (filters.dateFilterType === "specific" && filters.specificDate) {
         whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
         params.push(filters.specificDate);
@@ -462,60 +518,92 @@ const getTotals = async (filters = {}) => {
         filters.startDate &&
         filters.endDate
       ) {
-        whereConditions.push(`DATE(${tableAlias}.fecha) BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
+        whereConditions.push(
+          `DATE(${tableAlias}.fecha) BETWEEN $${newParamCount} AND $${newParamCount + 1}`,
+        );
         params.push(filters.startDate, filters.endDate);
         newParamCount += 2;
       } else if (filters.dateFilterType === "today") {
         if (filters.specificDate) {
-          console.log(`📅 Usando fecha específica para HOY (totales): ${filters.specificDate}`);
+          console.log(
+            `📅 Usando fecha específica para HOY (totales): ${filters.specificDate}`,
+          );
           whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
           params.push(filters.specificDate);
           newParamCount++;
         } else {
-          console.log("📅 Usando NOW() en zona Bolivia para HOY (totales)");
-          whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = DATE(NOW() AT TIME ZONE 'America/La_Paz')`);
+          console.log("📅 Usando CURRENT_DATE para HOY (totales)");
+          whereConditions.push(`DATE(${tableAlias}.fecha) = CURRENT_DATE`);
         }
       } else if (filters.dateFilterType === "yesterday") {
         if (filters.specificDate) {
-          console.log(`📅 Usando fecha específica para AYER (totales): ${filters.specificDate}`);
+          console.log(
+            `📅 Usando fecha específica para AYER (totales): ${filters.specificDate}`,
+          );
           whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
           params.push(filters.specificDate);
           newParamCount++;
         } else {
-          console.log("📅 Calculando AYER en zona Bolivia (totales)");
-          whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = DATE(NOW() AT TIME ZONE 'America/La_Paz' - INTERVAL '1 day')`);
+          console.log("📅 Calculando AYER usando CURRENT_DATE (totales)");
+          whereConditions.push(
+            `DATE(${tableAlias}.fecha) = CURRENT_DATE - INTERVAL '1 day'`,
+          );
         }
       } else if (filters.dateFilterType === "thisWeek") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('week', NOW() AT TIME ZONE 'America/La_Paz')`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') <= DATE(NOW() AT TIME ZONE 'America/La_Paz')`);
+        whereConditions.push(
+          `DATE(${tableAlias}.fecha) >= DATE_TRUNC('week', CURRENT_DATE)`,
+        );
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= CURRENT_DATE`);
       } else if (filters.dateFilterType === "lastWeek") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('week', NOW() AT TIME ZONE 'America/La_Paz') - INTERVAL '7 days'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') < DATE_TRUNC('week', NOW() AT TIME ZONE 'America/La_Paz')`);
+        whereConditions.push(
+          `DATE(${tableAlias}.fecha) >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`,
+        );
+        whereConditions.push(
+          `DATE(${tableAlias}.fecha) < DATE_TRUNC('week', CURRENT_DATE)`,
+        );
       } else if (filters.dateFilterType === "thisMonth") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('month', NOW() AT TIME ZONE 'America/La_Paz')`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') <= DATE(NOW() AT TIME ZONE 'America/La_Paz')`);
+        whereConditions.push(
+          `DATE(${tableAlias}.fecha) >= DATE_TRUNC('month', CURRENT_DATE)`,
+        );
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= CURRENT_DATE`);
       } else if (filters.dateFilterType === "lastMonth") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('month', NOW() AT TIME ZONE 'America/La_Paz') - INTERVAL '1 month'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') < DATE_TRUNC('month', NOW() AT TIME ZONE 'America/La_Paz')`);
+        whereConditions.push(
+          `DATE(${tableAlias}.fecha) >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`,
+        );
+        whereConditions.push(
+          `DATE(${tableAlias}.fecha) < DATE_TRUNC('month', CURRENT_DATE)`,
+        );
       }
-      
+
       return newParamCount;
     };
 
     // Agregar filtros de fecha - PRODUCTOS
-    paramCountProductos = addDateFilters(whereConditionsProductos, paramsProductos, paramCountProductos, "vp");
+    paramCountProductos = addDateFilters(
+      whereConditionsProductos,
+      paramsProductos,
+      paramCountProductos,
+      "vp",
+    );
 
     // Agregar filtros de fecha - SERVICIOS
-    paramCountServicios = addDateFilters(whereConditionsServicios, paramsServicios, paramCountServicios, "vs");
+    paramCountServicios = addDateFilters(
+      whereConditionsServicios,
+      paramsServicios,
+      paramCountServicios,
+      "vs",
+    );
 
     // Construir WHERE clauses
-    const whereClauseProductos = whereConditionsProductos.length > 0 
-      ? `WHERE ${baseConditionProductos} AND ${whereConditionsProductos.join(' AND ')}` 
-      : `WHERE ${baseConditionProductos}`;
+    const whereClauseProductos =
+      whereConditionsProductos.length > 0
+        ? `WHERE ${baseConditionProductos} AND ${whereConditionsProductos.join(" AND ")}`
+        : `WHERE ${baseConditionProductos}`;
 
-    const whereClauseServicios = whereConditionsServicios.length > 0 
-      ? `WHERE ${baseConditionServicios} AND ${whereConditionsServicios.join(' AND ')}` 
-      : `WHERE ${baseConditionServicios}`;
+    const whereClauseServicios =
+      whereConditionsServicios.length > 0
+        ? `WHERE ${baseConditionServicios} AND ${whereConditionsServicios.join(" AND ")}`
+        : `WHERE ${baseConditionServicios}`;
 
     // Query para totales de productos
     const totalsQueryProductos = `
@@ -607,16 +695,28 @@ const getTotals = async (filters = {}) => {
     // Ejecutar consultas en paralelo
     const [totalesProductosResult, totalesServiciosResult] = await Promise.all([
       query(totalsQueryProductos, paramsProductos),
-      query(totalesQueryServicios, paramsServicios)
+      query(totalesQueryServicios, paramsServicios),
     ]);
 
-    const totalProductos = parseFloat(totalesProductosResult.rows[0]?.total_productos || 0);
-    const efectivoProductos = parseFloat(totalesProductosResult.rows[0]?.efectivo_productos || 0);
-    const qrProductos = parseFloat(totalesProductosResult.rows[0]?.qr_productos || 0);
+    const totalProductos = parseFloat(
+      totalesProductosResult.rows[0]?.total_productos || 0,
+    );
+    const efectivoProductos = parseFloat(
+      totalesProductosResult.rows[0]?.efectivo_productos || 0,
+    );
+    const qrProductos = parseFloat(
+      totalesProductosResult.rows[0]?.qr_productos || 0,
+    );
 
-    const totalServicios = parseFloat(totalesServiciosResult.rows[0]?.total_servicios || 0);
-    const efectivoServicios = parseFloat(totalesServiciosResult.rows[0]?.efectivo_servicios || 0);
-    const qrServicios = parseFloat(totalesServiciosResult.rows[0]?.qr_servicios || 0);
+    const totalServicios = parseFloat(
+      totalesServiciosResult.rows[0]?.total_servicios || 0,
+    );
+    const efectivoServicios = parseFloat(
+      totalesServiciosResult.rows[0]?.efectivo_servicios || 0,
+    );
+    const qrServicios = parseFloat(
+      totalesServiciosResult.rows[0]?.qr_servicios || 0,
+    );
 
     const totalGeneral = totalProductos + totalServicios;
     const efectivoGeneral = efectivoProductos + efectivoServicios;
@@ -631,7 +731,7 @@ const getTotals = async (filters = {}) => {
       qrServicios,
       totalGeneral,
       efectivoGeneral,
-      qrGeneral
+      qrGeneral,
     });
 
     return {
@@ -662,7 +762,7 @@ const getSaleDetails = async (saleId, saleType) => {
       const saleResult = await query(
         `SELECT 
           vp.*,
-          TO_CHAR(vp.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
+          TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada, -- SIN TIME ZONE CONVERSION
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
           u.username as usuario_creador
@@ -695,7 +795,7 @@ const getSaleDetails = async (saleId, saleType) => {
 
       return {
         ...sale,
-        fecha: sale.fecha_formateada,
+        fecha: sale.fecha_formateada, // Fecha SIN modificaciones
         items: detailsResult.rows,
         tipo: "producto",
         descripcionDescuento: sale.descripcion_descuento,
@@ -704,7 +804,7 @@ const getSaleDetails = async (saleId, saleType) => {
       const saleResult = await query(
         `SELECT 
           vs.*,
-          TO_CHAR(vs.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
+          TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada, -- SIN TIME ZONE CONVERSION
           CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente_nombre,
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
@@ -742,7 +842,7 @@ const getSaleDetails = async (saleId, saleType) => {
 
       return {
         ...sale,
-        fecha: sale.fecha_formateada,
+        fecha: sale.fecha_formateada, // Fecha SIN modificaciones
         items: detailsResult.rows,
         tipo: "servicio",
         descripcionDescuento: sale.descripcion_descuento,
