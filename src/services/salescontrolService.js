@@ -71,13 +71,13 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       }
     }
 
-    // Función para agregar filtros de fecha - CORREGIDA
+    // Función para agregar filtros de fecha - MODIFICADA: NO usar AT TIME ZONE en el filtro
     const addDateFilters = (whereConditions, params, paramCount, tableAlias) => {
       let newParamCount = paramCount;
       
       if (filters.dateFilterType === "specific" && filters.specificDate) {
-        // Convertir a fecha sin hora para comparación en zona Bolivia
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = $${newParamCount}`);
+        // Usar fecha exacta sin convertir zona horaria
+        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
         params.push(filters.specificDate);
         newParamCount++;
       } else if (
@@ -85,32 +85,81 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         filters.startDate &&
         filters.endDate
       ) {
-        // Rango en zona Bolivia
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
+        // Rango sin convertir zona horaria
+        whereConditions.push(`DATE(${tableAlias}.fecha) BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
         params.push(filters.startDate, filters.endDate);
         newParamCount += 2;
       } else if (filters.dateFilterType === "today") {
-        // FIX CRÍTICO: Usar fecha actual en zona Bolivia
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = CURRENT_DATE`);
+        // Fecha actual sin zona horaria
+        const today = new Date();
+        const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD
+        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
+        params.push(todayStr);
+        newParamCount++;
       } else if (filters.dateFilterType === "yesterday") {
-        // FIX CRÍTICO: Usar zona Bolivia para ayer
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = CURRENT_DATE - INTERVAL '1 day'`);
+        // Ayer sin zona horaria
+        const today = new Date();
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayStr = yesterday.toISOString().split('T')[0]; // YYYY-MM-DD
+        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
+        params.push(yesterdayStr);
+        newParamCount++;
       } else if (filters.dateFilterType === "thisWeek") {
-        // Semana actual en zona Bolivia
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('week', CURRENT_DATE)`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') <= CURRENT_DATE`);
+        // Esta semana sin zona horaria
+        const today = new Date();
+        const weekStart = new Date(today);
+        weekStart.setDate(weekStart.getDate() - weekStart.getDay() + (weekStart.getDay() === 0 ? -6 : 1)); // Lunes
+        const weekEnd = new Date(today);
+        
+        const weekStartStr = weekStart.toISOString().split('T')[0];
+        const weekEndStr = weekEnd.toISOString().split('T')[0];
+        
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
+        params.push(weekStartStr, weekEndStr);
+        newParamCount += 2;
       } else if (filters.dateFilterType === "lastWeek") {
-        // Semana pasada en zona Bolivia
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') < DATE_TRUNC('week', CURRENT_DATE)`);
+        // Semana pasada sin zona horaria
+        const today = new Date();
+        const weekStart = new Date(today);
+        weekStart.setDate(weekStart.getDate() - weekStart.getDay() - 6 + (weekStart.getDay() === 0 ? -6 : 1)); // Lunes semana pasada
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekEnd.getDate() + 6);
+        
+        const weekStartStr = weekStart.toISOString().split('T')[0];
+        const weekEndStr = weekEnd.toISOString().split('T')[0];
+        
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
+        params.push(weekStartStr, weekEndStr);
+        newParamCount += 2;
       } else if (filters.dateFilterType === "thisMonth") {
-        // Mes actual en zona Bolivia
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('month', CURRENT_DATE)`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') <= CURRENT_DATE`);
+        // Mes actual sin zona horaria
+        const today = new Date();
+        const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+        const monthEnd = new Date(today);
+        
+        const monthStartStr = monthStart.toISOString().split('T')[0];
+        const monthEndStr = monthEnd.toISOString().split('T')[0];
+        
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
+        params.push(monthStartStr, monthEndStr);
+        newParamCount += 2;
       } else if (filters.dateFilterType === "lastMonth") {
-        // Mes pasado en zona Bolivia
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') < DATE_TRUNC('month', CURRENT_DATE)`);
+        // Mes pasado sin zona horaria
+        const today = new Date();
+        const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+        
+        const lastMonthStartStr = lastMonth.toISOString().split('T')[0];
+        const lastMonthEndStr = lastMonthEnd.toISOString().split('T')[0];
+        
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
+        params.push(lastMonthStartStr, lastMonthEndStr);
+        newParamCount += 2;
       }
       // Para "all" no agregamos filtro de fecha
       
@@ -146,11 +195,11 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       ${whereClauseServicios}
     `;
 
-    // Query para ventas de productos (con paginación) - CON ZONA HORARIA AMERICA/LA_PAZ
+    // Query para ventas de productos (con paginación) - FECHA SIN MODIFICAR (formato original de la BD)
     let queryStrProductos = `
       SELECT 
         vp.id,
-        TO_CHAR(vp.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+        TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha, /* FECHA SIN MODIFICAR */
         NULL as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
@@ -205,11 +254,11 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       LIMIT $${paramCountProductos} OFFSET $${paramCountProductos + 1}
     `;
 
-    // Query para ventas de servicios (con paginación) - CON ZONA HORARIA AMERICA/LA_PAZ
+    // Query para ventas de servicios (con paginación) - FECHA SIN MODIFICAR (formato original de la BD)
     let queryStrServicios = `
       SELECT 
         vs.id,
-        TO_CHAR(vs.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+        TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha, /* FECHA SIN MODIFICAR */
         CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
@@ -274,6 +323,8 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
     const paramsServiciosPaginados = [...paramsServicios, pageSize, offset];
 
     console.log("🔄 Ejecutando consultas...");
+    console.log("📍 Parámetros productos:", paramsProductos);
+    console.log("📍 Parámetros servicios:", paramsServicios);
 
     // Ejecutar consultas en paralelo
     const [
@@ -338,7 +389,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       sales: allSales.map((sale) => ({
         ...sale,
         id: sale.id.toString(),
-        fecha: sale.fecha, // FECHA SIN MODIFICAR - ya viene formateada desde SQL
+        fecha: sale.fecha, // FECHA SIN MODIFICAR
         subtotal: parseFloat(sale.subtotal) || 0,
         descuento: parseFloat(sale.descuento) || 0,
         total: parseFloat(sale.total) || 0,
@@ -359,7 +410,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
   }
 };
 
-// NUEVA FUNCIÓN: Obtener totales de ventas (sin paginación) - CORREGIDA
+// NUEVA FUNCIÓN: Obtener totales de ventas (sin paginación) - MODIFICADA
 const getTotals = async (filters = {}) => {
   try {
     console.log("📊 Calculando totales con filtros:", filters);
@@ -428,12 +479,12 @@ const getTotals = async (filters = {}) => {
       }
     }
 
-    // Función para agregar filtros de fecha - CORREGIDA
+    // Función para agregar filtros de fecha - MODIFICADA: NO usar AT TIME ZONE en el filtro
     const addDateFilters = (whereConditions, params, paramCount, tableAlias) => {
       let newParamCount = paramCount;
       
       if (filters.dateFilterType === "specific" && filters.specificDate) {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = $${newParamCount}`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
         params.push(filters.specificDate);
         newParamCount++;
       } else if (
@@ -441,27 +492,75 @@ const getTotals = async (filters = {}) => {
         filters.startDate &&
         filters.endDate
       ) {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
         params.push(filters.startDate, filters.endDate);
         newParamCount += 2;
       } else if (filters.dateFilterType === "today") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = CURRENT_DATE`);
+        const today = new Date();
+        const todayStr = today.toISOString().split('T')[0];
+        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
+        params.push(todayStr);
+        newParamCount++;
       } else if (filters.dateFilterType === "yesterday") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = CURRENT_DATE - INTERVAL '1 day'`);
+        const today = new Date();
+        const yesterday = new Date(today);
+        yesterday.setDate(yesterday.getDate() - 1);
+        const yesterdayStr = yesterday.toISOString().split('T')[0];
+        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
+        params.push(yesterdayStr);
+        newParamCount++;
       } else if (filters.dateFilterType === "thisWeek") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('week', CURRENT_DATE)`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') <= CURRENT_DATE`);
+        const today = new Date();
+        const weekStart = new Date(today);
+        weekStart.setDate(weekStart.getDate() - weekStart.getDay() + (weekStart.getDay() === 0 ? -6 : 1));
+        const weekEnd = new Date(today);
+        
+        const weekStartStr = weekStart.toISOString().split('T')[0];
+        const weekEndStr = weekEnd.toISOString().split('T')[0];
+        
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
+        params.push(weekStartStr, weekEndStr);
+        newParamCount += 2;
       } else if (filters.dateFilterType === "lastWeek") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') < DATE_TRUNC('week', CURRENT_DATE)`);
+        const today = new Date();
+        const weekStart = new Date(today);
+        weekStart.setDate(weekStart.getDate() - weekStart.getDay() - 6 + (weekStart.getDay() === 0 ? -6 : 1));
+        const weekEnd = new Date(weekStart);
+        weekEnd.setDate(weekEnd.getDate() + 6);
+        
+        const weekStartStr = weekStart.toISOString().split('T')[0];
+        const weekEndStr = weekEnd.toISOString().split('T')[0];
+        
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
+        params.push(weekStartStr, weekEndStr);
+        newParamCount += 2;
       } else if (filters.dateFilterType === "thisMonth") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('month', CURRENT_DATE)`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') <= CURRENT_DATE`);
+        const today = new Date();
+        const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+        const monthEnd = new Date(today);
+        
+        const monthStartStr = monthStart.toISOString().split('T')[0];
+        const monthEndStr = monthEnd.toISOString().split('T')[0];
+        
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
+        params.push(monthStartStr, monthEndStr);
+        newParamCount += 2;
       } else if (filters.dateFilterType === "lastMonth") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') < DATE_TRUNC('month', CURRENT_DATE)`);
+        const today = new Date();
+        const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+        const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+        
+        const lastMonthStartStr = lastMonth.toISOString().split('T')[0];
+        const lastMonthEndStr = lastMonthEnd.toISOString().split('T')[0];
+        
+        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
+        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
+        params.push(lastMonthStartStr, lastMonthEndStr);
+        newParamCount += 2;
       }
-      // Para "all" no agregamos filtro de fecha
       
       return newParamCount;
     };
@@ -481,7 +580,7 @@ const getTotals = async (filters = {}) => {
       ? `WHERE ${baseConditionServicios} AND ${whereConditionsServicios.join(' AND ')}` 
       : `WHERE ${baseConditionServicios}`;
 
-    // Query para totales de productos - CORREGIDA
+    // Query para totales de productos - FECHA SIN MODIFICAR
     const totalsQueryProductos = `
       SELECT 
         COALESCE(SUM(vp.total), 0) as total_productos,
@@ -523,7 +622,7 @@ const getTotals = async (filters = {}) => {
       ${whereClauseProductos}
     `;
 
-    // Query para totales de servicios - CORREGIDA
+    // Query para totales de servicios - FECHA SIN MODIFICAR
     const totalsQueryServicios = `
       SELECT 
         COALESCE(SUM(vs.total), 0) as total_servicios,
@@ -565,6 +664,9 @@ const getTotals = async (filters = {}) => {
       ${whereClauseServicios}
     `;
 
+    console.log("📊 Parámetros para totales productos:", paramsProductos);
+    console.log("📊 Parámetros para totales servicios:", paramsServicios);
+
     // Ejecutar consultas en paralelo
     const [totalesProductosResult, totalesServiciosResult] = await Promise.all([
       query(totalsQueryProductos, paramsProductos),
@@ -582,6 +684,18 @@ const getTotals = async (filters = {}) => {
     const totalGeneral = totalProductos + totalServicios;
     const efectivoGeneral = efectivoProductos + efectivoServicios;
     const qrGeneral = qrProductos + qrServicios;
+
+    console.log("📊 Resultados de totales:", {
+      totalProductos,
+      efectivoProductos,
+      qrProductos,
+      totalServicios,
+      efectivoServicios,
+      qrServicios,
+      totalGeneral,
+      efectivoGeneral,
+      qrGeneral
+    });
 
     return {
       totalGeneral,
@@ -611,7 +725,7 @@ const getSaleDetails = async (saleId, saleType) => {
       const saleResult = await query(
         `SELECT 
           vp.*,
-          TO_CHAR(vp.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
+          TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada, /* FECHA SIN MODIFICAR */
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
           u.username as usuario_creador
@@ -644,7 +758,7 @@ const getSaleDetails = async (saleId, saleType) => {
 
       return {
         ...sale,
-        fecha: sale.fecha_formateada, // FECHA SIN MODIFICAR - usar la formateada
+        fecha: sale.fecha_formateada, // FECHA SIN MODIFICAR
         items: detailsResult.rows,
         tipo: "producto",
         descripcionDescuento: sale.descripcion_descuento,
@@ -653,7 +767,7 @@ const getSaleDetails = async (saleId, saleType) => {
       const saleResult = await query(
         `SELECT 
           vs.*,
-          TO_CHAR(vs.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
+          TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada, /* FECHA SIN MODIFICAR */
           CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente_nombre,
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
@@ -691,7 +805,7 @@ const getSaleDetails = async (saleId, saleType) => {
 
       return {
         ...sale,
-        fecha: sale.fecha_formateada, // FECHA SIN MODIFICAR - usar la formateada
+        fecha: sale.fecha_formateada, // FECHA SIN MODIFICAR
         items: detailsResult.rows,
         tipo: "servicio",
         descripcionDescuento: sale.descripcion_descuento,
