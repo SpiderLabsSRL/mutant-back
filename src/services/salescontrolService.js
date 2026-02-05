@@ -71,7 +71,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       }
     }
 
-    // Función para agregar filtros de fecha - CORREGIDA PARA AMERICA/LA_PAZ
+    // Función para agregar filtros de fecha - CORREGIDA
     const addDateFilters = (whereConditions, params, paramCount, tableAlias) => {
       let newParamCount = paramCount;
       
@@ -90,7 +90,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         params.push(filters.startDate, filters.endDate);
         newParamCount += 2;
       } else if (filters.dateFilterType === "today") {
-        // FIX CRÍTICO: Usar zona Bolivia con CURRENT_DATE
+        // FIX CRÍTICO: Usar fecha actual en zona Bolivia
         whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = CURRENT_DATE`);
       } else if (filters.dateFilterType === "yesterday") {
         // FIX CRÍTICO: Usar zona Bolivia para ayer
@@ -274,8 +274,6 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
     const paramsServiciosPaginados = [...paramsServicios, pageSize, offset];
 
     console.log("🔄 Ejecutando consultas...");
-    console.log("📍 WHERE Productos:", whereClauseProductos);
-    console.log("📍 WHERE Servicios:", whereClauseServicios);
 
     // Ejecutar consultas en paralelo
     const [
@@ -340,7 +338,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       sales: allSales.map((sale) => ({
         ...sale,
         id: sale.id.toString(),
-        fecha: sale.fecha, // Ya viene formateada desde SQL
+        fecha: sale.fecha, // FECHA SIN MODIFICAR - ya viene formateada desde SQL
         subtotal: parseFloat(sale.subtotal) || 0,
         descuento: parseFloat(sale.descuento) || 0,
         total: parseFloat(sale.total) || 0,
@@ -361,7 +359,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
   }
 };
 
-// NUEVA FUNCIÓN: Obtener totales de ventas (sin paginación) - CORREGIDA PARA AMERICA/LA_PAZ
+// NUEVA FUNCIÓN: Obtener totales de ventas (sin paginación) - CORREGIDA
 const getTotals = async (filters = {}) => {
   try {
     console.log("📊 Calculando totales con filtros:", filters);
@@ -430,7 +428,7 @@ const getTotals = async (filters = {}) => {
       }
     }
 
-    // Función para agregar filtros de fecha - CORREGIDA PARA AMERICA/LA_PAZ
+    // Función para agregar filtros de fecha - CORREGIDA
     const addDateFilters = (whereConditions, params, paramCount, tableAlias) => {
       let newParamCount = paramCount;
       
@@ -447,25 +445,19 @@ const getTotals = async (filters = {}) => {
         params.push(filters.startDate, filters.endDate);
         newParamCount += 2;
       } else if (filters.dateFilterType === "today") {
-        // FIX CRÍTICO: Usar zona Bolivia con CURRENT_DATE
         whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = CURRENT_DATE`);
       } else if (filters.dateFilterType === "yesterday") {
-        // FIX CRÍTICO: Usar zona Bolivia para ayer
         whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = CURRENT_DATE - INTERVAL '1 day'`);
       } else if (filters.dateFilterType === "thisWeek") {
-        // Semana actual en zona Bolivia
         whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('week', CURRENT_DATE)`);
         whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') <= CURRENT_DATE`);
       } else if (filters.dateFilterType === "lastWeek") {
-        // Semana pasada en zona Bolivia
         whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
         whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') < DATE_TRUNC('week', CURRENT_DATE)`);
       } else if (filters.dateFilterType === "thisMonth") {
-        // Mes actual en zona Bolivia
         whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('month', CURRENT_DATE)`);
         whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') <= CURRENT_DATE`);
       } else if (filters.dateFilterType === "lastMonth") {
-        // Mes pasado en zona Bolivia
         whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
         whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') < DATE_TRUNC('month', CURRENT_DATE)`);
       }
@@ -489,7 +481,7 @@ const getTotals = async (filters = {}) => {
       ? `WHERE ${baseConditionServicios} AND ${whereConditionsServicios.join(' AND ')}` 
       : `WHERE ${baseConditionServicios}`;
 
-    // Query para totales de productos - CORREGIDA CON ZONA HORARIA AMERICA/LA_PAZ
+    // Query para totales de productos - CORREGIDA
     const totalsQueryProductos = `
       SELECT 
         COALESCE(SUM(vp.total), 0) as total_productos,
@@ -531,7 +523,7 @@ const getTotals = async (filters = {}) => {
       ${whereClauseProductos}
     `;
 
-    // Query para totales de servicios - CORREGIDA CON ZONA HORARIA AMERICA/LA_PAZ
+    // Query para totales de servicios - CORREGIDA
     const totalsQueryServicios = `
       SELECT 
         COALESCE(SUM(vs.total), 0) as total_servicios,
@@ -573,9 +565,6 @@ const getTotals = async (filters = {}) => {
       ${whereClauseServicios}
     `;
 
-    console.log("📊 Consulta productos:", totalsQueryProductos);
-    console.log("📊 Consulta servicios:", totalsQueryServicios);
-
     // Ejecutar consultas en paralelo
     const [totalesProductosResult, totalesServiciosResult] = await Promise.all([
       query(totalsQueryProductos, paramsProductos),
@@ -593,18 +582,6 @@ const getTotals = async (filters = {}) => {
     const totalGeneral = totalProductos + totalServicios;
     const efectivoGeneral = efectivoProductos + efectivoServicios;
     const qrGeneral = qrProductos + qrServicios;
-
-    console.log("📊 Resultados de totales:", {
-      totalProductos,
-      efectivoProductos,
-      qrProductos,
-      totalServicios,
-      efectivoServicios,
-      qrServicios,
-      totalGeneral,
-      efectivoGeneral,
-      qrGeneral
-    });
 
     return {
       totalGeneral,
@@ -667,7 +644,7 @@ const getSaleDetails = async (saleId, saleType) => {
 
       return {
         ...sale,
-        fecha: sale.fecha_formateada, // Usar fecha formateada
+        fecha: sale.fecha_formateada, // FECHA SIN MODIFICAR - usar la formateada
         items: detailsResult.rows,
         tipo: "producto",
         descripcionDescuento: sale.descripcion_descuento,
@@ -714,7 +691,7 @@ const getSaleDetails = async (saleId, saleType) => {
 
       return {
         ...sale,
-        fecha: sale.fecha_formateada, // Usar fecha formateada
+        fecha: sale.fecha_formateada, // FECHA SIN MODIFICAR - usar la formateada
         items: detailsResult.rows,
         tipo: "servicio",
         descripcionDescuento: sale.descripcion_descuento,
