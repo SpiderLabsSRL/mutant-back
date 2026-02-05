@@ -71,13 +71,13 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       }
     }
 
-    // Función para agregar filtros de fecha - CORREGIDA PARA ZONAS HORARIAS
+    // Función para agregar filtros de fecha - CORREGIDA PARA AMERICA/LA_PAZ
     const addDateFilters = (whereConditions, params, paramCount, tableAlias) => {
       let newParamCount = paramCount;
       
       if (filters.dateFilterType === "specific" && filters.specificDate) {
-        // Convertir a fecha sin hora para comparación exacta
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') = $${newParamCount}`);
+        // Convertir a fecha sin hora para comparación en zona Bolivia
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = $${newParamCount}`);
         params.push(filters.specificDate);
         newParamCount++;
       } else if (
@@ -85,27 +85,32 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         filters.startDate &&
         filters.endDate
       ) {
-        // Rango con zona horaria UTC
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
+        // Rango en zona Bolivia
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
         params.push(filters.startDate, filters.endDate);
         newParamCount += 2;
       } else if (filters.dateFilterType === "today") {
-        // FIX CRÍTICO: Usar CURRENT_DATE con zona horaria UTC para consistencia
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') = CURRENT_DATE`);
+        // FIX CRÍTICO: Usar zona Bolivia con CURRENT_DATE
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = CURRENT_DATE`);
       } else if (filters.dateFilterType === "yesterday") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') = CURRENT_DATE - INTERVAL '1 day'`);
+        // FIX CRÍTICO: Usar zona Bolivia para ayer
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = CURRENT_DATE - INTERVAL '1 day'`);
       } else if (filters.dateFilterType === "thisWeek") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('week', CURRENT_DATE)`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') <= CURRENT_DATE`);
+        // Semana actual en zona Bolivia
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('week', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') <= CURRENT_DATE`);
       } else if (filters.dateFilterType === "lastWeek") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') < DATE_TRUNC('week', CURRENT_DATE)`);
+        // Semana pasada en zona Bolivia
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') < DATE_TRUNC('week', CURRENT_DATE)`);
       } else if (filters.dateFilterType === "thisMonth") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('month', CURRENT_DATE)`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') <= CURRENT_DATE`);
+        // Mes actual en zona Bolivia
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('month', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') <= CURRENT_DATE`);
       } else if (filters.dateFilterType === "lastMonth") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') < DATE_TRUNC('month', CURRENT_DATE)`);
+        // Mes pasado en zona Bolivia
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') < DATE_TRUNC('month', CURRENT_DATE)`);
       }
       // Para "all" no agregamos filtro de fecha
       
@@ -141,11 +146,11 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       ${whereClauseServicios}
     `;
 
-    // Query para ventas de productos (con paginación) - CON ZONA HORARIA UTC
+    // Query para ventas de productos (con paginación) - CON ZONA HORARIA AMERICA/LA_PAZ
     let queryStrProductos = `
       SELECT 
         vp.id,
-        TO_CHAR(vp.fecha AT TIME ZONE 'UTC', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+        TO_CHAR(vp.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
         NULL as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
@@ -200,11 +205,11 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       LIMIT $${paramCountProductos} OFFSET $${paramCountProductos + 1}
     `;
 
-    // Query para ventas de servicios (con paginación) - CON ZONA HORARIA UTC
+    // Query para ventas de servicios (con paginación) - CON ZONA HORARIA AMERICA/LA_PAZ
     let queryStrServicios = `
       SELECT 
         vs.id,
-        TO_CHAR(vs.fecha AT TIME ZONE 'UTC', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+        TO_CHAR(vs.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
         CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
@@ -356,7 +361,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
   }
 };
 
-// NUEVA FUNCIÓN: Obtener totales de ventas (sin paginación) - CORREGIDA
+// NUEVA FUNCIÓN: Obtener totales de ventas (sin paginación) - CORREGIDA PARA AMERICA/LA_PAZ
 const getTotals = async (filters = {}) => {
   try {
     console.log("📊 Calculando totales con filtros:", filters);
@@ -425,12 +430,12 @@ const getTotals = async (filters = {}) => {
       }
     }
 
-    // Función para agregar filtros de fecha - CORREGIDA CON ZONA HORARIA
+    // Función para agregar filtros de fecha - CORREGIDA PARA AMERICA/LA_PAZ
     const addDateFilters = (whereConditions, params, paramCount, tableAlias) => {
       let newParamCount = paramCount;
       
       if (filters.dateFilterType === "specific" && filters.specificDate) {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') = $${newParamCount}`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = $${newParamCount}`);
         params.push(filters.specificDate);
         newParamCount++;
       } else if (
@@ -438,26 +443,31 @@ const getTotals = async (filters = {}) => {
         filters.startDate &&
         filters.endDate
       ) {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
         params.push(filters.startDate, filters.endDate);
         newParamCount += 2;
       } else if (filters.dateFilterType === "today") {
-        // FIX CRÍTICO: Usar CURRENT_DATE con zona horaria UTC
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') = CURRENT_DATE`);
+        // FIX CRÍTICO: Usar zona Bolivia con CURRENT_DATE
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = CURRENT_DATE`);
       } else if (filters.dateFilterType === "yesterday") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') = CURRENT_DATE - INTERVAL '1 day'`);
+        // FIX CRÍTICO: Usar zona Bolivia para ayer
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') = CURRENT_DATE - INTERVAL '1 day'`);
       } else if (filters.dateFilterType === "thisWeek") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('week', CURRENT_DATE)`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') <= CURRENT_DATE`);
+        // Semana actual en zona Bolivia
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('week', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') <= CURRENT_DATE`);
       } else if (filters.dateFilterType === "lastWeek") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') < DATE_TRUNC('week', CURRENT_DATE)`);
+        // Semana pasada en zona Bolivia
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('week', CURRENT_DATE) - INTERVAL '7 days'`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') < DATE_TRUNC('week', CURRENT_DATE)`);
       } else if (filters.dateFilterType === "thisMonth") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('month', CURRENT_DATE)`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') <= CURRENT_DATE`);
+        // Mes actual en zona Bolivia
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('month', CURRENT_DATE)`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') <= CURRENT_DATE`);
       } else if (filters.dateFilterType === "lastMonth") {
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
-        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'UTC') < DATE_TRUNC('month', CURRENT_DATE)`);
+        // Mes pasado en zona Bolivia
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') >= DATE_TRUNC('month', CURRENT_DATE) - INTERVAL '1 month'`);
+        whereConditions.push(`DATE(${tableAlias}.fecha AT TIME ZONE 'America/La_Paz') < DATE_TRUNC('month', CURRENT_DATE)`);
       }
       // Para "all" no agregamos filtro de fecha
       
@@ -479,7 +489,7 @@ const getTotals = async (filters = {}) => {
       ? `WHERE ${baseConditionServicios} AND ${whereConditionsServicios.join(' AND ')}` 
       : `WHERE ${baseConditionServicios}`;
 
-    // Query para totales de productos - CORREGIDA CON ZONA HORARIA
+    // Query para totales de productos - CORREGIDA CON ZONA HORARIA AMERICA/LA_PAZ
     const totalsQueryProductos = `
       SELECT 
         COALESCE(SUM(vp.total), 0) as total_productos,
@@ -521,7 +531,7 @@ const getTotals = async (filters = {}) => {
       ${whereClauseProductos}
     `;
 
-    // Query para totales de servicios - CORREGIDA CON ZONA HORARIA
+    // Query para totales de servicios - CORREGIDA CON ZONA HORARIA AMERICA/LA_PAZ
     const totalsQueryServicios = `
       SELECT 
         COALESCE(SUM(vs.total), 0) as total_servicios,
@@ -569,7 +579,7 @@ const getTotals = async (filters = {}) => {
     // Ejecutar consultas en paralelo
     const [totalesProductosResult, totalesServiciosResult] = await Promise.all([
       query(totalsQueryProductos, paramsProductos),
-      query(totalsQueryServicios, paramsServicios)
+      query(totalesQueryServicios, paramsServicios)
     ]);
 
     const totalProductos = parseFloat(totalesProductosResult.rows[0]?.total_productos || 0);
@@ -624,7 +634,7 @@ const getSaleDetails = async (saleId, saleType) => {
       const saleResult = await query(
         `SELECT 
           vp.*,
-          TO_CHAR(vp.fecha AT TIME ZONE 'UTC', 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
+          TO_CHAR(vp.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
           u.username as usuario_creador
@@ -666,7 +676,7 @@ const getSaleDetails = async (saleId, saleType) => {
       const saleResult = await query(
         `SELECT 
           vs.*,
-          TO_CHAR(vs.fecha AT TIME ZONE 'UTC', 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
+          TO_CHAR(vs.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
           CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente_nombre,
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
