@@ -1,5 +1,23 @@
 const { query } = require("../../db");
 
+// Función para obtener fecha actual en zona Bolivia (America/La_Paz)
+const getBoliviaDate = () => {
+  const now = new Date();
+  // Bolivia está en UTC-4
+  const boliviaOffset = -4 * 60; // en minutos
+  const localOffset = now.getTimezoneOffset(); // en minutos
+  const boliviaTime = new Date(now.getTime() + (localOffset - boliviaOffset) * 60000);
+  return boliviaTime;
+};
+
+// Función para formatear fecha a YYYY-MM-DD en zona Bolivia
+const formatBoliviaDate = (date) => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
 const getSales = async (filters = {}, page = 1, pageSize = 20) => {
   try {
     console.log("🔍 Filtros recibidos en sales service:", filters);
@@ -71,12 +89,11 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       }
     }
 
-    // Función para agregar filtros de fecha - MODIFICADA: NO usar AT TIME ZONE en el filtro
+    // Función para agregar filtros de fecha - CORREGIDA CON ZONA BOLIVIA
     const addDateFilters = (whereConditions, params, paramCount, tableAlias) => {
       let newParamCount = paramCount;
       
       if (filters.dateFilterType === "specific" && filters.specificDate) {
-        // Usar fecha exacta sin convertir zona horaria
         whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
         params.push(filters.specificDate);
         newParamCount++;
@@ -85,76 +102,85 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         filters.startDate &&
         filters.endDate
       ) {
-        // Rango sin convertir zona horaria
         whereConditions.push(`DATE(${tableAlias}.fecha) BETWEEN $${newParamCount} AND $${newParamCount + 1}`);
         params.push(filters.startDate, filters.endDate);
         newParamCount += 2;
       } else if (filters.dateFilterType === "today") {
-        // Fecha actual sin zona horaria
-        const today = new Date();
-        const todayStr = today.toISOString().split('T')[0]; // YYYY-MM-DD
+        // FECHA HOY EN ZONA BOLIVIA
+        const boliviaToday = getBoliviaDate();
+        const todayStr = formatBoliviaDate(boliviaToday);
+        console.log(`📅 Filtro HOY (Bolivia): ${todayStr}`);
         whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
         params.push(todayStr);
         newParamCount++;
       } else if (filters.dateFilterType === "yesterday") {
-        // Ayer sin zona horaria
-        const today = new Date();
-        const yesterday = new Date(today);
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayStr = yesterday.toISOString().split('T')[0]; // YYYY-MM-DD
+        // FECHA AYER EN ZONA BOLIVIA
+        const boliviaToday = getBoliviaDate();
+        const boliviaYesterday = new Date(boliviaToday);
+        boliviaYesterday.setDate(boliviaYesterday.getDate() - 1);
+        const yesterdayStr = formatBoliviaDate(boliviaYesterday);
+        console.log(`📅 Filtro AYER (Bolivia): ${yesterdayStr}`);
         whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
         params.push(yesterdayStr);
         newParamCount++;
       } else if (filters.dateFilterType === "thisWeek") {
-        // Esta semana sin zona horaria
-        const today = new Date();
-        const weekStart = new Date(today);
+        // Esta semana en zona Bolivia
+        const boliviaToday = getBoliviaDate();
+        const weekStart = new Date(boliviaToday);
         weekStart.setDate(weekStart.getDate() - weekStart.getDay() + (weekStart.getDay() === 0 ? -6 : 1)); // Lunes
-        const weekEnd = new Date(today);
+        const weekEnd = new Date(boliviaToday);
         
-        const weekStartStr = weekStart.toISOString().split('T')[0];
-        const weekEndStr = weekEnd.toISOString().split('T')[0];
+        const weekStartStr = formatBoliviaDate(weekStart);
+        const weekEndStr = formatBoliviaDate(weekEnd);
+        
+        console.log(`📅 Filtro ESTA SEMANA (Bolivia): ${weekStartStr} a ${weekEndStr}`);
         
         whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
         whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
         params.push(weekStartStr, weekEndStr);
         newParamCount += 2;
       } else if (filters.dateFilterType === "lastWeek") {
-        // Semana pasada sin zona horaria
-        const today = new Date();
-        const weekStart = new Date(today);
+        // Semana pasada en zona Bolivia
+        const boliviaToday = getBoliviaDate();
+        const weekStart = new Date(boliviaToday);
         weekStart.setDate(weekStart.getDate() - weekStart.getDay() - 6 + (weekStart.getDay() === 0 ? -6 : 1)); // Lunes semana pasada
         const weekEnd = new Date(weekStart);
         weekEnd.setDate(weekEnd.getDate() + 6);
         
-        const weekStartStr = weekStart.toISOString().split('T')[0];
-        const weekEndStr = weekEnd.toISOString().split('T')[0];
+        const weekStartStr = formatBoliviaDate(weekStart);
+        const weekEndStr = formatBoliviaDate(weekEnd);
+        
+        console.log(`📅 Filtro SEMANA PASADA (Bolivia): ${weekStartStr} a ${weekEndStr}`);
         
         whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
         whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
         params.push(weekStartStr, weekEndStr);
         newParamCount += 2;
       } else if (filters.dateFilterType === "thisMonth") {
-        // Mes actual sin zona horaria
-        const today = new Date();
-        const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-        const monthEnd = new Date(today);
+        // Mes actual en zona Bolivia
+        const boliviaToday = getBoliviaDate();
+        const monthStart = new Date(boliviaToday.getFullYear(), boliviaToday.getMonth(), 1);
+        const monthEnd = new Date(boliviaToday);
         
-        const monthStartStr = monthStart.toISOString().split('T')[0];
-        const monthEndStr = monthEnd.toISOString().split('T')[0];
+        const monthStartStr = formatBoliviaDate(monthStart);
+        const monthEndStr = formatBoliviaDate(monthEnd);
+        
+        console.log(`📅 Filtro ESTE MES (Bolivia): ${monthStartStr} a ${monthEndStr}`);
         
         whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
         whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
         params.push(monthStartStr, monthEndStr);
         newParamCount += 2;
       } else if (filters.dateFilterType === "lastMonth") {
-        // Mes pasado sin zona horaria
-        const today = new Date();
-        const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-        const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+        // Mes pasado en zona Bolivia
+        const boliviaToday = getBoliviaDate();
+        const lastMonth = new Date(boliviaToday.getFullYear(), boliviaToday.getMonth() - 1, 1);
+        const lastMonthEnd = new Date(boliviaToday.getFullYear(), boliviaToday.getMonth(), 0);
         
-        const lastMonthStartStr = lastMonth.toISOString().split('T')[0];
-        const lastMonthEndStr = lastMonthEnd.toISOString().split('T')[0];
+        const lastMonthStartStr = formatBoliviaDate(lastMonth);
+        const lastMonthEndStr = formatBoliviaDate(lastMonthEnd);
+        
+        console.log(`📅 Filtro MES PASADO (Bolivia): ${lastMonthStartStr} a ${lastMonthEndStr}`);
         
         whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
         whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
@@ -195,11 +221,11 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       ${whereClauseServicios}
     `;
 
-    // Query para ventas de productos (con paginación) - FECHA SIN MODIFICAR (formato original de la BD)
+    // Query para ventas de productos (con paginación)
     let queryStrProductos = `
       SELECT 
         vp.id,
-        TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha, /* FECHA SIN MODIFICAR */
+        TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha,
         NULL as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
@@ -254,11 +280,11 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       LIMIT $${paramCountProductos} OFFSET $${paramCountProductos + 1}
     `;
 
-    // Query para ventas de servicios (con paginación) - FECHA SIN MODIFICAR (formato original de la BD)
+    // Query para ventas de servicios (con paginación)
     let queryStrServicios = `
       SELECT 
         vs.id,
-        TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha, /* FECHA SIN MODIFICAR */
+        TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha,
         CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
@@ -363,17 +389,16 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
     // Función auxiliar para parsear fecha desde string formateado
     function parseDateFromString(dateStr) {
       try {
-        // Formato: "DD/MM/YYYY, HH24:MI:SS"
         const parts = dateStr.split(', ');
-        const datePart = parts[0]; // "DD/MM/YYYY"
-        const timePart = parts[1]; // "HH24:MI:SS"
+        const datePart = parts[0];
+        const timePart = parts[1];
         
         const [day, month, year] = datePart.split('/');
         const [hours, minutes, seconds] = timePart.split(':');
         
         return new Date(
           parseInt(year),
-          parseInt(month) - 1, // Meses en JS son 0-indexed
+          parseInt(month) - 1,
           parseInt(day),
           parseInt(hours),
           parseInt(minutes),
@@ -389,7 +414,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       sales: allSales.map((sale) => ({
         ...sale,
         id: sale.id.toString(),
-        fecha: sale.fecha, // FECHA SIN MODIFICAR
+        fecha: sale.fecha,
         subtotal: parseFloat(sale.subtotal) || 0,
         descuento: parseFloat(sale.descuento) || 0,
         total: parseFloat(sale.total) || 0,
@@ -410,7 +435,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
   }
 };
 
-// NUEVA FUNCIÓN: Obtener totales de ventas (sin paginación) - MODIFICADA
+// NUEVA FUNCIÓN: Obtener totales de ventas (sin paginación) - CORREGIDA
 const getTotals = async (filters = {}) => {
   try {
     console.log("📊 Calculando totales con filtros:", filters);
@@ -445,8 +470,6 @@ const getTotals = async (filters = {}) => {
 
     // Filtro por empleado (solo para recepcionistas) - PRODUCTOS
     if (filters.empleadoId) {
-      console.log(`🔄 Filtro por empleadoId: ${filters.empleadoId}`);
-
       const usuarioResult = await query(
         "SELECT empleado_id FROM usuarios WHERE id = $1",
         [filters.empleadoId],
@@ -454,10 +477,6 @@ const getTotals = async (filters = {}) => {
 
       if (usuarioResult.rows.length > 0) {
         const empleadoIdReal = usuarioResult.rows[0].empleado_id;
-        console.log(
-          `🔍 usuario_id ${filters.empleadoId} → empleado_id ${empleadoIdReal}`,
-        );
-
         whereConditionsProductos.push(`vp.empleado_id = $${paramCountProductos}`);
         paramsProductos.push(empleadoIdReal);
         paramCountProductos++;
@@ -479,7 +498,7 @@ const getTotals = async (filters = {}) => {
       }
     }
 
-    // Función para agregar filtros de fecha - MODIFICADA: NO usar AT TIME ZONE en el filtro
+    // Función para agregar filtros de fecha - CORREGIDA CON ZONA BOLIVIA
     const addDateFilters = (whereConditions, params, paramCount, tableAlias) => {
       let newParamCount = paramCount;
       
@@ -496,65 +515,69 @@ const getTotals = async (filters = {}) => {
         params.push(filters.startDate, filters.endDate);
         newParamCount += 2;
       } else if (filters.dateFilterType === "today") {
-        const today = new Date();
-        const todayStr = today.toISOString().split('T')[0];
+        // FECHA HOY EN ZONA BOLIVIA
+        const boliviaToday = getBoliviaDate();
+        const todayStr = formatBoliviaDate(boliviaToday);
+        console.log(`📅 Filtro HOY para totales (Bolivia): ${todayStr}`);
         whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
         params.push(todayStr);
         newParamCount++;
       } else if (filters.dateFilterType === "yesterday") {
-        const today = new Date();
-        const yesterday = new Date(today);
-        yesterday.setDate(yesterday.getDate() - 1);
-        const yesterdayStr = yesterday.toISOString().split('T')[0];
+        // FECHA AYER EN ZONA BOLIVIA
+        const boliviaToday = getBoliviaDate();
+        const boliviaYesterday = new Date(boliviaToday);
+        boliviaYesterday.setDate(boliviaYesterday.getDate() - 1);
+        const yesterdayStr = formatBoliviaDate(boliviaYesterday);
+        console.log(`📅 Filtro AYER para totales (Bolivia): ${yesterdayStr}`);
         whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
         params.push(yesterdayStr);
         newParamCount++;
       } else if (filters.dateFilterType === "thisWeek") {
-        const today = new Date();
-        const weekStart = new Date(today);
+        const boliviaToday = getBoliviaDate();
+        const weekStart = new Date(boliviaToday);
         weekStart.setDate(weekStart.getDate() - weekStart.getDay() + (weekStart.getDay() === 0 ? -6 : 1));
-        const weekEnd = new Date(today);
+        const weekEnd = new Date(boliviaToday);
         
-        const weekStartStr = weekStart.toISOString().split('T')[0];
-        const weekEndStr = weekEnd.toISOString().split('T')[0];
+        const weekStartStr = formatBoliviaDate(weekStart);
+        const weekEndStr = formatBoliviaDate(weekEnd);
         
         whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
         whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
         params.push(weekStartStr, weekEndStr);
         newParamCount += 2;
       } else if (filters.dateFilterType === "lastWeek") {
-        const today = new Date();
-        const weekStart = new Date(today);
+        const boliviaToday = getBoliviaDate();
+        const weekStart = new Date(boliviaToday);
         weekStart.setDate(weekStart.getDate() - weekStart.getDay() - 6 + (weekStart.getDay() === 0 ? -6 : 1));
         const weekEnd = new Date(weekStart);
         weekEnd.setDate(weekEnd.getDate() + 6);
         
-        const weekStartStr = weekStart.toISOString().split('T')[0];
-        const weekEndStr = weekEnd.toISOString().split('T')[0];
+        const weekStartStr = formatBoliviaDate(weekStart);
+        const weekEndStr = formatBoliviaDate(weekEnd);
         
         whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
         whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
         params.push(weekStartStr, weekEndStr);
         newParamCount += 2;
       } else if (filters.dateFilterType === "thisMonth") {
-        const today = new Date();
-        const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
-        const monthEnd = new Date(today);
+        const boliviaToday = getBoliviaDate();
+        const monthStart = new Date(boliviaToday.getFullYear(), boliviaToday.getMonth(), 1);
+        const monthEnd = new Date(boliviaToday);
         
-        const monthStartStr = monthStart.toISOString().split('T')[0];
-        const monthEndStr = monthEnd.toISOString().split('T')[0];
+        const monthStartStr = formatBoliviaDate(monthStart);
+        const monthEndStr = formatBoliviaDate(monthEnd);
         
         whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
         whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
         params.push(monthStartStr, monthEndStr);
         newParamCount += 2;
       } else if (filters.dateFilterType === "lastMonth") {
-        const today = new Date();
-        const lastMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
-        const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+        const boliviaToday = getBoliviaDate();
+        const lastMonth = new Date(boliviaToday.getFullYear(), boliviaToday.getMonth() - 1, 1);
+        const lastMonthEnd = new Date(boliviaToday.getFullYear(), boliviaToday.getMonth(), 0);
         
-        const lastMonthStartStr = lastMonth.toISOString().split('T')[0];
-        const lastMonthEndStr = lastMonthEnd.toISOString().split('T')[0];
+        const lastMonthStartStr = formatBoliviaDate(lastMonth);
+        const lastMonthEndStr = formatBoliviaDate(lastMonthEnd);
         
         whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
         whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount + 1}`);
@@ -580,7 +603,7 @@ const getTotals = async (filters = {}) => {
       ? `WHERE ${baseConditionServicios} AND ${whereConditionsServicios.join(' AND ')}` 
       : `WHERE ${baseConditionServicios}`;
 
-    // Query para totales de productos - FECHA SIN MODIFICAR
+    // Query para totales de productos
     const totalsQueryProductos = `
       SELECT 
         COALESCE(SUM(vp.total), 0) as total_productos,
@@ -622,7 +645,7 @@ const getTotals = async (filters = {}) => {
       ${whereClauseProductos}
     `;
 
-    // Query para totales de servicios - FECHA SIN MODIFICAR
+    // Query para totales de servicios
     const totalsQueryServicios = `
       SELECT 
         COALESCE(SUM(vs.total), 0) as total_servicios,
@@ -725,7 +748,7 @@ const getSaleDetails = async (saleId, saleType) => {
       const saleResult = await query(
         `SELECT 
           vp.*,
-          TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada, /* FECHA SIN MODIFICAR */
+          TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
           u.username as usuario_creador
@@ -758,7 +781,7 @@ const getSaleDetails = async (saleId, saleType) => {
 
       return {
         ...sale,
-        fecha: sale.fecha_formateada, // FECHA SIN MODIFICAR
+        fecha: sale.fecha_formateada,
         items: detailsResult.rows,
         tipo: "producto",
         descripcionDescuento: sale.descripcion_descuento,
@@ -767,7 +790,7 @@ const getSaleDetails = async (saleId, saleType) => {
       const saleResult = await query(
         `SELECT 
           vs.*,
-          TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada, /* FECHA SIN MODIFICAR */
+          TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
           CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente_nombre,
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
@@ -805,7 +828,7 @@ const getSaleDetails = async (saleId, saleType) => {
 
       return {
         ...sale,
-        fecha: sale.fecha_formateada, // FECHA SIN MODIFICAR
+        fecha: sale.fecha_formateada,
         items: detailsResult.rows,
         tipo: "servicio",
         descripcionDescuento: sale.descripcion_descuento,
