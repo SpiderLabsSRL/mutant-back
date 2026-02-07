@@ -1,9 +1,29 @@
+// backend/controllers/salescontrolController.js
 const salesService = require("../services/salescontrolService");
+
+// Función auxiliar para normalizar fechas según zona horaria
+const normalizeDateForTimezone = (dateString, timezoneOffset = -4) => {
+  if (!dateString) return null;
+  
+  try {
+    // Crear fecha en la zona horaria del cliente (Bolivia UTC-4)
+    const date = new Date(dateString);
+    
+    // Ajustar a la zona horaria del servidor (UTC)
+    const serverDate = new Date(date.getTime() - (timezoneOffset * 60 * 60 * 1000));
+    
+    // Formatear como YYYY-MM-DD para consultas SQL
+    return serverDate.toISOString().split('T')[0];
+  } catch (error) {
+    console.error("❌ Error normalizando fecha:", error);
+    return null;
+  }
+};
 
 const getSales = async (req, res) => {
   try {
     const {
-      dateFilterType = "today", // VALOR POR DEFECTO: today
+      dateFilterType = "today",
       specificDate,
       startDate,
       endDate,
@@ -24,36 +44,81 @@ const getSales = async (req, res) => {
       pageSize,
     });
 
-    // Validar que para filtros de rango o específico, las fechas estén presentes
+    // Normalizar fechas para zona horaria (Bolivia UTC-4)
+    let normalizedSpecificDate = specificDate;
+    let normalizedStartDate = startDate;
+    let normalizedEndDate = endDate;
+
+    // Para fecha específica
+    if (dateFilterType === "specific" && specificDate) {
+      normalizedSpecificDate = normalizeDateForTimezone(specificDate, -4);
+      console.log(`📅 Fecha específica normalizada: ${specificDate} -> ${normalizedSpecificDate}`);
+    }
+
+    // Para rango de fechas
+    if (dateFilterType === "range" && startDate && endDate) {
+      normalizedStartDate = normalizeDateForTimezone(startDate, -4);
+      normalizedEndDate = normalizeDateForTimezone(endDate, -4);
+      console.log(`📅 Rango normalizado: ${startDate}-${endDate} -> ${normalizedStartDate}-${normalizedEndDate}`);
+    }
+
+    // Para "today" y "yesterday" - IMPORTANTE: Usar fecha del cliente
+    if (dateFilterType === "today" || dateFilterType === "yesterday") {
+      // Si el frontend envía specificDate, usarlo (ya está en zona horaria del cliente)
+      if (specificDate) {
+        normalizedSpecificDate = normalizeDateForTimezone(specificDate, -4);
+        console.log(`📅 ${dateFilterType} normalizado: ${specificDate} -> ${normalizedSpecificDate}`);
+      } else {
+        // Si no, calcular basado en la fecha actual del servidor
+        const now = new Date();
+        const boliviaOffset = -4 * 60; // Bolivia UTC-4 en minutos
+        const serverOffset = now.getTimezoneOffset(); // Offset del servidor en minutos
+        const totalOffset = boliviaOffset + serverOffset; // Diferencia total
+        
+        const boliviaDate = new Date(now.getTime() + totalOffset * 60 * 1000);
+        
+        if (dateFilterType === "yesterday") {
+          boliviaDate.setDate(boliviaDate.getDate() - 1);
+        }
+        
+        normalizedSpecificDate = boliviaDate.toISOString().split('T')[0];
+        console.log(`📅 ${dateFilterType} calculado desde servidor: ${normalizedSpecificDate}`);
+      }
+    }
+
+    // Validaciones
     if (dateFilterType === "range") {
-      if (!startDate || !endDate) {
+      if (!normalizedStartDate || !normalizedEndDate) {
         return res.status(400).json({
           error: "Para rango de fechas, debe especificar fecha inicio y fecha fin",
         });
       }
       
-      // Validar que la fecha inicio no sea mayor a la fecha fin
-      if (new Date(startDate) > new Date(endDate)) {
+      if (new Date(normalizedStartDate) > new Date(normalizedEndDate)) {
         return res.status(400).json({
           error: "La fecha inicio no puede ser mayor a la fecha fin",
         });
       }
     }
 
-    if (dateFilterType === "specific" && !specificDate) {
+    if (dateFilterType === "specific" && !normalizedSpecificDate) {
       return res.status(400).json({
         error: "Para fecha específica, debe seleccionar una fecha",
       });
     }
 
-    // Preparar filtros - CON VALOR POR DEFECTO
+    // Preparar filtros para el servicio
     const filters = {
-      dateFilterType: dateFilterType || "today", // Asegurar que siempre tenga valor
-      specificDate,
-      startDate,
-      endDate,
+      dateFilterType: dateFilterType || "today",
+      specificDate: normalizedSpecificDate,
+      startDate: normalizedStartDate,
+      endDate: normalizedEndDate,
       sucursal: sucursal === "all" ? null : sucursal,
       empleadoId: empleadoId || null,
+      // Pasar también las fechas originales para logging
+      originalSpecificDate: specificDate,
+      originalStartDate: startDate,
+      originalEndDate: endDate,
     };
 
     // Validar página
@@ -62,6 +127,14 @@ const getSales = async (req, res) => {
 
     console.log(`📄 Solicitando página ${pageNum} con ${pageSizeNum} registros`);
     console.log(`📅 Filtro activo: ${filters.dateFilterType}`);
+    console.log(`📍 Fechas procesadas:`, {
+      specificDate: filters.specificDate,
+      startDate: filters.startDate,
+      endDate: filters.endDate,
+      originalSpecificDate: filters.originalSpecificDate,
+      originalStartDate: filters.originalStartDate,
+      originalEndDate: filters.originalEndDate,
+    });
 
     const result = await salesService.getSales(filters, pageNum, pageSizeNum);
 
@@ -84,7 +157,7 @@ const getSales = async (req, res) => {
 const getTotals = async (req, res) => {
   try {
     const {
-      dateFilterType = "today", // VALOR POR DEFECTO: today
+      dateFilterType = "today",
       specificDate,
       startDate,
       endDate,
@@ -101,33 +174,70 @@ const getTotals = async (req, res) => {
       empleadoId,
     });
 
-    // Validar que para filtros de rango o específico, las fechas estén presentes
+    // Normalizar fechas para zona horaria (misma lógica que getSales)
+    let normalizedSpecificDate = specificDate;
+    let normalizedStartDate = startDate;
+    let normalizedEndDate = endDate;
+
+    if (dateFilterType === "specific" && specificDate) {
+      normalizedSpecificDate = normalizeDateForTimezone(specificDate, -4);
+      console.log(`📅 [Totales] Fecha específica normalizada: ${specificDate} -> ${normalizedSpecificDate}`);
+    }
+
+    if (dateFilterType === "range" && startDate && endDate) {
+      normalizedStartDate = normalizeDateForTimezone(startDate, -4);
+      normalizedEndDate = normalizeDateForTimezone(endDate, -4);
+      console.log(`📅 [Totales] Rango normalizado: ${startDate}-${endDate} -> ${normalizedStartDate}-${normalizedEndDate}`);
+    }
+
+    if (dateFilterType === "today" || dateFilterType === "yesterday") {
+      if (specificDate) {
+        normalizedSpecificDate = normalizeDateForTimezone(specificDate, -4);
+        console.log(`📅 [Totales] ${dateFilterType} normalizado: ${specificDate} -> ${normalizedSpecificDate}`);
+      } else {
+        const now = new Date();
+        const boliviaOffset = -4 * 60;
+        const serverOffset = now.getTimezoneOffset();
+        const totalOffset = boliviaOffset + serverOffset;
+        
+        const boliviaDate = new Date(now.getTime() + totalOffset * 60 * 1000);
+        
+        if (dateFilterType === "yesterday") {
+          boliviaDate.setDate(boliviaDate.getDate() - 1);
+        }
+        
+        normalizedSpecificDate = boliviaDate.toISOString().split('T')[0];
+        console.log(`📅 [Totales] ${dateFilterType} calculado: ${normalizedSpecificDate}`);
+      }
+    }
+
+    // Validaciones
     if (dateFilterType === "range") {
-      if (!startDate || !endDate) {
+      if (!normalizedStartDate || !normalizedEndDate) {
         return res.status(400).json({
           error: "Para rango de fechas, debe especificar fecha inicio y fecha fin",
         });
       }
       
-      if (new Date(startDate) > new Date(endDate)) {
+      if (new Date(normalizedStartDate) > new Date(normalizedEndDate)) {
         return res.status(400).json({
           error: "La fecha inicio no puede ser mayor a la fecha fin",
         });
       }
     }
 
-    if (dateFilterType === "specific" && !specificDate) {
+    if (dateFilterType === "specific" && !normalizedSpecificDate) {
       return res.status(400).json({
         error: "Para fecha específica, debe seleccionar una fecha",
       });
     }
 
-    // Preparar filtros - CON VALOR POR DEFECTO
+    // Preparar filtros
     const filters = {
-      dateFilterType: dateFilterType || "today", // Asegurar que siempre tenga valor
-      specificDate,
-      startDate,
-      endDate,
+      dateFilterType: dateFilterType || "today",
+      specificDate: normalizedSpecificDate,
+      startDate: normalizedStartDate,
+      endDate: normalizedEndDate,
       sucursal: sucursal === "all" ? null : sucursal,
       empleadoId: empleadoId || null,
     };
