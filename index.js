@@ -9,6 +9,7 @@ const allowedOrigins = [
   "https://mutantgym.netlify.app",
   "https://mutant-back.onrender.com",
   "https://gym-back-zbsh.onrender.com",
+  "https://spiderlabsgym.netlify.app",
 ];
 
 // Opciones de configuración CORS
