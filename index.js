@@ -8,6 +8,7 @@ const allowedOrigins = [
   "http://localhost:8080",
   "https://mutantgym.netlify.app",
   "https://mutant-back.onrender.com",
+  "https://gym-back-zbsh.onrender.com",
 ];
 
 // Opciones de configuración CORS
