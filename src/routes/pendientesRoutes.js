@@ -4,7 +4,7 @@ const router = express.Router();
 const PendientesController = require("../controllers/PendientesController");
 
 // Obtener todos los pagos pendientes
-router.get("/", PendientesController.getPagosPendientes);
+router.get("/:sucursalId", PendientesController.getPagosPendientes);
 
 // Registrar un pago
 router.post("/:pagoId/pago", PendientesController.registrarPago);

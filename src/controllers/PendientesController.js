@@ -4,7 +4,8 @@ const PendientesService = require("../services/PendientesService");
 // Obtener todos los pagos pendientes
 exports.getPagosPendientes = async (req, res) => {
   try {
-    const pagos = await PendientesService.getPagosPendientes();
+    const sucursalId = req.params.sucursalId;
+    const pagos = await PendientesService.getPagosPendientes(sucursalId);
     res.json(pagos);
   } catch (error) {
     console.error("Error in getPagosPendientes:", error);

@@ -2,7 +2,7 @@
 const { query, pool } = require("../../db");
 
 // Obtener todos los pagos pendientes
-exports.getPagosPendientes = async () => {
+exports.getPagosPendientes = async (sucursalId) => {
   const result = await query(`
     SELECT 
       pp.id,
@@ -24,9 +24,9 @@ exports.getPagosPendientes = async () => {
     INNER JOIN detalle_venta_servicios dvs ON vs.id = dvs.venta_servicio_id
     INNER JOIN inscripciones i ON dvs.inscripcion_id = i.id
     INNER JOIN servicios s ON i.servicio_id = s.id
-    WHERE pp.estado = 'pendiente'
+    WHERE pp.estado = 'pendiente' AND i.sucursal_id = $1
     ORDER BY pp.fecha_inscripcion DESC
-  `);
+  `, [sucursalId]);
   
   // Convertir los montos de string a número
   return result.rows.map(row => ({
