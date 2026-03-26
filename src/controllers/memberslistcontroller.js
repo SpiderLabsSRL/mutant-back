@@ -111,7 +111,7 @@ const getAllMembers = async (req, res) => {
 const editMember = async (req, res) => {
   try {
     const { id } = req.params;
-    const { nombres, apellidos, ci, phone, birthDate } = req.body;
+    const { nombres, apellidos, ci, phone} = req.body;
 
     console.log("Controlador editMember - Datos recibidos:", {
       id,
@@ -119,12 +119,11 @@ const editMember = async (req, res) => {
       apellidos,
       ci,
       phone,
-      birthDate,
       userRol: req.user?.rol,
     });
 
     // Validar datos requeridos
-    if (!nombres || !apellidos || !ci || !phone || !birthDate) {
+    if (!nombres || !apellidos || !ci || !phone) {
       return res.status(400).json({
         success: false,
         message: "Todos los campos son requeridos",
@@ -136,8 +135,7 @@ const editMember = async (req, res) => {
       nombres,
       apellidos,
       ci,
-      phone,
-      birthDate
+      phone
     );
 
     res.json({

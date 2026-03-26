@@ -473,7 +473,7 @@ const getAllMembers = async (
 };
 
 // Editar miembro
-const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
+const editMember = async (id, nombres, apellidos, ci, phone) => {
   try {
     // Verificar si el CI ya existe en otro miembro ACTIVO
     const checkCiQuery = `
@@ -491,8 +491,8 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
 
     const updateQuery = `
       UPDATE personas 
-      SET nombres = $1, apellidos = $2, ci = $3, telefono = $4, fecha_nacimiento = $5
-      WHERE id = $6 AND estado = 0
+      SET nombres = $1, apellidos = $2, ci = $3, telefono = $4
+      WHERE id = $5 AND estado = 0
       RETURNING *
     `;
 
@@ -502,7 +502,6 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
       apellidos,
       ci,
       phone,
-      birthDate,
     });
 
     const result = await query(updateQuery, [
@@ -510,7 +509,6 @@ const editMember = async (id, nombres, apellidos, ci, phone, birthDate) => {
       apellidos,
       ci,
       phone,
-      birthDate,
       id,
     ]);
 
