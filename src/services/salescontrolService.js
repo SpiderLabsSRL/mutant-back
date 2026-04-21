@@ -681,7 +681,10 @@ const getTotals = async (filters = {}) => {
           CASE 
             WHEN vp.forma_pago = 'efectivo' THEN vp.total
             WHEN vp.forma_pago = 'mixto' AND vp.detalle_pago IS NOT NULL 
-            THEN COALESCE((vp.detalle_pago::json->>'efectivo')::numeric, 0)
+            THEN COALESCE(
+              (regexp_match(vp.detalle_pago, 'Efectivo: Bs.\s*([0-9]+(?:\.[0-9]+)?)', 'i'))[1]::numeric,
+                0
+              )
             ELSE 0 
           END
         ), 0) as efectivo_productos,
@@ -689,7 +692,10 @@ const getTotals = async (filters = {}) => {
           CASE 
             WHEN vp.forma_pago = 'qr' THEN vp.total
             WHEN vp.forma_pago = 'mixto' AND vp.detalle_pago IS NOT NULL
-            THEN COALESCE((vp.detalle_pago::json->>'qr')::numeric, 0)
+            THEN COALESCE(
+              (regexp_match(vp.detalle_pago, 'QR: Bs.\s*([0-9]+(?:\.[0-9]+)?)', 'i'))[1]::numeric,
+              0
+            )
             ELSE 0 
           END
         ), 0) as qr_productos
@@ -705,7 +711,10 @@ const getTotals = async (filters = {}) => {
           CASE 
             WHEN vs.forma_pago = 'efectivo' THEN vs.total
             WHEN vs.forma_pago = 'mixto' AND vs.detalle_pago IS NOT NULL 
-            THEN COALESCE((vs.detalle_pago::json->>'efectivo')::numeric, 0)
+            THEN COALESCE(
+              (regexp_match(vs.detalle_pago, 'Efectivo:\\s*(\\d+(?:\\.\\d+)?)', 'i'))[1]::numeric,
+              0
+            )
             ELSE 0 
           END
         ), 0) as efectivo_servicios,
@@ -713,7 +722,10 @@ const getTotals = async (filters = {}) => {
           CASE 
             WHEN vs.forma_pago = 'qr' THEN vs.total
             WHEN vs.forma_pago = 'mixto' AND vs.detalle_pago IS NOT NULL
-            THEN COALESCE((vs.detalle_pago::json->>'qr')::numeric, 0)
+            THEN COALESCE(
+              (regexp_match(vs.detalle_pago, 'QR:\\s*(\\d+(?:\\.\\d+)?)', 'i'))[1]::numeric,
+              0
+            )
             ELSE 0 
           END
         ), 0) as qr_servicios
