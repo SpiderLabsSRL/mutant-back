@@ -93,7 +93,6 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       let newParamCount = paramCount;
 
       if (filters.dateFilterType === "specific" && filters.specificDate) {
-        // Usar la fecha específica directamente
         console.log(`📅 [Service] Usando fecha específica: ${filters.specificDate}`);
         whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
         params.push(filters.specificDate);
@@ -103,7 +102,6 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         filters.startDate &&
         filters.endDate
       ) {
-        // Usar el rango de fechas directamente
         console.log(`📅 [Service] Usando rango: ${filters.startDate} - ${filters.endDate}`);
         whereConditions.push(
           `DATE(${tableAlias}.fecha) BETWEEN $${newParamCount} AND $${newParamCount + 1}`,
@@ -111,13 +109,11 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         params.push(filters.startDate, filters.endDate);
         newParamCount += 2;
       } else if (filters.dateFilterType === "today") {
-        // Usar la fecha de hoy en La Paz (calculada al inicio)
         console.log(`📅 [Service] Usando HOY en La Paz: ${hoyLaPaz}`);
         whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
         params.push(hoyLaPaz);
         newParamCount++;
       } else if (filters.dateFilterType === "yesterday") {
-        // Calcular ayer basado en la fecha de hoy en La Paz
         const ayerResult = await query(
           "SELECT ($1::date - INTERVAL '1 day')::date as ayer",
           [hoyLaPaz]
@@ -128,7 +124,6 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         params.push(ayerLaPaz);
         newParamCount++;
       } else if (filters.dateFilterType === "thisWeek") {
-        // Esta semana basada en la fecha de hoy en La Paz
         const thisWeekResult = await query(`
           SELECT 
             date_trunc('week', $1::date)::date as inicio_semana,
@@ -146,7 +141,6 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         params.push(fin_semana);
         newParamCount++;
       } else if (filters.dateFilterType === "lastWeek") {
-        // Semana pasada basada en la fecha de hoy en La Paz
         const lastWeekResult = await query(`
           SELECT 
             (date_trunc('week', $1::date) - INTERVAL '7 days')::date as inicio_semana_pasada,
@@ -164,7 +158,6 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         params.push(fin_semana_pasada);
         newParamCount++;
       } else if (filters.dateFilterType === "thisMonth") {
-        // Este mes basado en la fecha de hoy en La Paz
         const thisMonthResult = await query(`
           SELECT 
             date_trunc('month', $1::date)::date as inicio_mes,
@@ -182,7 +175,6 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         params.push(fin_mes);
         newParamCount++;
       } else if (filters.dateFilterType === "lastMonth") {
-        // Mes pasado basado en la fecha de hoy en La Paz
         const lastMonthResult = await query(`
           SELECT 
             date_trunc('month', $1::date - INTERVAL '1 month')::date as inicio_mes_pasado,
@@ -200,7 +192,6 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         params.push(fin_mes_pasado);
         newParamCount++;
       }
-      // Para "all" no agregamos filtro de fecha
 
       return newParamCount;
     };
@@ -260,33 +251,22 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         vp.descuento::text,
         vp.total::text,
         vp.forma_pago as "formaPago",
+        vp.detalle_pago as "detalle_pago",
         CASE 
           WHEN vp.forma_pago = 'efectivo' THEN vp.total
           WHEN vp.forma_pago = 'mixto' AND vp.detalle_pago IS NOT NULL 
-          THEN (
-            CASE 
-              WHEN vp.detalle_pago::text ~ '^\{.*\}$' 
-              THEN COALESCE(
-                (vp.detalle_pago::json->>'efectivo')::numeric,
-                0
-              )
-              ELSE 0
-            END
+          THEN COALESCE(
+            (regexp_match(vp.detalle_pago, 'Efectivo:\\s*Bs\\.?\\s*([0-9]+(?:\\.[0-9]+)?)', 'i'))[1]::numeric,
+            0
           )
           ELSE 0 
         END as efectivo,
         CASE 
           WHEN vp.forma_pago = 'qr' THEN vp.total
           WHEN vp.forma_pago = 'mixto' AND vp.detalle_pago IS NOT NULL
-          THEN (
-            CASE 
-              WHEN vp.detalle_pago::text ~ '^\{.*\}$'
-              THEN COALESCE(
-                (vp.detalle_pago::json->>'qr')::numeric,
-                0
-              )
-              ELSE 0
-            END
+          THEN COALESCE(
+            (regexp_match(vp.detalle_pago, 'QR:\\s*Bs\\.?\\s*([0-9]+(?:\\.[0-9]+)?)', 'i'))[1]::numeric,
+            0
           )
           ELSE 0 
         END as qr,
@@ -300,7 +280,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       INNER JOIN productos pro ON dp.producto_id = pro.id
       ${whereClauseProductos}
       GROUP BY vp.id, vp.fecha, p_emp.nombres, p_emp.apellidos, s.nombre, 
-               vp.forma_pago, vp.detalle_pago, vp.descripcion_descuento
+               vp.forma_pago, vp.detalle_pago, vp.descripcion_descuento, vp.total
       ORDER BY vp.fecha DESC
       LIMIT $${paramCountProductos} OFFSET $${paramCountProductos + 1}
     `;
@@ -319,33 +299,22 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         vs.descuento::text,
         vs.total::text,
         vs.forma_pago as "formaPago",
+        vs.detalle_pago as "detalle_pago",
         CASE 
           WHEN vs.forma_pago = 'efectivo' THEN vs.total
           WHEN vs.forma_pago = 'mixto' AND vs.detalle_pago IS NOT NULL 
-          THEN (
-            CASE 
-              WHEN vs.detalle_pago::text ~ '^\{.*\}$'
-              THEN COALESCE(
-                (vs.detalle_pago::json->>'efectivo')::numeric,
-                0
-              )
-              ELSE 0
-            END
+          THEN COALESCE(
+            (regexp_match(vs.detalle_pago, 'Efectivo:\\s*Bs\\.?\\s*([0-9]+(?:\\.[0-9]+)?)', 'i'))[1]::numeric,
+            0
           )
           ELSE 0 
         END as efectivo,
         CASE 
           WHEN vs.forma_pago = 'qr' THEN vs.total
           WHEN vs.forma_pago = 'mixto' AND vs.detalle_pago IS NOT NULL
-          THEN (
-            CASE 
-              WHEN vs.detalle_pago::text ~ '^\{.*\}$'
-              THEN COALESCE(
-                (vs.detalle_pago::json->>'qr')::numeric,
-                0
-              ) 
-              ELSE 0
-            END
+          THEN COALESCE(
+            (regexp_match(vs.detalle_pago, 'QR:\\s*Bs\\.?\\s*([0-9]+(?:\\.[0-9]+)?)', 'i'))[1]::numeric,
+            0
           )
           ELSE 0 
         END as qr,
@@ -362,7 +331,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       ${whereClauseServicios}
       GROUP BY vs.id, vs.fecha, p_cli.nombres, p_cli.apellidos, 
                p_emp.nombres, p_emp.apellidos, s.nombre, 
-               vs.forma_pago, vs.detalle_pago, vs.descripcion_descuento
+               vs.forma_pago, vs.detalle_pago, vs.descripcion_descuento, vs.total
       ORDER BY vs.fecha DESC
       LIMIT $${paramCountServicios} OFFSET $${paramCountServicios + 1}
     `;
@@ -447,7 +416,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       sales: allSales.map((sale) => ({
         ...sale,
         id: sale.id.toString(),
-        fecha: sale.fecha, // FECHA ORIGINAL DEL BACKEND
+        fecha: sale.fecha,
         subtotal: parseFloat(sale.subtotal) || 0,
         descuento: parseFloat(sale.descuento) || 0,
         total: parseFloat(sale.total) || 0,
@@ -682,9 +651,9 @@ const getTotals = async (filters = {}) => {
             WHEN vp.forma_pago = 'efectivo' THEN vp.total
             WHEN vp.forma_pago = 'mixto' AND vp.detalle_pago IS NOT NULL 
             THEN COALESCE(
-              (regexp_match(vp.detalle_pago, 'Efectivo: Bs.\s*([0-9]+(?:\.[0-9]+)?)', 'i'))[1]::numeric,
-                0
-              )
+              (regexp_match(vp.detalle_pago, 'Efectivo:\\s*Bs\\.?\\s*([0-9]+(?:\\.[0-9]+)?)', 'i'))[1]::numeric,
+              0
+            )
             ELSE 0 
           END
         ), 0) as efectivo_productos,
@@ -693,7 +662,7 @@ const getTotals = async (filters = {}) => {
             WHEN vp.forma_pago = 'qr' THEN vp.total
             WHEN vp.forma_pago = 'mixto' AND vp.detalle_pago IS NOT NULL
             THEN COALESCE(
-              (regexp_match(vp.detalle_pago, 'QR: Bs.\s*([0-9]+(?:\.[0-9]+)?)', 'i'))[1]::numeric,
+              (regexp_match(vp.detalle_pago, 'QR:\\s*Bs\\.?\\s*([0-9]+(?:\\.[0-9]+)?)', 'i'))[1]::numeric,
               0
             )
             ELSE 0 
@@ -712,7 +681,7 @@ const getTotals = async (filters = {}) => {
             WHEN vs.forma_pago = 'efectivo' THEN vs.total
             WHEN vs.forma_pago = 'mixto' AND vs.detalle_pago IS NOT NULL 
             THEN COALESCE(
-              (regexp_match(vs.detalle_pago, 'Efectivo:\\s*(\\d+(?:\\.\\d+)?)', 'i'))[1]::numeric,
+              (regexp_match(vs.detalle_pago, 'Efectivo:\\s*Bs\\.?\\s*([0-9]+(?:\\.[0-9]+)?)', 'i'))[1]::numeric,
               0
             )
             ELSE 0 
@@ -723,7 +692,7 @@ const getTotals = async (filters = {}) => {
             WHEN vs.forma_pago = 'qr' THEN vs.total
             WHEN vs.forma_pago = 'mixto' AND vs.detalle_pago IS NOT NULL
             THEN COALESCE(
-              (regexp_match(vs.detalle_pago, 'QR:\\s*(\\d+(?:\\.\\d+)?)', 'i'))[1]::numeric,
+              (regexp_match(vs.detalle_pago, 'QR:\\s*Bs\\.?\\s*([0-9]+(?:\\.[0-9]+)?)', 'i'))[1]::numeric,
               0
             )
             ELSE 0 
