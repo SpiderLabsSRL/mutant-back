@@ -45,9 +45,24 @@ class UneteAhoraController {
         !usuarioData.celular ||
         !usuarioData.fechaNacimiento
       ) {
-        return res
-          .status(400)
-          .json({ error: "Todos los campos son requeridos" });
+        return res.status(400).json({ 
+          error: "Todos los campos son requeridos",
+          camposFaltantes: {
+            ci: !usuarioData.ci,
+            nombre: !usuarioData.nombre,
+            apellido: !usuarioData.apellido,
+            celular: !usuarioData.celular,
+            fechaNacimiento: !usuarioData.fechaNacimiento
+          }
+        });
+      }
+
+      // Validar formato de fecha
+      const fechaRegex = /^\d{4}-\d{2}-\d{2}$/;
+      if (!fechaRegex.test(usuarioData.fechaNacimiento)) {
+        return res.status(400).json({
+          error: "Formato de fecha inválido. Use YYYY-MM-DD"
+        });
       }
 
       const result = await UneteAhoraService.registrarUsuario(usuarioData);
