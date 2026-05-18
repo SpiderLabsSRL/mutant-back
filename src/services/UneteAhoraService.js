@@ -4,7 +4,6 @@ class UneteAhoraService {
   // Buscar usuario por CI
   static async buscarUsuarioPorCI(ci) {
     try {
-      // Buscar persona por CI - SOLO si no está eliminado (estado != 1)
       const personaResult = await query(
         `SELECT p.id, p.nombres, p.apellidos, p.ci, p.telefono, p.fecha_nacimiento
          FROM personas p
@@ -18,7 +17,6 @@ class UneteAhoraService {
 
       const persona = personaResult.rows[0];
 
-      // Buscar TODAS las inscripciones activas (estado = 1) de la persona
       const inscripcionesResult = await query(
         `SELECT 
           i.id,
@@ -122,11 +120,19 @@ class UneteAhoraService {
     try {
       await client.query("BEGIN");
 
-      // Validar que la fecha de nacimiento no sea futura
-      if (data.fechaNacimiento) {
+      // Validar fecha de nacimiento SOLO si fue proporcionada
+      if (data.fechaNacimiento && data.fechaNacimiento.trim() !== "") {
         const fechaNac = new Date(data.fechaNacimiento);
         const hoy = new Date();
         
+        if (isNaN(fechaNac.getTime())) {
+          await client.query("ROLLBACK");
+          return {
+            success: false,
+            mensaje: "Formato de fecha de nacimiento inválido",
+          };
+        }
+
         if (fechaNac > hoy) {
           await client.query("ROLLBACK");
           return {
@@ -135,14 +141,27 @@ class UneteAhoraService {
           };
         }
 
-        // Validar edad mínima (14 años)
-        const edad = hoy.getFullYear() - fechaNac.getFullYear();
+        // Validar edad mínima (8 años)
+        let edad = hoy.getFullYear() - fechaNac.getFullYear();
         const mes = hoy.getMonth() - fechaNac.getMonth();
-        if (edad < 14 || (edad === 14 && mes < 0)) {
+        if (mes < 0 || (mes === 0 && hoy.getDate() < fechaNac.getDate())) {
+          edad--;
+        }
+        
+        if (edad < 8) {
           await client.query("ROLLBACK");
           return {
             success: false,
-            mensaje: "Debes tener al menos 14 años para registrarte",
+            mensaje: "Debes tener al menos 8 años para registrarte",
+          };
+        }
+
+        // Validar edad máxima (120 años)
+        if (edad > 120) {
+          await client.query("ROLLBACK");
+          return {
+            success: false,
+            mensaje: "Por favor, verifica tu fecha de nacimiento",
           };
         }
       }
@@ -156,16 +175,21 @@ class UneteAhoraService {
         const persona = personaExistente.rows[0];
 
         if (persona.estado === 0) {
+          // Si la fecha no está presente, mantener la existente o usar null
+          const fechaNacimiento = data.fechaNacimiento && data.fechaNacimiento.trim() !== "" 
+            ? data.fechaNacimiento 
+            : null;
+
           await client.query(
             `UPDATE personas 
              SET nombres = $1, apellidos = $2, telefono = $3, 
-                 fecha_nacimiento = $4, estado = 1
+                 fecha_nacimiento = COALESCE($4, fecha_nacimiento), estado = 1
              WHERE id = $5`,
             [
               data.nombre,
               data.apellido,
               data.celular,
-              data.fechaNacimiento,
+              fechaNacimiento,
               persona.id,
             ],
           );
@@ -186,7 +210,11 @@ class UneteAhoraService {
         }
       }
 
-      // Crear nueva persona con estado activo (1)
+      // Crear nueva persona - fecha_nacimiento puede ser null si no se proporcionó
+      const fechaNacimiento = data.fechaNacimiento && data.fechaNacimiento.trim() !== "" 
+        ? data.fechaNacimiento 
+        : null;
+
       const personaResult = await client.query(
         `INSERT INTO personas (nombres, apellidos, ci, telefono, fecha_nacimiento, estado)
          VALUES ($1, $2, $3, $4, $5, 1)
@@ -196,7 +224,7 @@ class UneteAhoraService {
           data.apellido,
           data.ci,
           data.celular,
-          data.fechaNacimiento,
+          fechaNacimiento,
         ],
       );
 

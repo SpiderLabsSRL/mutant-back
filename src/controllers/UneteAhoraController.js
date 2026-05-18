@@ -37,32 +37,32 @@ class UneteAhoraController {
     try {
       const usuarioData = req.body;
 
-      // Validar datos requeridos
+      // Validar campos requeridos (fechaNacimiento es opcional)
       if (
         !usuarioData.ci ||
         !usuarioData.nombre ||
         !usuarioData.apellido ||
-        !usuarioData.celular ||
-        !usuarioData.fechaNacimiento
+        !usuarioData.celular
       ) {
         return res.status(400).json({ 
-          error: "Todos los campos son requeridos",
+          error: "Los campos CI, Nombre, Apellido y Celular son requeridos",
           camposFaltantes: {
             ci: !usuarioData.ci,
             nombre: !usuarioData.nombre,
             apellido: !usuarioData.apellido,
             celular: !usuarioData.celular,
-            fechaNacimiento: !usuarioData.fechaNacimiento
           }
         });
       }
 
-      // Validar formato de fecha
-      const fechaRegex = /^\d{4}-\d{2}-\d{2}$/;
-      if (!fechaRegex.test(usuarioData.fechaNacimiento)) {
-        return res.status(400).json({
-          error: "Formato de fecha inválido. Use YYYY-MM-DD"
-        });
+      // Validar formato de fecha SOLO si fue proporcionada
+      if (usuarioData.fechaNacimiento && usuarioData.fechaNacimiento.trim() !== "") {
+        const fechaRegex = /^\d{4}-\d{2}-\d{2}$/;
+        if (!fechaRegex.test(usuarioData.fechaNacimiento)) {
+          return res.status(400).json({
+            error: "Formato de fecha inválido. Use YYYY-MM-DD"
+          });
+        }
       }
 
       const result = await UneteAhoraService.registrarUsuario(usuarioData);
