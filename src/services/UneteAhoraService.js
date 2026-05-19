@@ -183,7 +183,7 @@ class UneteAhoraService {
           await client.query(
             `UPDATE personas 
              SET nombres = $1, apellidos = $2, telefono = $3, 
-                 fecha_nacimiento = COALESCE($4, fecha_nacimiento), estado = 1
+                 fecha_nacimiento = COALESCE($4, fecha_nacimiento), estado = 0
              WHERE id = $5`,
             [
               data.nombre,
