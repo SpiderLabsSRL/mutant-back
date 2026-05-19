@@ -174,7 +174,7 @@ class UneteAhoraService {
       if (personaExistente.rows.length > 0) {
         const persona = personaExistente.rows[0];
 
-        if (persona.estado === 0) {
+        if (persona.estado === 1) {
           // Si la fecha no está presente, mantener la existente o usar null
           const fechaNacimiento = data.fechaNacimiento && data.fechaNacimiento.trim() !== "" 
             ? data.fechaNacimiento 
