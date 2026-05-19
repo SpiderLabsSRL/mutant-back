@@ -217,7 +217,7 @@ class UneteAhoraService {
 
       const personaResult = await client.query(
         `INSERT INTO personas (nombres, apellidos, ci, telefono, fecha_nacimiento, estado)
-         VALUES ($1, $2, $3, $4, $5, 1)
+         VALUES ($1, $2, $3, $4, $5, 0)
          RETURNING id`,
         [
           data.nombre,
