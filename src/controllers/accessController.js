@@ -97,3 +97,25 @@ exports.registerEmployeeCheckOut = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
+// Nuevo endpoint para registrar acceso denegado sin inscripción activa
+exports.registerAccessDeniedNoSubscription = async (req, res) => {
+  try {
+    const { personId, branchId, userId, memberName } = req.body;
+    
+    if (!personId || !branchId || !userId) {
+      return res.status(400).json({ message: "Faltan parámetros requeridos" });
+    }
+    
+    const result = await accessService.registerAccessDeniedNoActiveSubscription(
+      parseInt(personId), 
+      parseInt(branchId), 
+      parseInt(userId),
+      memberName
+    );
+    res.json(result);
+  } catch (error) {
+    console.error("Error in registerAccessDeniedNoSubscription:", error);
+    res.status(500).json({ message: error.message });
+  }
+};

@@ -17,4 +17,7 @@ router.post("/register/employee/checkin", accessController.registerEmployeeCheck
 // Registrar salida de empleado
 router.post("/register/employee/checkout", accessController.registerEmployeeCheckOut);
 
+// Registrar acceso denegado sin inscripción activa
+router.post("/register/denied/no-subscription", accessController.registerAccessDeniedNoSubscription);
+
 module.exports = router;

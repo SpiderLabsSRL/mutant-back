@@ -57,7 +57,6 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
   return result.rows;
 };
 
-// Función para formatear fecha de manera legible
 const formatDate = (dateString) => {
   if (!dateString) return '';
   const date = new Date(dateString);
@@ -67,12 +66,10 @@ const formatDate = (dateString) => {
   return `${day} ${month} ${year}`;
 };
 
-// Buscar miembros (clientes y empleados) - CORREGIDO para no duplicar
 exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
   const searchParam = `%${searchTerm}%`;
   const results = [];
 
-  // Clientes - excluir personas que también son empleados cuando se busca "all"
   if (typeFilter === "all" || typeFilter === "cliente") {
     const clientParams = [searchParam];
     let clientSql = `
@@ -99,7 +96,13 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
             WHEN i.ingresos_disponibles IS NULL THEN true
             WHEN i.ingresos_disponibles <= 0 THEN false
             ELSE true
-          END as tiene_visitas_disponibles
+          END as tiene_visitas_disponibles,
+          CASE 
+            WHEN i.fecha_inicio::date <= TIMEZONE('America/La_Paz', NOW())::date 
+              AND i.fecha_vencimiento::date >= TIMEZONE('America/La_Paz', NOW())::date 
+            THEN true 
+            ELSE false 
+          END as esta_en_rango_fechas
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id
         WHERE i.estado = 1
@@ -128,7 +131,8 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
               'multisucursal', ti.multisucursal,
               'estado_servicio', ti.estado_servicio,
               'servicio_ingresos_ilimitados', (ti.servicio_ingresos_ilimitados IS NULL),
-              'tiene_visitas_disponibles', ti.tiene_visitas_disponibles
+              'tiene_visitas_disponibles', ti.tiene_visitas_disponibles,
+              'esta_en_rango_fechas', ti.esta_en_rango_fechas
             ) ORDER BY 
               CASE WHEN ti.estado_servicio = 'activo' THEN 0 ELSE 1 END,
               ti.fecha_vencimiento DESC
@@ -141,7 +145,6 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       AND p.estado = 0
     `;
 
-    // Cuando se busca "all", excluir personas que son empleados para que no se dupliquen
     if (typeFilter === "all") {
       clientSql += ` AND NOT EXISTS (SELECT 1 FROM empleados e WHERE e.persona_id = p.id AND e.estado = 1)`;
     }
@@ -153,7 +156,6 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
     results.push(...clientResult.rows);
   }
 
-  // Empleados - Solo de la sucursal actual
   if (typeFilter === "all" || typeFilter === "empleado") {
     const employeeParams = [searchParam];
     let employeeSql = `
@@ -221,7 +223,6 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
   return results;
 };
 
-// Obtener las inscripciones multisucursales MÁS RECIENTES de cada sucursal
 const getLatestMultisucursalInscriptions = async (personId, serviceId, fechaInicio, fechaVencimiento) => {
   const result = await query(
     `
@@ -251,7 +252,6 @@ const getLatestMultisucursalInscriptions = async (personId, serviceId, fechaInic
   return result.rows;
 };
 
-// Función checkPagosPendientes
 const checkPagosPendientes = async (personId) => {
   try {
     const result = await query(
@@ -291,7 +291,6 @@ const checkPagosPendientes = async (personId) => {
   }
 };
 
-// Registrar acceso de cliente
 exports.registerClientAccess = async (
   personId,
   serviceId,
@@ -330,7 +329,8 @@ exports.registerClientAccess = async (
         WHEN fecha_vencimiento::date < TIMEZONE('America/La_Paz', NOW())::date THEN true
         ELSE false
       END as esta_vencido,
-      fecha_vencimiento
+      fecha_vencimiento,
+      fecha_inicio
     FROM inscripciones 
     WHERE id = $1
   `,
@@ -338,10 +338,14 @@ exports.registerClientAccess = async (
   );
 
   const isExpired = checkExpiration.rows[0]?.esta_vencido || false;
+  const fechaInicio = checkExpiration.rows[0]?.fecha_inicio;
+  const fechaVencimiento = checkExpiration.rows[0]?.fecha_vencimiento;
+  const hoy = new Date();
+  
+  const dentroDeRango = fechaInicio <= hoy && fechaVencimiento >= hoy;
 
   if (isExpired) {
-    const fechaVencimiento = checkExpiration.rows[0]?.fecha_vencimiento;
-    const fechaFormateada = formatDate(fechaVencimiento);
+    const fechaVencimientoFormateada = formatDate(fechaVencimiento);
     
     await query(
       `
@@ -352,7 +356,7 @@ exports.registerClientAccess = async (
       [
         personId,
         inscription.servicio_real_id,
-        `Acceso denegado - Servicio ${inscription.servicio_nombre} vencido`,
+        `Acceso denegado - Servicio ${inscription.servicio_nombre} vencido (venció el ${fechaVencimientoFormateada})`,
         "denegado",
         branchId,
         userId,
@@ -362,6 +366,29 @@ exports.registerClientAccess = async (
     return {
       success: false,
       message: `Servicio ${inscription.servicio_nombre} vencido`,
+    };
+  }
+
+  if (!dentroDeRango) {
+    await query(
+      `
+      INSERT INTO registros_acceso 
+      (persona_id, servicio_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
+      VALUES ($1, $2, $3, $4, $5, $6, TIMEZONE('America/La_Paz', NOW()), 'cliente')
+    `,
+      [
+        personId,
+        inscription.servicio_real_id,
+        `Acceso denegado - Fuera del período de vigencia del servicio ${inscription.servicio_nombre}`,
+        "denegado",
+        branchId,
+        userId,
+      ]
+    );
+
+    return {
+      success: false,
+      message: `Fuera del período de vigencia del servicio ${inscription.servicio_nombre}`,
     };
   }
 
@@ -475,7 +502,6 @@ exports.registerClientAccess = async (
   };
 };
 
-// Obtener horario del empleado para el día actual
 const getEmployeeScheduleForToday = async (employeeId) => {
   const dayResult = await query(
     `SELECT EXTRACT(DOW FROM TIMEZONE('America/La_Paz', NOW())) + 1 as dia_semana`
@@ -520,7 +546,6 @@ const getEmployeeScheduleForToday = async (employeeId) => {
   throw new Error("El empleado no tiene horarios definidos");
 };
 
-// Registrar entrada de empleado
 exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   const employee = await query(
     `
@@ -581,7 +606,6 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   };
 };
 
-// Registrar salida de empleado
 exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   const employee = await query(
     `
@@ -639,5 +663,27 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     message: detail,
     isEarly,
     minutes: isEarly ? diffMinutes : 0,
+  };
+};
+
+exports.registerAccessDeniedNoActiveSubscription = async (personId, branchId, userId, memberName) => {
+  await query(
+    `
+    INSERT INTO registros_acceso 
+    (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
+    VALUES ($1, $2, $3, $4, $5, TIMEZONE('America/La_Paz', NOW()), 'cliente')
+  `,
+    [
+      personId,
+      `Acceso denegado - Sin inscripción activa`,
+      "denegado",
+      branchId,
+      userId,
+    ]
+  );
+
+  return {
+    success: false,
+    message: `${memberName} no tiene inscripciones activas`,
   };
 };
