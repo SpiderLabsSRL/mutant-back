@@ -18,7 +18,7 @@ exports.searchPeople = async (searchTerm) => {
     SELECT id, nombres, apellidos, ci, telefono, fecha_nacimiento
     FROM personas
     WHERE (nombres ILIKE $1 OR apellidos ILIKE $1 OR ci ILIKE $1)
-    AND estado = 0  -- SOLO personas con estado = 0
+    AND estado = 0
     ORDER BY apellidos, nombres
     LIMIT 10
   `, [`%${searchTerm}%`]);
@@ -59,7 +59,7 @@ const checkExistingPerson = async (client, ci) => {
   const existingPerson = await client.query(`
     SELECT id, nombres, apellidos, ci, telefono, fecha_nacimiento
     FROM personas 
-    WHERE ci = $1 AND estado = 0  -- SOLO personas con estado = 0
+    WHERE ci = $1 AND estado = 0
   `, [ci]);
   
   return existingPerson.rows[0] || null;
@@ -73,7 +73,6 @@ exports.registerMember = async (registrationData) => {
     
     let personaId = registrationData.personaId;
     
-    // Si no es un miembro existente, verificar si ya existe una persona con el mismo CI
     if (!personaId) {
       const { ci } = registrationData;
       
@@ -99,7 +98,6 @@ exports.registerMember = async (registrationData) => {
       personaId = personaResult.rows[0].id;
     }
     
-    // Obtener información de los servicios seleccionados
     const serviciosInfo = [];
     for (const servicio of registrationData.servicios) {
       const servicioResult = await client.query(`
@@ -121,36 +119,16 @@ exports.registerMember = async (registrationData) => {
       });
     }
     
-    // Obtener fecha actual desde el servidor con zona horaria de Bolivia
     const fechaActualResult = await client.query(`
       SELECT TIMEZONE('America/La_Paz', NOW()) as fecha_actual
     `);
     const fechaActual = fechaActualResult.rows[0].fecha_actual;
     
-    // Crear inscripciones para cada servicio
     const inscripcionesIds = [];
     for (const servicio of serviciosInfo) {
-      // Verificar si ya existe una inscripción activa para este servicio
-      const existingSubscription = await client.query(`
-        SELECT id, ingresos_disponibles, fecha_vencimiento 
-        FROM inscripciones 
-        WHERE persona_id = $1 AND servicio_id = $2 
-        AND estado = 1 AND fecha_vencimiento > CURRENT_DATE
-        AND (sucursal_id = $3 OR (SELECT multisucursal FROM servicios WHERE id = $2) = true)
-      `, [personaId, servicio.servicioId, registrationData.sucursalId]);
+      // SIN RESTRICCIÓN - Siempre crear nueva inscripción sin verificar suscripciones activas
+      // Se elimina la validación que bloqueaba cuando el cliente ya tenía una suscripción activa
       
-      let inscripcionId;
-      
-      // SIEMPRE crear nueva inscripción - NO HACER UPDATE
-      if (existingSubscription.rows.length > 0) {
-        // Si ya existe una suscripción activa con ingresos disponibles, no permitir renovación
-        const existingSub = existingSubscription.rows[0];
-        if (existingSub.ingresos_disponibles > 0) {
-          throw new Error(`El cliente ya tiene una suscripción activa para este servicio con ingresos disponibles`);
-        }
-      }
-      
-      // Crear NUEVA inscripción para la sucursal principal
       const inscripcionResult = await client.query(`
         INSERT INTO inscripciones (persona_id, servicio_id, sucursal_id, fecha_inicio, fecha_vencimiento, ingresos_disponibles, estado)
         VALUES ($1, $2, $3, $4, $5, $6, 1)
@@ -166,7 +144,6 @@ exports.registerMember = async (registrationData) => {
       
       inscripcionId = inscripcionResult.rows[0].id;
       
-      // Si el servicio es multisucursal, crear inscripciones en todas las sucursales disponibles CON LOS MISMOS INGRESOS DISPONIBLES
       if (servicio.multisucursal) {
         const otrasSucursales = await client.query(`
           SELECT sucursal_id 
@@ -184,7 +161,7 @@ exports.registerMember = async (registrationData) => {
             otraSucursal.sucursal_id,
             servicio.fechaInicio,
             servicio.fechaVencimiento,
-            servicio.numero_ingresos  // Mismo número de ingresos para todas las sucursales
+            servicio.numero_ingresos
           ]);
         }
       }
@@ -192,7 +169,6 @@ exports.registerMember = async (registrationData) => {
       inscripcionesIds.push(inscripcionId);
     }
     
-    // Determinar el detalle del pago según la forma de pago
     let detallePago = null;
     if (registrationData.formaPago === 'efectivo') {
       detallePago = 'Pago completo en efectivo';
@@ -202,12 +178,10 @@ exports.registerMember = async (registrationData) => {
       detallePago = `Efectivo: ${registrationData.montoEfectivo}, QR: ${registrationData.montoQr}`;
     }
     
-    // Si es pago en plazos, agregar información al detalle
     if (registrationData.pagoPlazos) {
       detallePago += ` | Pago en plazos - Entregado: ${registrationData.montoEntregado}, Pendiente: ${registrationData.montoPendiente}`;
     }
     
-    // Registrar venta de servicios usando la fecha del servidor
     const ventaResult = await client.query(`
       INSERT INTO ventas_servicios (
         persona_id, empleado_id, subtotal, descuento, descripcion_descuento, 
@@ -230,7 +204,6 @@ exports.registerMember = async (registrationData) => {
     
     const ventaId = ventaResult.rows[0].id;
     
-    // Registrar detalles de venta
     for (let i = 0; i < registrationData.servicios.length; i++) {
       await client.query(`
         INSERT INTO detalle_venta_servicios (venta_servicio_id, inscripcion_id, precio)
@@ -238,7 +211,6 @@ exports.registerMember = async (registrationData) => {
       `, [ventaId, inscripcionesIds[i], registrationData.servicios[i].precio]);
     }
     
-    // Registrar pago pendiente si es pago en plazos
     let pagoPendienteId = null;
     if (registrationData.pagoPlazos && registrationData.montoPendiente > 0) {
       const pagoPendienteResult = await client.query(`
@@ -260,13 +232,11 @@ exports.registerMember = async (registrationData) => {
       pagoPendienteId = pagoPendienteResult.rows[0].id;
     }
     
-    // Solo procesar transacciones de caja y estado de caja para pagos en efectivo o la parte efectivo del pago mixto
     if (registrationData.formaPago === 'efectivo' || registrationData.formaPago === 'mixto') {
       const montoEfectivo = registrationData.formaPago === 'efectivo' 
         ? registrationData.total 
         : registrationData.montoEfectivo;
       
-      // Obtener el último estado de caja para el monto inicial
       const lastCashStatus = await client.query(`
         SELECT id as estado_caja_id, monto_final 
         FROM estado_caja 
@@ -276,8 +246,6 @@ exports.registerMember = async (registrationData) => {
       `, [registrationData.cajaId]);
       
       const montoInicial = lastCashStatus.rows.length > 0 ? lastCashStatus.rows[0].monto_final : 0;
-      
-      // Crear NUEVO estado_caja con el monto_inicial = último monto_final
       const montoFinal = parseFloat(montoInicial) + parseFloat(montoEfectivo);
       
       const estadoCajaResult = await client.query(`
@@ -288,7 +256,6 @@ exports.registerMember = async (registrationData) => {
       
       const nuevoEstadoCajaId = estadoCajaResult.rows[0].id;
       
-      // Registrar transacción de caja (solo para efectivo) con referencia al NUEVO estado_caja
       await client.query(`
         INSERT INTO transacciones_caja (caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id)
         VALUES ($1, $2, 'ingreso', 'Venta de servicio', $3, TIMEZONE('America/La_Paz', NOW()), $4)
@@ -314,9 +281,8 @@ exports.registerMember = async (registrationData) => {
   }
 };
 
-// Obtener pagos pendientes de una persona
 exports.getPagosPendientes = async (personaId) => {
-  const result = await client.query(`
+  const result = await query(`
     SELECT 
       pp.id,
       pp.persona_id as "personaId",
@@ -335,14 +301,12 @@ exports.getPagosPendientes = async (personaId) => {
   return result.rows;
 };
 
-// Actualizar pago pendiente
 exports.updatePagoPendiente = async (pagoId, montoPagado) => {
   const client = await pool.connect();
   
   try {
     await client.query('BEGIN');
     
-    // Obtener el pago pendiente actual
     const pagoActual = await client.query(`
       SELECT monto_pagado, monto_pendiente, monto_total
       FROM pagos_pendientes
@@ -362,13 +326,11 @@ exports.updatePagoPendiente = async (pagoId, montoPagado) => {
       throw new Error("El monto pagado no puede ser mayor al monto pendiente");
     }
     
-    // Obtener fecha actual
     const fechaActualResult = await client.query(`
       SELECT TIMEZONE('America/La_Paz', NOW()) as fecha_actual
     `);
     const fechaActual = fechaActualResult.rows[0].fecha_actual;
     
-    // Actualizar el pago pendiente
     await client.query(`
       UPDATE pagos_pendientes 
       SET 
