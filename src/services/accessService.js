@@ -503,44 +503,83 @@ exports.registerClientAccess = async (
 };
 
 const getEmployeeScheduleForToday = async (employeeId) => {
+  // Obtener el día de la semana actual desde PostgreSQL
   const dayResult = await query(
-    `SELECT EXTRACT(DOW FROM TIMEZONE('America/La_Paz', NOW())) + 1 as dia_semana`
+    `SELECT EXTRACT(DOW FROM TIMEZONE('America/La_Paz', NOW())) as dia_semana_postgres`
   );
-  const diaSemanaActual = dayResult.rows[0].dia_semana;
+  let diaSemanaActual = dayResult.rows[0].dia_semana_postgres;
+  
+  // PostgreSQL: 0 = Domingo, 1 = Lunes, 2 = Martes, 3 = Miércoles, 4 = Jueves, 5 = Viernes, 6 = Sábado
+  // Convertir a la lógica de la BD:
+  // - Lunes a Viernes (1-5 de PostgreSQL) → usan dia_semana = 1 en la BD
+  // - Sábado (6 de PostgreSQL) → usa dia_semana = 6 en la BD
+  // - Domingo (0 de PostgreSQL) → usa dia_semana = 7 en la BD
+  let diaSemanaBusqueda;
+  
+  if (diaSemanaActual === 0) {
+    // Domingo
+    diaSemanaBusqueda = 7;
+  } else if (diaSemanaActual >= 1 && diaSemanaActual <= 5) {
+    // Lunes a Viernes - todos usan el mismo horario (dia_semana = 1)
+    diaSemanaBusqueda = 1;
+  } else if (diaSemanaActual === 6) {
+    // Sábado
+    diaSemanaBusqueda = 6;
+  } else {
+    diaSemanaBusqueda = diaSemanaActual;
+  }
 
+  console.log("Día actual (PostgreSQL):", diaSemanaActual);
+  console.log("Buscando horario con dia_semana =", diaSemanaBusqueda);
+
+  // Buscar horario según la lógica:
+  // - Lunes a Viernes (1-5) → busca dia_semana = 1
+  // - Sábado (6) → busca dia_semana = 6
+  // - Domingo (7) → busca dia_semana = 7
   const horarioResult = await query(
     `SELECT hora_ingreso, hora_salida 
      FROM horarios_empleado 
      WHERE empleado_id = $1 AND dia_semana = $2`,
-    [employeeId, diaSemanaActual]
+    [employeeId, diaSemanaBusqueda]
   );
 
   if (horarioResult.rows.length > 0) {
+    console.log("Horario encontrado para día específico:", horarioResult.rows[0]);
     return horarioResult.rows[0];
   }
 
-  const horarioLVResult = await query(
-    `SELECT hora_ingreso, hora_salida 
-     FROM horarios_empleado 
-     WHERE empleado_id = $1 AND dia_semana = 1`,
-    [employeeId]
-  );
+  // Si es Lunes a Viernes y no tiene horario definido, buscar cualquier horario disponible
+  if (diaSemanaBusqueda === 1) {
+    const anyScheduleResult = await query(
+      `SELECT hora_ingreso, hora_salida 
+       FROM horarios_empleado 
+       WHERE empleado_id = $1 
+       ORDER BY dia_semana 
+       LIMIT 1`,
+      [employeeId]
+    );
 
-  if (horarioLVResult.rows.length > 0) {
-    return horarioLVResult.rows[0];
+    if (anyScheduleResult.rows.length > 0) {
+      console.log("Usando horario alternativo para día de semana:", anyScheduleResult.rows[0]);
+      return anyScheduleResult.rows[0];
+    }
   }
 
-  const anyScheduleResult = await query(
-    `SELECT hora_ingreso, hora_salida 
-     FROM horarios_empleado 
-     WHERE empleado_id = $1 
-     ORDER BY dia_semana 
-     LIMIT 1`,
-    [employeeId]
-  );
+  // Si es Sábado o Domingo y no tienen horario específico, buscar cualquier horario como último recurso
+  if (diaSemanaBusqueda === 6 || diaSemanaBusqueda === 7) {
+    const anyScheduleResult = await query(
+      `SELECT hora_ingreso, hora_salida 
+       FROM horarios_empleado 
+       WHERE empleado_id = $1 
+       ORDER BY dia_semana 
+       LIMIT 1`,
+      [employeeId]
+    );
 
-  if (anyScheduleResult.rows.length > 0) {
-    return anyScheduleResult.rows[0];
+    if (anyScheduleResult.rows.length > 0) {
+      console.log("Usando horario alternativo para fin de semana:", anyScheduleResult.rows[0]);
+      return anyScheduleResult.rows[0];
+    }
   }
 
   throw new Error("El empleado no tiene horarios definidos");
@@ -587,6 +626,8 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   if (diffMinutes > 0) {
     isLate = true;
     detail = `Entrada: ${diffMinutes} minuto${diffMinutes !== 1 ? 's' : ''} tarde`;
+  } else if (diffMinutes < 0) {
+    detail = `Entrada: ${Math.abs(diffMinutes)} minuto${Math.abs(diffMinutes) !== 1 ? 's' : ''} antes`;
   }
 
   await query(
@@ -647,6 +688,8 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   if (diffMinutes > 0) {
     isEarly = true;
     detail = `Salida: ${diffMinutes} minuto${diffMinutes !== 1 ? 's' : ''} antes`;
+  } else if (diffMinutes < 0) {
+    detail = `Salida: ${Math.abs(diffMinutes)} minuto${Math.abs(diffMinutes) !== 1 ? 's' : ''} después`;
   }
 
   await query(
