@@ -126,9 +126,6 @@ exports.registerMember = async (registrationData) => {
     
     const inscripcionesIds = [];
     for (const servicio of serviciosInfo) {
-      // SIN RESTRICCIÓN - Siempre crear nueva inscripción sin verificar suscripciones activas
-      // Se elimina la validación que bloqueaba cuando el cliente ya tenía una suscripción activa
-      
       const inscripcionResult = await client.query(`
         INSERT INTO inscripciones (persona_id, servicio_id, sucursal_id, fecha_inicio, fecha_vencimiento, ingresos_disponibles, estado)
         VALUES ($1, $2, $3, $4, $5, $6, 1)
@@ -142,7 +139,7 @@ exports.registerMember = async (registrationData) => {
         servicio.numero_ingresos
       ]);
       
-      inscripcionId = inscripcionResult.rows[0].id;
+      const inscripcionId = inscripcionResult.rows[0].id;
       
       if (servicio.multisucursal) {
         const otrasSucursales = await client.query(`
@@ -248,18 +245,31 @@ exports.registerMember = async (registrationData) => {
       const montoInicial = lastCashStatus.rows.length > 0 ? lastCashStatus.rows[0].monto_final : 0;
       const montoFinal = parseFloat(montoInicial) + parseFloat(montoEfectivo);
       
+      // OBTENER EL USUARIO_ID DEL EMPLEADO
+      const usuarioResult = await client.query(`
+        SELECT id as usuario_id 
+        FROM usuarios 
+        WHERE empleado_id = $1
+      `, [registrationData.empleadoId]);
+      
+      if (usuarioResult.rows.length === 0) {
+        throw new Error(`No se encontró un usuario asociado al empleado ${registrationData.empleadoId}`);
+      }
+      
+      const usuarioId = usuarioResult.rows[0].usuario_id;
+      
       const estadoCajaResult = await client.query(`
         INSERT INTO estado_caja (caja_id, estado, monto_inicial, monto_final, usuario_id)
         VALUES ($1, 'abierta', $2, $3, $4)
         RETURNING id
-      `, [registrationData.cajaId, montoInicial, montoFinal, registrationData.empleadoId]);
+      `, [registrationData.cajaId, montoInicial, montoFinal, usuarioId]);
       
       const nuevoEstadoCajaId = estadoCajaResult.rows[0].id;
       
       await client.query(`
         INSERT INTO transacciones_caja (caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id)
         VALUES ($1, $2, 'ingreso', 'Venta de servicio', $3, TIMEZONE('America/La_Paz', NOW()), $4)
-      `, [registrationData.cajaId, nuevoEstadoCajaId, montoEfectivo, registrationData.empleadoId]);
+      `, [registrationData.cajaId, nuevoEstadoCajaId, montoEfectivo, usuarioId]);
     }
     
     await client.query('COMMIT');
