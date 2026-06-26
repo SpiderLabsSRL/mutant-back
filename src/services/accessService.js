@@ -86,7 +86,15 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
           s.nombre as nombre_servicio,
           s.multisucursal,
           s.numero_ingresos as servicio_ingresos_ilimitados,
-          ROW_NUMBER() OVER (PARTITION BY i.servicio_id, i.persona_id ORDER BY i.fecha_inicio DESC, i.id DESC) as rn,
+          -- Para servicios NO multisucursales: una inscripción por servicio
+          -- Para servicios multisucursales: una inscripción por sucursal
+          ROW_NUMBER() OVER (
+            PARTITION BY 
+              i.servicio_id, 
+              i.persona_id,
+              CASE WHEN s.multisucursal = true THEN i.sucursal_id ELSE 0 END
+            ORDER BY i.fecha_inicio DESC, i.id DESC
+          ) as rn,
           CASE 
             WHEN i.fecha_vencimiento::date < TIMEZONE('America/La_Paz', NOW())::date THEN 'vencido'
             ELSE 'activo'
@@ -134,6 +142,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
               'tiene_visitas_disponibles', ti.tiene_visitas_disponibles,
               'esta_en_rango_fechas', ti.esta_en_rango_fechas
             ) ORDER BY 
+              ti.sucursal_id,
               CASE WHEN ti.estado_servicio = 'activo' THEN 0 ELSE 1 END,
               ti.fecha_vencimiento DESC
           ) FILTER (WHERE ti.idinscripcion IS NOT NULL AND ti.rn = 1),
@@ -514,41 +523,27 @@ const getEmployeeScheduleForToday = async (employeeId) => {
 
   const rol = employeeResult.rows[0].rol;
 
-  // Si es limpieza, no tiene horario
   if (rol === 'limpieza') {
     return null;
   }
 
-  // Obtener el día de la semana actual desde PostgreSQL
   const dayResult = await query(
     `SELECT EXTRACT(DOW FROM TIMEZONE('America/La_Paz', NOW())) as dia_semana_postgres`
   );
   let diaSemanaActual = dayResult.rows[0].dia_semana_postgres;
   
-  // PostgreSQL: 0 = Domingo, 1 = Lunes, 2 = Martes, 3 = Miércoles, 4 = Jueves, 5 = Viernes, 6 = Sábado
-  // Convertir a la lógica de la BD:
-  // - Lunes a Viernes (1-5 de PostgreSQL) → usan dia_semana = 1 en la BD
-  // - Sábado (6 de PostgreSQL) → usa dia_semana = 6 en la BD
-  // - Domingo (0 de PostgreSQL) → usa dia_semana = 7 en la BD
   let diaSemanaBusqueda;
   
   if (diaSemanaActual === 0) {
-    // Domingo
     diaSemanaBusqueda = 7;
   } else if (diaSemanaActual >= 1 && diaSemanaActual <= 5) {
-    // Lunes a Viernes - todos usan el mismo horario (dia_semana = 1)
     diaSemanaBusqueda = 1;
   } else if (diaSemanaActual === 6) {
-    // Sábado
     diaSemanaBusqueda = 6;
   } else {
     diaSemanaBusqueda = diaSemanaActual;
   }
 
-  // Buscar horario según la lógica:
-  // - Lunes a Viernes (1-5) → busca dia_semana = 1
-  // - Sábado (6) → busca dia_semana = 6
-  // - Domingo (7) → busca dia_semana = 7
   const horarioResult = await query(
     `SELECT hora_ingreso, hora_salida 
      FROM horarios_empleado 
@@ -560,7 +555,6 @@ const getEmployeeScheduleForToday = async (employeeId) => {
     return horarioResult.rows[0];
   }
 
-  // Si es Lunes a Viernes y no tiene horario definido, buscar cualquier horario disponible
   if (diaSemanaBusqueda === 1) {
     const anyScheduleResult = await query(
       `SELECT hora_ingreso, hora_salida 
@@ -576,7 +570,6 @@ const getEmployeeScheduleForToday = async (employeeId) => {
     }
   }
 
-  // Si es Sábado o Domingo y no tienen horario específico, buscar cualquier horario como último recurso
   if (diaSemanaBusqueda === 6 || diaSemanaBusqueda === 7) {
     const anyScheduleResult = await query(
       `SELECT hora_ingreso, hora_salida 
@@ -613,7 +606,6 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
-  // Si es limpieza, solo registra la hora de entrada sin verificar horario
   if (emp.rol === 'limpieza') {
     const currentTimeResult = await query(
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
@@ -661,12 +653,10 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   let minutes = 0;
   
   if (diffMinutes > 0) {
-    // Llegó después de su hora
     isLate = true;
     minutes = diffMinutes;
     detail = `Entrada: ${diffMinutes} minuto${diffMinutes !== 1 ? 's' : ''} tarde`;
   } else {
-    // Llegó a tiempo (antes o en punto)
     detail = `Entrada: A tiempo`;
   }
 
@@ -705,7 +695,6 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
-  // Si es limpieza, solo registra la hora de salida sin verificar horario
   if (emp.rol === 'limpieza') {
     const currentTimeResult = await query(
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
@@ -753,12 +742,10 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   let minutes = 0;
   
   if (diffMinutes > 0) {
-    // Salió antes de su hora
     isEarly = true;
     minutes = diffMinutes;
     detail = `Salida: ${diffMinutes} minuto${diffMinutes !== 1 ? 's' : ''} antes`;
   } else {
-    // Salió a tiempo (en punto o después)
     detail = `Salida: A tiempo`;
   }
 
