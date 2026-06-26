@@ -503,6 +503,22 @@ exports.registerClientAccess = async (
 };
 
 const getEmployeeScheduleForToday = async (employeeId) => {
+  const employeeResult = await query(
+    `SELECT rol FROM empleados WHERE id = $1`,
+    [employeeId]
+  );
+
+  if (employeeResult.rows.length === 0) {
+    throw new Error("Empleado no encontrado");
+  }
+
+  const rol = employeeResult.rows[0].rol;
+
+  // Si es limpieza, no tiene horario
+  if (rol === 'limpieza') {
+    return null;
+  }
+
   // Obtener el día de la semana actual desde PostgreSQL
   const dayResult = await query(
     `SELECT EXTRACT(DOW FROM TIMEZONE('America/La_Paz', NOW())) as dia_semana_postgres`
@@ -529,9 +545,6 @@ const getEmployeeScheduleForToday = async (employeeId) => {
     diaSemanaBusqueda = diaSemanaActual;
   }
 
-  console.log("Día actual (PostgreSQL):", diaSemanaActual);
-  console.log("Buscando horario con dia_semana =", diaSemanaBusqueda);
-
   // Buscar horario según la lógica:
   // - Lunes a Viernes (1-5) → busca dia_semana = 1
   // - Sábado (6) → busca dia_semana = 6
@@ -544,7 +557,6 @@ const getEmployeeScheduleForToday = async (employeeId) => {
   );
 
   if (horarioResult.rows.length > 0) {
-    console.log("Horario encontrado para día específico:", horarioResult.rows[0]);
     return horarioResult.rows[0];
   }
 
@@ -560,7 +572,6 @@ const getEmployeeScheduleForToday = async (employeeId) => {
     );
 
     if (anyScheduleResult.rows.length > 0) {
-      console.log("Usando horario alternativo para día de semana:", anyScheduleResult.rows[0]);
       return anyScheduleResult.rows[0];
     }
   }
@@ -577,7 +588,6 @@ const getEmployeeScheduleForToday = async (employeeId) => {
     );
 
     if (anyScheduleResult.rows.length > 0) {
-      console.log("Usando horario alternativo para fin de semana:", anyScheduleResult.rows[0]);
       return anyScheduleResult.rows[0];
     }
   }
@@ -603,6 +613,32 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
+  // Si es limpieza, solo registra la hora de entrada sin verificar horario
+  if (emp.rol === 'limpieza') {
+    const currentTimeResult = await query(
+      `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
+    );
+    const horaActual = currentTimeResult.rows[0].hora_actual;
+
+    const detail = `Entrada: ${horaActual}`;
+
+    await query(
+      `
+      INSERT INTO registros_acceso 
+      (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
+      VALUES ($1, $2, $3, $4, $5, TIMEZONE('America/La_Paz', NOW()), 'empleado')
+    `,
+      [emp.persona_id, detail, "exitoso", branchId, userId]
+    );
+
+    return {
+      success: true,
+      message: detail,
+      isLate: false,
+      minutes: 0,
+    };
+  }
+
   const horario = await getEmployeeScheduleForToday(employeeId);
 
   const currentTimeResult = await query(
@@ -620,14 +656,18 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   const diffMs = horaActualBolivia - horaIngresoHoy;
   const diffMinutes = Math.floor(diffMs / (1000 * 60));
 
-  let detail = `Entrada: A tiempo`;
+  let detail;
   let isLate = false;
+  let minutes = 0;
   
   if (diffMinutes > 0) {
+    // Llegó después de su hora
     isLate = true;
+    minutes = diffMinutes;
     detail = `Entrada: ${diffMinutes} minuto${diffMinutes !== 1 ? 's' : ''} tarde`;
-  } else if (diffMinutes < 0) {
-    detail = `Entrada: ${Math.abs(diffMinutes)} minuto${Math.abs(diffMinutes) !== 1 ? 's' : ''} antes`;
+  } else {
+    // Llegó a tiempo (antes o en punto)
+    detail = `Entrada: A tiempo`;
   }
 
   await query(
@@ -643,7 +683,7 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
     success: true,
     message: detail,
     isLate,
-    minutes: isLate ? diffMinutes : 0,
+    minutes,
   };
 };
 
@@ -665,6 +705,32 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
+  // Si es limpieza, solo registra la hora de salida sin verificar horario
+  if (emp.rol === 'limpieza') {
+    const currentTimeResult = await query(
+      `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
+    );
+    const horaActual = currentTimeResult.rows[0].hora_actual;
+
+    const detail = `Salida: ${horaActual}`;
+
+    await query(
+      `
+      INSERT INTO registros_acceso 
+      (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
+      VALUES ($1, $2, $3, $4, $5, TIMEZONE('America/La_Paz', NOW()), 'empleado')
+    `,
+      [emp.persona_id, detail, "exitoso", branchId, userId]
+    );
+
+    return {
+      success: true,
+      message: detail,
+      isEarly: false,
+      minutes: 0,
+    };
+  }
+
   const horario = await getEmployeeScheduleForToday(employeeId);
 
   const currentTimeResult = await query(
@@ -682,14 +748,18 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   const diffMs = horaSalidaHoy - horaActualBolivia;
   const diffMinutes = Math.floor(diffMs / (1000 * 60));
 
-  let detail = `Salida: A tiempo`;
+  let detail;
   let isEarly = false;
+  let minutes = 0;
   
   if (diffMinutes > 0) {
+    // Salió antes de su hora
     isEarly = true;
+    minutes = diffMinutes;
     detail = `Salida: ${diffMinutes} minuto${diffMinutes !== 1 ? 's' : ''} antes`;
-  } else if (diffMinutes < 0) {
-    detail = `Salida: ${Math.abs(diffMinutes)} minuto${Math.abs(diffMinutes) !== 1 ? 's' : ''} después`;
+  } else {
+    // Salió a tiempo (en punto o después)
+    detail = `Salida: A tiempo`;
   }
 
   await query(
@@ -705,7 +775,7 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     success: true,
     message: detail,
     isEarly,
-    minutes: isEarly ? diffMinutes : 0,
+    minutes,
   };
 };
 
