@@ -86,15 +86,11 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
           s.nombre as nombre_servicio,
           s.multisucursal,
           s.numero_ingresos as servicio_ingresos_ilimitados,
-          -- Para cada servicio, solo mostrar la inscripción de la sucursal actual
-          -- Si el servicio es multisucursal, mostramos la inscripción de la sucursal actual
-          -- Si no es multisucursal, mostramos la única inscripción (que ya debería ser de la sucursal actual)
           ROW_NUMBER() OVER (
             PARTITION BY 
               i.servicio_id, 
               i.persona_id
             ORDER BY 
-              -- Priorizar la sucursal actual
               CASE WHEN i.sucursal_id = $2 THEN 0 ELSE 1 END,
               i.fecha_inicio DESC, 
               i.id DESC
@@ -119,7 +115,6 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
         INNER JOIN servicios s ON i.servicio_id = s.id
         WHERE i.estado = 1
         AND s.estado = 1
-        -- Solo traer inscripciones de la sucursal actual O que sean multisucursales
         AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)
       )
       SELECT 
@@ -225,7 +220,8 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
       AND e.estado = 1
       AND p.estado = 0
-      AND e.sucursal_id = $2
+      -- MODIFICADO: Los empleados de limpieza aparecen en todas las sucursales
+      AND (e.sucursal_id = $2 OR e.rol = 'limpieza')
     `;
 
     const employeeResult = await query(employeeSql, employeeParams);
@@ -526,6 +522,7 @@ const getEmployeeScheduleForToday = async (employeeId) => {
 
   const rol = employeeResult.rows[0].rol;
 
+  // Si es limpieza, no tiene horario (retorna null)
   if (rol === 'limpieza') {
     return null;
   }
@@ -609,6 +606,7 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
+  // Si es limpieza, solo registra la hora de entrada sin verificar horario ni sucursal
   if (emp.rol === 'limpieza') {
     const currentTimeResult = await query(
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
@@ -698,6 +696,7 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
+  // Si es limpieza, solo registra la hora de salida sin verificar horario ni sucursal
   if (emp.rol === 'limpieza') {
     const currentTimeResult = await query(
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
