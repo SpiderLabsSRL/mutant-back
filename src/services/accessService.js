@@ -71,7 +71,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
   const results = [];
 
   if (typeFilter === "all" || typeFilter === "cliente") {
-    const clientParams = [searchParam];
+    const clientParams = [searchParam, branchId];
     let clientSql = `
       WITH todas_las_inscripciones AS (
         SELECT 
@@ -86,14 +86,18 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
           s.nombre as nombre_servicio,
           s.multisucursal,
           s.numero_ingresos as servicio_ingresos_ilimitados,
-          -- Para servicios NO multisucursales: una inscripción por servicio
-          -- Para servicios multisucursales: una inscripción por sucursal
+          -- Para cada servicio, solo mostrar la inscripción de la sucursal actual
+          -- Si el servicio es multisucursal, mostramos la inscripción de la sucursal actual
+          -- Si no es multisucursal, mostramos la única inscripción (que ya debería ser de la sucursal actual)
           ROW_NUMBER() OVER (
             PARTITION BY 
               i.servicio_id, 
-              i.persona_id,
-              CASE WHEN s.multisucursal = true THEN i.sucursal_id ELSE 0 END
-            ORDER BY i.fecha_inicio DESC, i.id DESC
+              i.persona_id
+            ORDER BY 
+              -- Priorizar la sucursal actual
+              CASE WHEN i.sucursal_id = $2 THEN 0 ELSE 1 END,
+              i.fecha_inicio DESC, 
+              i.id DESC
           ) as rn,
           CASE 
             WHEN i.fecha_vencimiento::date < TIMEZONE('America/La_Paz', NOW())::date THEN 'vencido'
@@ -115,6 +119,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
         INNER JOIN servicios s ON i.servicio_id = s.id
         WHERE i.estado = 1
         AND s.estado = 1
+        -- Solo traer inscripciones de la sucursal actual O que sean multisucursales
         AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)
       )
       SELECT 
@@ -158,7 +163,6 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       clientSql += ` AND NOT EXISTS (SELECT 1 FROM empleados e WHERE e.persona_id = p.id AND e.estado = 1)`;
     }
 
-    clientParams.push(branchId);
     clientSql += ` GROUP BY p.id`;
 
     const clientResult = await query(clientSql, clientParams);
@@ -166,7 +170,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
   }
 
   if (typeFilter === "all" || typeFilter === "empleado") {
-    const employeeParams = [searchParam];
+    const employeeParams = [searchParam, branchId];
     let employeeSql = `
       SELECT 
         p.id as idpersona,
@@ -224,7 +228,6 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       AND e.sucursal_id = $2
     `;
 
-    employeeParams.push(branchId);
     const employeeResult = await query(employeeSql, employeeParams);
     results.push(...employeeResult.rows);
   }
