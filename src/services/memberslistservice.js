@@ -94,7 +94,7 @@ const getMembers = async (
           i.sucursal_id,
           MAX(i.fecha_inicio) as ultima_fecha
         FROM inscripciones i
-        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        INNER JOIN servicios s ON i.servicio_id = s.id
         GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
       ),
       ServiciosUnicos AS (
@@ -124,7 +124,7 @@ const getMembers = async (
           AND i.servicio_id = ui.servicio_id 
           AND i.sucursal_id = ui.sucursal_id 
           AND i.fecha_inicio = ui.ultima_fecha
-        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        INNER JOIN servicios s ON i.servicio_id = s.id
         INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
         ${whereClause}
         ORDER BY ui.persona_id, ui.sucursal_id, ui.servicio_id, ui.ultima_fecha DESC
@@ -177,7 +177,7 @@ const getMembers = async (
           i.sucursal_id,
           MAX(i.fecha_inicio) as ultima_fecha
         FROM inscripciones i
-        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        INNER JOIN servicios s ON i.servicio_id = s.id
         GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
       ),
       PersonasUnicas AS (
@@ -190,7 +190,7 @@ const getMembers = async (
           AND i.servicio_id = ui.servicio_id 
           AND i.sucursal_id = ui.sucursal_id 
           AND i.fecha_inicio = ui.ultima_fecha
-        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        INNER JOIN servicios s ON i.servicio_id = s.id
         INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
         ${whereClause}
         ORDER BY p.id, ui.sucursal_id
@@ -222,7 +222,7 @@ const getMembers = async (
             i.sucursal_id,
             MAX(i.fecha_inicio) as ultima_fecha
           FROM inscripciones i
-          INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+          INNER JOIN servicios s ON i.servicio_id = s.id
           WHERE i.persona_id = $1 AND i.sucursal_id = $2
           GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
         )
@@ -241,7 +241,7 @@ const getMembers = async (
           AND ui.servicio_id = i.servicio_id 
           AND ui.sucursal_id = i.sucursal_id 
           AND ui.ultima_fecha = i.fecha_inicio
-        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        INNER JOIN servicios s ON i.servicio_id = s.id
         ORDER BY s.nombre
       `;
       
@@ -358,7 +358,7 @@ const getAllMembers = async (
           i.sucursal_id,
           MAX(i.fecha_inicio) as ultima_fecha
         FROM inscripciones i
-        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        INNER JOIN servicios s ON i.servicio_id = s.id
         GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
       ),
       ServiciosUnicos AS (
@@ -388,7 +388,7 @@ const getAllMembers = async (
           AND i.servicio_id = ui.servicio_id 
           AND i.sucursal_id = ui.sucursal_id 
           AND i.fecha_inicio = ui.ultima_fecha
-        INNER JOIN servicios s ON i.servicio_id = s.id AND s.estado = 1
+        INNER JOIN servicios s ON i.servicio_id = s.id AND
         INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
         ${whereClause}
         ORDER BY ui.persona_id, ui.sucursal_id, ui.servicio_id, ui.ultima_fecha DESC

@@ -21,7 +21,6 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
     LEFT JOIN servicios s ON ra.servicio_id = s.id
     WHERE ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
     AND p.estado = 0
-    AND (s.id IS NULL OR s.estado = 1)
   `;
 
   const params = [];
@@ -114,7 +113,6 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id
         WHERE i.estado = 1
-        AND s.estado = 1
         AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)
       )
       SELECT 
@@ -319,7 +317,6 @@ exports.registerClientAccess = async (
     WHERE i.persona_id = $1 AND i.id = $2
     AND (i.sucursal_id = $3 OR s.multisucursal = TRUE)
     AND p.estado = 0
-    AND s.estado = 1
   `,
     [personId, serviceId, branchId]
   );
