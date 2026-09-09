@@ -88,6 +88,19 @@ exports.registrarPago = async (pagoId, pagoData) => {
       WHERE id = $5
     `, [nuevoMontoPagado, nuevoMontoPendiente, fechaActual, nuevoEstado, pagoId]);
     
+    // Obtener el usuario_id correspondiente al empleado
+    const usuarioResult = await client.query(`
+      SELECT id as usuario_id 
+      FROM usuarios 
+      WHERE empleado_id = $1
+    `, [pagoData.empleadoId]);
+    
+    if (usuarioResult.rows.length === 0) {
+      throw new Error("No se encontró un usuario asociado a este empleado");
+    }
+    
+    const usuarioId = usuarioResult.rows[0].usuario_id;
+    
     if (pagoData.formaPago === 'efectivo' || pagoData.formaPago === 'mixto') {
       const montoEfectivo = pagoData.formaPago === 'efectivo' 
         ? pagoData.montoPagado 
@@ -111,7 +124,7 @@ exports.registrarPago = async (pagoId, pagoData) => {
           INSERT INTO estado_caja (caja_id, estado, monto_inicial, monto_final, usuario_id)
           VALUES ($1, 'abierta', $2, $3, $4)
           RETURNING id
-        `, [pagoData.cajaId, montoInicial, montoFinal, pagoData.empleadoId]);
+        `, [pagoData.cajaId, montoInicial, montoFinal, usuarioId]);
         
         const nuevoEstadoCajaId = estadoCajaResult.rows[0].id;
         
@@ -119,7 +132,7 @@ exports.registrarPago = async (pagoId, pagoData) => {
         await client.query(`
           INSERT INTO transacciones_caja (caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id)
           VALUES ($1, $2, 'ingreso', 'Pago pendiente de servicio', $3, TIMEZONE('America/La_Paz', NOW()), $4)
-        `, [pagoData.cajaId, nuevoEstadoCajaId, montoEfectivo, pagoData.empleadoId]);
+        `, [pagoData.cajaId, nuevoEstadoCajaId, montoEfectivo, usuarioId]);
       }
     }
     
