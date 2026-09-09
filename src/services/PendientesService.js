@@ -94,6 +94,7 @@ exports.registrarPago = async (pagoId, pagoData) => {
         : pagoData.montoEfectivo;
       
       if (montoEfectivo > 0) {
+        // Obtener el último estado de caja
         const lastCashStatus = await client.query(`
           SELECT id as estado_caja_id, monto_final 
           FROM estado_caja 
@@ -105,16 +106,18 @@ exports.registrarPago = async (pagoId, pagoData) => {
         const montoInicial = lastCashStatus.rows.length > 0 ? parseFloat(lastCashStatus.rows[0].monto_final) : 0;
         const montoFinal = montoInicial + parseFloat(montoEfectivo);
         
+        // Insertar nuevo estado de caja usando usuario_id
         const estadoCajaResult = await client.query(`
-          INSERT INTO estado_caja (caja_id, estado, monto_inicial, monto_final, empleado_id)
+          INSERT INTO estado_caja (caja_id, estado, monto_inicial, monto_final, usuario_id)
           VALUES ($1, 'abierta', $2, $3, $4)
           RETURNING id
         `, [pagoData.cajaId, montoInicial, montoFinal, pagoData.empleadoId]);
         
         const nuevoEstadoCajaId = estadoCajaResult.rows[0].id;
         
+        // Insertar transacción de caja usando usuario_id
         await client.query(`
-          INSERT INTO transacciones_caja (caja_id, estado_caja_id, tipo, descripcion, monto, fecha, empleado_id)
+          INSERT INTO transacciones_caja (caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id)
           VALUES ($1, $2, 'ingreso', 'Pago pendiente de servicio', $3, TIMEZONE('America/La_Paz', NOW()), $4)
         `, [pagoData.cajaId, nuevoEstadoCajaId, montoEfectivo, pagoData.empleadoId]);
       }
