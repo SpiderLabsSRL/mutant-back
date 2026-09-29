@@ -1,6 +1,206 @@
 const { query } = require("../../db");
 
-exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) => {
+// ============================================
+// HELPER: DÍA DE LA SEMANA EN BD (1=Lunes, 7=Domingo)
+// ============================================
+const getDiaSemanaBD = (date) => {
+  const jsDay = date.getDay();
+  return jsDay === 0 ? 7 : jsDay;
+};
+
+// ============================================
+// VALIDAR HORARIO DEL SERVICIO
+// ============================================
+const validarHorarioServicio = async (servicioId, fechaActual) => {
+  try {
+    const horariosResult = await query(
+      `SELECT 
+         dia_semana, 
+         TO_CHAR(hora_inicio, 'HH24:MI:SS') as hora_inicio,
+         TO_CHAR(hora_fin, 'HH24:MI:SS') as hora_fin
+       FROM horarios_servicio
+       WHERE servicio_id = $1`,
+      [servicioId]
+    );
+
+    if (horariosResult.rows.length === 0) {
+      return { valid: true, reason: null };
+    }
+
+    const diaActual = getDiaSemanaBD(fechaActual);
+    const horaActual = fechaActual.toTimeString().split(" ")[0];
+
+    console.log(`🕐 Validando horario servicio ${servicioId}:`, {
+      diaActual,
+      horaActual,
+      totalHorarios: horariosResult.rows.length,
+    });
+
+    const horariosDelDia = horariosResult.rows.filter(
+      (h) => h.dia_semana === diaActual
+    );
+
+    if (horariosDelDia.length === 0) {
+      const diasDisponibles = [
+        ...new Set(horariosResult.rows.map((h) => h.dia_semana)),
+      ].sort();
+      const nombresDias = {
+        1: "Lunes",
+        2: "Martes",
+        3: "Miércoles",
+        4: "Jueves",
+        5: "Viernes",
+        6: "Sábado",
+        7: "Domingo",
+      };
+      const listaDias = diasDisponibles.map((d) => nombresDias[d]).join(", ");
+
+      return {
+        valid: false,
+        reason: `El servicio no está disponible hoy. Días disponibles: ${listaDias}`,
+      };
+    }
+
+    const horaDentroRango = horariosDelDia.some((h) => {
+      return horaActual >= h.hora_inicio && horaActual <= h.hora_fin;
+    });
+
+    if (!horaDentroRango) {
+      const rangos = horariosDelDia
+        .map((h) => `${h.hora_inicio.slice(0, 5)} - ${h.hora_fin.slice(0, 5)}`)
+        .join(", ");
+      return {
+        valid: false,
+        reason: `El servicio no está disponible a esta hora. Horarios: ${rangos}`,
+      };
+    }
+
+    return { valid: true, reason: null };
+  } catch (error) {
+    console.error("Error en validarHorarioServicio:", error);
+    return { valid: true, reason: null };
+  }
+};
+
+// ============================================
+// GET CLIENT SUBSCRIPTIONS (agrupado por NOMBRE + sucursal)
+// ============================================
+exports.getClientSubscriptions = async (personId, branchId = null) => {
+  try {
+    console.log("🔍 getClientSubscriptions service:", { personId, branchId });
+
+    const params = [personId];
+
+    let sql = `
+      SELECT 
+        i.id AS id,
+        i.servicio_id,
+        i.sucursal_id,
+        s.nombre AS service_name,
+        TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') AS fecha_inicio,
+        TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD') AS fecha_vencimiento,
+        i.ingresos_disponibles,
+        i.estado,
+        s.precio,
+        s.numero_ingresos,
+        s.multisucursal,
+        CASE 
+          WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
+               AND (i.ingresos_disponibles > 0 OR i.ingresos_disponibles IS NULL)
+               THEN 'active'
+          WHEN i.fecha_inicio > TIMEZONE('America/La_Paz', NOW())::date 
+               THEN 'pending'
+          ELSE 'expired'
+        END AS computed_status
+      FROM inscripciones i
+      INNER JOIN servicios s ON i.servicio_id = s.id
+      WHERE i.persona_id = $1
+        AND i.estado = 1
+    `;
+
+    if (branchId !== null && branchId !== undefined) {
+      params.push(branchId);
+      sql += ` AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)`;
+    }
+
+    // ✅ Orden por nombre + sucursal, luego fecha_inicio DESC
+    sql += ` ORDER BY 
+      s.nombre,
+      i.sucursal_id,
+      i.fecha_inicio DESC,
+      i.id DESC
+    `;
+
+    console.log("📝 SQL:", sql);
+    console.log("📝 Params:", params);
+
+    const result = await query(sql, params);
+
+    console.log(
+      `✅ Encontradas ${result.rows.length} inscripciones (sin agrupar)`
+    );
+
+    // ============================================
+    // ✅ AGRUPAR por NOMBRE + sucursal (no por servicio_id)
+    // ============================================
+    const groupedMap = new Map();
+
+    result.rows.forEach((row) => {
+      // Key: nombre normalizado + sucursal
+      const key = `${row.service_name.toLowerCase().trim()}-${row.sucursal_id}`;
+
+      if (!groupedMap.has(key)) {
+        // Primera vez que vemos este nombre+sucursal → la más reciente
+        groupedMap.set(key, row);
+      }
+      // Si ya existe, no sobreescribimos
+    });
+
+    const uniqueSubscriptions = Array.from(groupedMap.values());
+
+    console.log(
+      `✅ Suscripciones únicas (agrupadas): ${uniqueSubscriptions.length}`
+    );
+
+    // ============================================
+    // ✅ ORDENAR: activas → pendientes → vencidas
+    // ============================================
+    uniqueSubscriptions.sort((a, b) => {
+      const order = { active: 0, pending: 1, expired: 2 };
+      const aOrder = order[a.computed_status] ?? 3;
+      const bOrder = order[b.computed_status] ?? 3;
+      if (aOrder !== bOrder) return aOrder - bOrder;
+
+      // Dentro del mismo estado, ordenar por fecha_vencimiento DESC
+      return b.fecha_vencimiento.localeCompare(a.fecha_vencimiento);
+    });
+
+    return uniqueSubscriptions.map((row) => ({
+      id: row.id,
+      serviceName: row.service_name,
+      startDate: row.fecha_inicio,
+      endDate: row.fecha_vencimiento,
+      visitsLeft:
+        row.numero_ingresos === null ? null : row.ingresos_disponibles,
+      status: row.computed_status,
+      price: parseFloat(row.precio) || 0,
+      isMultisucursal: row.multisucursal,
+    }));
+  } catch (error) {
+    console.error("❌ Error en getClientSubscriptions service:", error);
+    throw error;
+  }
+};
+
+// ============================================
+// GET ACCESS LOGS
+// ============================================
+exports.getAccessLogs = async (
+  searchTerm,
+  typeFilter,
+  limit = 100,
+  branchId
+) => {
   let sql = `
     SELECT 
       ra.id, 
@@ -40,13 +240,13 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
     params.push(`%${searchTerm}%`);
   }
 
-  if (typeFilter && typeFilter !== 'all') {
+  if (typeFilter && typeFilter !== "all") {
     whereClauses.push(`ra.tipo_persona = $${params.length + 1}`);
     params.push(typeFilter);
   }
 
   if (whereClauses.length > 0) {
-    sql += ` AND ${whereClauses.join(' AND ')}`;
+    sql += ` AND ${whereClauses.join(" AND ")}`;
   }
 
   const safeLimit = Number.isNaN(Number(limit)) ? 100 : Number(limit);
@@ -56,15 +256,21 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
   return result.rows;
 };
 
+// ============================================
+// FORMAT DATE
+// ============================================
 const formatDate = (dateString) => {
-  if (!dateString) return '';
+  if (!dateString) return "";
   const date = new Date(dateString);
   const day = date.getDate();
-  const month = date.toLocaleString('es-ES', { month: 'short' });
+  const month = date.toLocaleString("es-ES", { month: "short" });
   const year = date.getFullYear();
   return `${day} ${month} ${year}`;
 };
 
+// ============================================
+// SEARCH MEMBERS
+// ============================================
 exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
   const searchParam = `%${searchTerm}%`;
   const results = [];
@@ -218,7 +424,6 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
       AND e.estado = 1
       AND p.estado = 0
-      -- MODIFICADO: Los empleados de limpieza aparecen en todas las sucursales
       AND (e.sucursal_id = $2 OR e.rol = 'limpieza')
     `;
 
@@ -229,7 +434,101 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
   return results;
 };
 
-const getLatestMultisucursalInscriptions = async (personId, serviceId, fechaInicio, fechaVencimiento) => {
+// ============================================
+// VALIDATE CLIENT ACCESS (solo consulta)
+// ============================================
+exports.validateClientAccess = async (personId, serviceId, branchId) => {
+  const inscriptionResult = await query(
+    `
+    SELECT 
+      i.*, 
+      s.id as servicio_real_id,
+      s.nombre as servicio_nombre, 
+      s.multisucursal,
+      s.numero_ingresos as servicio_ingresos_ilimitados
+    FROM inscripciones i
+    INNER JOIN servicios s ON i.servicio_id = s.id
+    INNER JOIN personas p ON i.persona_id = p.id
+    WHERE i.persona_id = $1 AND i.id = $2
+    AND (i.sucursal_id = $3 OR s.multisucursal = TRUE)
+    AND p.estado = 0
+    `,
+    [personId, serviceId, branchId]
+  );
+
+  if (inscriptionResult.rows.length === 0) {
+    return {
+      valid: false,
+      reason: "Inscripción no encontrada o no válida para esta sucursal",
+    };
+  }
+
+  const inscription = inscriptionResult.rows[0];
+
+  const fechaActualResult = await query(
+    `SELECT TIMEZONE('America/La_Paz', NOW()) as ahora`
+  );
+  const ahora = new Date(fechaActualResult.rows[0].ahora);
+
+  const fechaInicio = new Date(inscription.fecha_inicio);
+  const fechaVencimiento = new Date(inscription.fecha_vencimiento);
+
+  if (fechaVencimiento < ahora) {
+    return {
+      valid: false,
+      reason: `Servicio vencido (venció el ${formatDate(fechaVencimiento)})`,
+    };
+  }
+
+  if (fechaInicio > ahora) {
+    return {
+      valid: false,
+      reason: `El servicio aún no comienza (inicia el ${formatDate(fechaInicio)})`,
+    };
+  }
+
+  const isUnlimitedService = inscription.servicio_ingresos_ilimitados === null;
+
+  if (!isUnlimitedService && inscription.ingresos_disponibles <= 0) {
+    return {
+      valid: false,
+      reason: `Sin ingresos disponibles para ${inscription.servicio_nombre}`,
+    };
+  }
+
+  const validacionHorario = await validarHorarioServicio(
+    inscription.servicio_real_id,
+    ahora
+  );
+
+  if (!validacionHorario.valid) {
+    return {
+      valid: false,
+      reason: validacionHorario.reason,
+      servicioNombre: inscription.servicio_nombre,
+    };
+  }
+
+  return {
+    valid: true,
+    reason: null,
+    servicioNombre: inscription.servicio_nombre,
+    ingresosDisponibles: isUnlimitedService
+      ? null
+      : inscription.ingresos_disponibles,
+    isMultisucursal: inscription.multisucursal,
+  };
+};
+
+// ============================================
+// MULTISUCURSAL HELPER
+// ============================================
+const getLatestMultisucursalInscriptions = async (
+  personId,
+  serviceId,
+  fechaInicio,
+  fechaVencimiento
+) => {
   const result = await query(
     `
     WITH ranked_inscriptions AS (
@@ -254,10 +553,13 @@ const getLatestMultisucursalInscriptions = async (personId, serviceId, fechaInic
     `,
     [personId, serviceId, fechaInicio, fechaVencimiento]
   );
-  
+
   return result.rows;
 };
 
+// ============================================
+// CHECK PAGOS PENDIENTES
+// ============================================
 const checkPagosPendientes = async (personId) => {
   try {
     const result = await query(
@@ -279,24 +581,27 @@ const checkPagosPendientes = async (personId) => {
       `,
       [personId]
     );
-    
+
     if (result.rows.length === 0) {
       return null;
     }
 
     const pago = result.rows[0];
-    
+
     return {
       monto_pendiente: parseFloat(pago.monto_pendiente),
       monto_total: parseFloat(pago.monto_total),
-      servicio_nombre: pago.servicio_nombre
+      servicio_nombre: pago.servicio_nombre,
     };
   } catch (error) {
-    console.error('Error en checkPagosPendientes:', error);
+    console.error("Error en checkPagosPendientes:", error);
     return null;
   }
 };
 
+// ============================================
+// REGISTER CLIENT ACCESS (con validación de horarios)
+// ============================================
 exports.registerClientAccess = async (
   personId,
   serviceId,
@@ -322,7 +627,9 @@ exports.registerClientAccess = async (
   );
 
   if (client.rows.length === 0) {
-    throw new Error("Inscripción no encontrada, no válida para esta sucursal, servicio eliminado o cliente eliminado");
+    throw new Error(
+      "Inscripción no encontrada, no válida para esta sucursal, servicio eliminado o cliente eliminado"
+    );
   }
 
   const inscription = client.rows[0];
@@ -346,12 +653,12 @@ exports.registerClientAccess = async (
   const fechaInicio = checkExpiration.rows[0]?.fecha_inicio;
   const fechaVencimiento = checkExpiration.rows[0]?.fecha_vencimiento;
   const hoy = new Date();
-  
+
   const dentroDeRango = fechaInicio <= hoy && fechaVencimiento >= hoy;
 
   if (isExpired) {
     const fechaVencimientoFormateada = formatDate(fechaVencimiento);
-    
+
     await query(
       `
       INSERT INTO registros_acceso 
@@ -422,18 +729,52 @@ exports.registerClientAccess = async (
     };
   }
 
+  // ✅ VALIDAR HORARIO
+  const fechaActualResult = await query(
+    `SELECT TIMEZONE('America/La_Paz', NOW()) as ahora`
+  );
+  const ahora = new Date(fechaActualResult.rows[0].ahora);
+
+  const validacionHorario = await validarHorarioServicio(
+    inscription.servicio_real_id,
+    ahora
+  );
+
+  if (!validacionHorario.valid) {
+    await query(
+      `
+      INSERT INTO registros_acceso 
+      (persona_id, servicio_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
+      VALUES ($1, $2, $3, $4, $5, $6, TIMEZONE('America/La_Paz', NOW()), 'cliente')
+    `,
+      [
+        personId,
+        inscription.servicio_real_id,
+        `Acceso denegado - ${validacionHorario.reason} (Servicio: ${inscription.servicio_nombre})`,
+        "denegado",
+        branchId,
+        userId,
+      ]
+    );
+
+    return {
+      success: false,
+      message: validacionHorario.reason,
+    };
+  }
+
   let remainingVisits = 0;
   let latestMultisucursalInscriptions = [];
-  
+
   if (!isUnlimitedService) {
     if (inscription.multisucursal) {
       latestMultisucursalInscriptions = await getLatestMultisucursalInscriptions(
-        personId, 
-        inscription.servicio_real_id, 
-        inscription.fecha_inicio, 
+        personId,
+        inscription.servicio_real_id,
+        inscription.fecha_inicio,
         inscription.fecha_vencimiento
       );
-      
+
       for (const multiInscription of latestMultisucursalInscriptions) {
         await query(
           `
@@ -444,12 +785,12 @@ exports.registerClientAccess = async (
           [multiInscription.id]
         );
       }
-      
+
       const updatedInscription = await query(
         `SELECT ingresos_disponibles FROM inscripciones WHERE id = $1`,
         [serviceId]
       );
-      
+
       remainingVisits = updatedInscription.rows[0]?.ingresos_disponibles || 0;
     } else {
       await query(
@@ -465,12 +806,12 @@ exports.registerClientAccess = async (
         `SELECT ingresos_disponibles FROM inscripciones WHERE id = $1`,
         [serviceId]
       );
-      
+
       remainingVisits = updatedInscription.rows[0]?.ingresos_disponibles || 0;
     }
   }
 
-  const detailMessage = isUnlimitedService 
+  const detailMessage = isUnlimitedService
     ? `Acceso exitoso - ${inscription.servicio_nombre} (Ingresos ilimitados)`
     : `Acceso exitoso - ${inscription.servicio_nombre} (Visitas restantes: ${remainingVisits})`;
 
@@ -497,16 +838,23 @@ exports.registerClientAccess = async (
     message: `Acceso registrado para ${inscription.servicio_nombre}`,
     remainingVisits: isUnlimitedService ? null : remainingVisits,
     isMultisucursal: inscription.multisucursal,
-    updatedInscriptionsCount: inscription.multisucursal ? latestMultisucursalInscriptions.length : 1,
+    updatedInscriptionsCount: inscription.multisucursal
+      ? latestMultisucursalInscriptions.length
+      : 1,
     tieneDeuda: pagoPendiente !== null,
-    deudaInfo: pagoPendiente ? {
-      montoPendiente: pagoPendiente.monto_pendiente,
-      montoTotal: pagoPendiente.monto_total,
-      servicioNombre: pagoPendiente.servicio_nombre
-    } : null
+    deudaInfo: pagoPendiente
+      ? {
+          montoPendiente: pagoPendiente.monto_pendiente,
+          montoTotal: pagoPendiente.monto_total,
+          servicioNombre: pagoPendiente.servicio_nombre,
+        }
+      : null,
   };
 };
 
+// ============================================
+// HELPER: EMPLOYEE SCHEDULE
+// ============================================
 const getEmployeeScheduleForToday = async (employeeId) => {
   const employeeResult = await query(
     `SELECT rol FROM empleados WHERE id = $1`,
@@ -519,8 +867,7 @@ const getEmployeeScheduleForToday = async (employeeId) => {
 
   const rol = employeeResult.rows[0].rol;
 
-  // Si es limpieza, no tiene horario (retorna null)
-  if (rol === 'limpieza') {
+  if (rol === "limpieza") {
     return null;
   }
 
@@ -528,9 +875,9 @@ const getEmployeeScheduleForToday = async (employeeId) => {
     `SELECT EXTRACT(DOW FROM TIMEZONE('America/La_Paz', NOW())) as dia_semana_postgres`
   );
   let diaSemanaActual = dayResult.rows[0].dia_semana_postgres;
-  
+
   let diaSemanaBusqueda;
-  
+
   if (diaSemanaActual === 0) {
     diaSemanaBusqueda = 7;
   } else if (diaSemanaActual >= 1 && diaSemanaActual <= 5) {
@@ -585,6 +932,9 @@ const getEmployeeScheduleForToday = async (employeeId) => {
   throw new Error("El empleado no tiene horarios definidos");
 };
 
+// ============================================
+// REGISTER EMPLOYEE CHECK-IN
+// ============================================
 exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   const employee = await query(
     `
@@ -603,8 +953,7 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
-  // Si es limpieza, solo registra la hora de entrada sin verificar horario ni sucursal
-  if (emp.rol === 'limpieza') {
+  if (emp.rol === "limpieza") {
     const currentTimeResult = await query(
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
     );
@@ -637,8 +986,10 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
 
   const horaActualBolivia = currentTimeResult.rows[0].hora_actual_bolivia;
 
-  const [shiftHours, shiftMinutes, shiftSeconds] = horario.hora_ingreso.split(':').map(Number);
-  
+  const [shiftHours, shiftMinutes, shiftSeconds] = horario.hora_ingreso
+    .split(":")
+    .map(Number);
+
   const hoy = new Date(horaActualBolivia);
   const horaIngresoHoy = new Date(hoy);
   horaIngresoHoy.setHours(shiftHours, shiftMinutes, shiftSeconds || 0, 0);
@@ -649,11 +1000,11 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   let detail;
   let isLate = false;
   let minutes = 0;
-  
+
   if (diffMinutes > 0) {
     isLate = true;
     minutes = diffMinutes;
-    detail = `Entrada: ${diffMinutes} minuto${diffMinutes !== 1 ? 's' : ''} tarde`;
+    detail = `Entrada: ${diffMinutes} minuto${diffMinutes !== 1 ? "s" : ""} tarde`;
   } else {
     detail = `Entrada: A tiempo`;
   }
@@ -675,6 +1026,9 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   };
 };
 
+// ============================================
+// REGISTER EMPLOYEE CHECK-OUT
+// ============================================
 exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   const employee = await query(
     `
@@ -693,8 +1047,7 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
-  // Si es limpieza, solo registra la hora de salida sin verificar horario ni sucursal
-  if (emp.rol === 'limpieza') {
+  if (emp.rol === "limpieza") {
     const currentTimeResult = await query(
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
     );
@@ -727,8 +1080,10 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
 
   const horaActualBolivia = currentTimeResult.rows[0].hora_actual_bolivia;
 
-  const [shiftHours, shiftMinutes, shiftSeconds] = horario.hora_salida.split(':').map(Number);
-  
+  const [shiftHours, shiftMinutes, shiftSeconds] = horario.hora_salida
+    .split(":")
+    .map(Number);
+
   const hoy = new Date(horaActualBolivia);
   const horaSalidaHoy = new Date(hoy);
   horaSalidaHoy.setHours(shiftHours, shiftMinutes, shiftSeconds || 0, 0);
@@ -739,11 +1094,11 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   let detail;
   let isEarly = false;
   let minutes = 0;
-  
+
   if (diffMinutes > 0) {
     isEarly = true;
     minutes = diffMinutes;
-    detail = `Salida: ${diffMinutes} minuto${diffMinutes !== 1 ? 's' : ''} antes`;
+    detail = `Salida: ${diffMinutes} minuto${diffMinutes !== 1 ? "s" : ""} antes`;
   } else {
     detail = `Salida: A tiempo`;
   }
@@ -765,7 +1120,15 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   };
 };
 
-exports.registerAccessDeniedNoActiveSubscription = async (personId, branchId, userId, memberName) => {
+// ============================================
+// REGISTER ACCESS DENIED (sin suscripción)
+// ============================================
+exports.registerAccessDeniedNoActiveSubscription = async (
+  personId,
+  branchId,
+  userId,
+  memberName
+) => {
   await query(
     `
     INSERT INTO registros_acceso 
@@ -785,4 +1148,4 @@ exports.registerAccessDeniedNoActiveSubscription = async (personId, branchId, us
     success: false,
     message: `${memberName} no tiene inscripciones activas`,
   };
-};
+};  

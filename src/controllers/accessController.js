@@ -1,12 +1,15 @@
 const accessService = require("../services/accessService");
 
+// ============================================
+// GET ACCESS LOGS
+// ============================================
 exports.getAccessLogs = async (req, res) => {
   try {
     const { search, type, limit, branchId } = req.query;
-    
+
     const logs = await accessService.getAccessLogs(
-      search, 
-      type, 
+      search,
+      type,
       limit ? parseInt(limit) : 100,
       parseInt(branchId)
     );
@@ -17,14 +20,23 @@ exports.getAccessLogs = async (req, res) => {
   }
 };
 
+// ============================================
+// SEARCH MEMBERS
+// ============================================
 exports.searchMembers = async (req, res) => {
   try {
     const { search, type, branchId } = req.query;
     if (!search || search.length < 2) {
-      return res.status(400).json({ message: "Término de búsqueda debe tener al menos 2 caracteres" });
+      return res
+        .status(400)
+        .json({ message: "Término de búsqueda debe tener al menos 2 caracteres" });
     }
-    
-    const members = await accessService.searchMembers(search, type, parseInt(branchId));
+
+    const members = await accessService.searchMembers(
+      search,
+      type,
+      parseInt(branchId)
+    );
     res.json(members);
   } catch (error) {
     console.error("Error in searchMembers:", error);
@@ -32,23 +44,89 @@ exports.searchMembers = async (req, res) => {
   }
 };
 
+// ============================================
+// GET CLIENT SUBSCRIPTIONS
+// ============================================
+exports.getClientSubscriptions = async (req, res) => {
+  try {
+    const { personId } = req.params;
+    const { branchId } = req.query;
+
+    console.log("🔍 getClientSubscriptions llamado:", { personId, branchId });
+
+    // ✅ Validación flexible (acepta string numérico)
+    const personIdNum = Number(personId);
+    if (!personId || isNaN(personIdNum) || personIdNum <= 0) {
+      console.error("❌ personId inválido:", personId);
+      return res.status(400).json({
+        message: "personId inválido",
+        received: personId,
+      });
+    }
+
+    const branchIdNum = branchId ? Number(branchId) : null;
+    const branchIdValid = branchIdNum && !isNaN(branchIdNum) ? branchIdNum : null;
+
+    const subscriptions = await accessService.getClientSubscriptions(
+      personIdNum,
+      branchIdValid
+    );
+
+    res.json(subscriptions);
+  } catch (error) {
+    console.error("❌ Error en getClientSubscriptions:", error);
+    res.status(500).json({
+      message: error.message || "Error al obtener suscripciones",
+    });
+  }
+};
+// ============================================
+// VALIDATE CLIENT ACCESS
+// ============================================
+exports.validateClientAccess = async (req, res) => {
+  try {
+    const { personId, serviceId, branchId } = req.body;
+
+    if (!personId || !serviceId || !branchId) {
+      return res.status(400).json({
+        message: "Faltan parámetros requeridos",
+        received: { personId, serviceId, branchId },
+      });
+    }
+
+    const result = await accessService.validateClientAccess(
+      parseInt(personId),
+      parseInt(serviceId),
+      parseInt(branchId)
+    );
+
+    res.json(result);
+  } catch (error) {
+    console.error("Error in validateClientAccess:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ============================================
+// REGISTER CLIENT ACCESS
+// ============================================
 exports.registerClientAccess = async (req, res) => {
   try {
     const { personId, serviceId, branchId, userId } = req.body;
-    
+
     console.log("Datos recibidos para acceso:", { personId, serviceId, branchId, userId });
-    
+
     if (!personId || !serviceId || !branchId || !userId) {
-      return res.status(400).json({ 
+      return res.status(400).json({
         message: "Faltan parámetros requeridos",
-        received: { personId, serviceId, branchId, userId }
+        received: { personId, serviceId, branchId, userId },
       });
     }
-    
+
     const result = await accessService.registerClientAccess(
-      parseInt(personId), 
-      parseInt(serviceId), 
-      parseInt(branchId), 
+      parseInt(personId),
+      parseInt(serviceId),
+      parseInt(branchId),
       parseInt(userId)
     );
     res.json(result);
@@ -58,17 +136,20 @@ exports.registerClientAccess = async (req, res) => {
   }
 };
 
+// ============================================
+// REGISTER EMPLOYEE CHECK-IN
+// ============================================
 exports.registerEmployeeCheckIn = async (req, res) => {
   try {
     const { employeeId, branchId, userId } = req.body;
-    
+
     if (!employeeId || !branchId || !userId) {
       return res.status(400).json({ message: "Faltan parámetros requeridos" });
     }
-    
+
     const result = await accessService.registerEmployeeCheckIn(
-      parseInt(employeeId), 
-      parseInt(branchId), 
+      parseInt(employeeId),
+      parseInt(branchId),
       parseInt(userId)
     );
     res.json(result);
@@ -78,17 +159,20 @@ exports.registerEmployeeCheckIn = async (req, res) => {
   }
 };
 
+// ============================================
+// REGISTER EMPLOYEE CHECK-OUT
+// ============================================
 exports.registerEmployeeCheckOut = async (req, res) => {
   try {
     const { employeeId, branchId, userId } = req.body;
-    
+
     if (!employeeId || !branchId || !userId) {
       return res.status(400).json({ message: "Faltan parámetros requeridos" });
     }
-    
+
     const result = await accessService.registerEmployeeCheckOut(
-      parseInt(employeeId), 
-      parseInt(branchId), 
+      parseInt(employeeId),
+      parseInt(branchId),
       parseInt(userId)
     );
     res.json(result);
@@ -98,18 +182,20 @@ exports.registerEmployeeCheckOut = async (req, res) => {
   }
 };
 
-// Nuevo endpoint para registrar acceso denegado sin inscripción activa
+// ============================================
+// REGISTER ACCESS DENIED (sin suscripción)
+// ============================================
 exports.registerAccessDeniedNoSubscription = async (req, res) => {
   try {
     const { personId, branchId, userId, memberName } = req.body;
-    
+
     if (!personId || !branchId || !userId) {
       return res.status(400).json({ message: "Faltan parámetros requeridos" });
     }
-    
+
     const result = await accessService.registerAccessDeniedNoActiveSubscription(
-      parseInt(personId), 
-      parseInt(branchId), 
+      parseInt(personId),
+      parseInt(branchId),
       parseInt(userId),
       memberName
     );
