@@ -3,13 +3,16 @@ const express = require("express");
 const router = express.Router();
 const sellProductsController = require("../controllers/sellProductsController");
 
-// Ruta para obtener productos disponibles
+// Productos disponibles
 router.get("/products", sellProductsController.getProducts);
 
-// Ruta para obtener estado de caja
+// Estado de caja
 router.get("/cash-register-status", sellProductsController.getCashRegisterStatus);
 
-// Ruta para procesar una venta
+// ✅ NUEVO: Validar cupón por sucursal y tipo
+router.get("/validate-coupon", sellProductsController.validateCoupon);
+
+// Procesar venta
 router.post("/process-sale", sellProductsController.processSale);
 
 module.exports = router;
