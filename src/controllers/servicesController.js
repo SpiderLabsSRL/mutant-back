@@ -26,10 +26,46 @@ const getSucursales = async (req, res) => {
   }
 };
 
+const getServiceTypes = async (req, res) => {
+  try {
+    const types = await servicesService.getServiceTypes();
+    res.json(types);
+  } catch (error) {
+    console.error("Error en getServiceTypes:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error interno del servidor",
+    });
+  }
+};
+
+const createServiceType = async (req, res) => {
+  try {
+    const { name } = req.body;
+
+    if (!name || !name.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "El nombre del tipo de servicio es obligatorio",
+      });
+    }
+
+    const newType = await servicesService.createServiceType(name.trim());
+    res.status(201).json(newType);
+  } catch (error) {
+    console.error("Error en createServiceType:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error interno del servidor",
+    });
+  }
+};
+
 const createService = async (req, res) => {
   try {
     const {
       name,
+      description,
       price,
       maxEntries,
       sucursales,
@@ -37,17 +73,23 @@ const createService = async (req, res) => {
       sucursalesMultisucursal,
       tipoDuracion,
       cantidadDuracion,
+      serviceType,
+      hasTimeRange,
+      startTime,
+      endTime,
+      hasSpecificDays,
+      specificDays,
+      requiredPeopleEnabled,
+      requiredPeople,
     } = req.body;
 
     if (!name || !price || !sucursales || sucursales.length === 0 || !tipoDuracion || !cantidadDuracion) {
       return res.status(400).json({
         success: false,
-        message:
-          "Todos los campos son obligatorios, incluyendo al menos una sucursal, tipo de duración y cantidad",
+        message: "Todos los campos son obligatorios, incluyendo al menos una sucursal, tipo de duración y cantidad",
       });
     }
 
-    // Validar que si no es ilimitado, debe tener maxEntries
     if (maxEntries !== null && maxEntries <= 0) {
       return res.status(400).json({
         success: false,
@@ -55,7 +97,6 @@ const createService = async (req, res) => {
       });
     }
 
-    // Validar tipo de duración
     if (!['dias', 'meses'].includes(tipoDuracion)) {
       return res.status(400).json({
         success: false,
@@ -63,7 +104,6 @@ const createService = async (req, res) => {
       });
     }
 
-    // Validar cantidad de duración
     if (cantidadDuracion <= 0) {
       return res.status(400).json({
         success: false,
@@ -71,34 +111,28 @@ const createService = async (req, res) => {
       });
     }
 
-    if (
-      multisucursal &&
-      (!sucursalesMultisucursal || sucursalesMultisucursal.length < 2)
-    ) {
+    if (multisucursal && (!sucursalesMultisucursal || sucursalesMultisucursal.length < 2)) {
       return res.status(400).json({
         success: false,
-        message:
-          "Para servicios multisucursal debe seleccionar al menos 2 sucursales",
+        message: "Para servicios multisucursal debe seleccionar al menos 2 sucursales",
       });
     }
 
-    // Validar que las sucursales multisucursal estén dentro de las disponibles
     if (multisucursal) {
       const invalidSucursales = sucursalesMultisucursal.filter(
         (sucursalId) => !sucursales.includes(sucursalId)
       );
-
       if (invalidSucursales.length > 0) {
         return res.status(400).json({
           success: false,
-          message:
-            "Las sucursales multisucursal deben estar entre las sucursales disponibles",
+          message: "Las sucursales multisucursal deben estar entre las sucursales disponibles",
         });
       }
     }
 
     const newService = await servicesService.createService({
       name,
+      description,
       price,
       maxEntries,
       sucursales,
@@ -106,6 +140,14 @@ const createService = async (req, res) => {
       sucursalesMultisucursal: multisucursal ? sucursalesMultisucursal : [],
       tipoDuracion,
       cantidadDuracion,
+      serviceType,
+      hasTimeRange,
+      startTime,
+      endTime,
+      hasSpecificDays,
+      specificDays,
+      requiredPeopleEnabled,
+      requiredPeople,
     });
 
     res.status(201).json(newService);
@@ -123,6 +165,7 @@ const updateService = async (req, res) => {
     const { id } = req.params;
     const {
       name,
+      description,
       price,
       maxEntries,
       sucursales,
@@ -130,17 +173,23 @@ const updateService = async (req, res) => {
       sucursalesMultisucursal,
       tipoDuracion,
       cantidadDuracion,
+      serviceType,
+      hasTimeRange,
+      startTime,
+      endTime,
+      hasSpecificDays,
+      specificDays,
+      requiredPeopleEnabled,
+      requiredPeople,
     } = req.body;
 
     if (!name || !price || !sucursales || sucursales.length === 0 || !tipoDuracion || !cantidadDuracion) {
       return res.status(400).json({
         success: false,
-        message:
-          "Todos los campos son obligatorios, incluyendo al menos una sucursal, tipo de duración y cantidad",
+        message: "Todos los campos son obligatorios, incluyendo al menos una sucursal, tipo de duración y cantidad",
       });
     }
 
-    // Validar que si no es ilimitado, debe tener maxEntries
     if (maxEntries !== null && maxEntries <= 0) {
       return res.status(400).json({
         success: false,
@@ -148,7 +197,6 @@ const updateService = async (req, res) => {
       });
     }
 
-    // Validar tipo de duración
     if (!['dias', 'meses'].includes(tipoDuracion)) {
       return res.status(400).json({
         success: false,
@@ -156,7 +204,6 @@ const updateService = async (req, res) => {
       });
     }
 
-    // Validar cantidad de duración
     if (cantidadDuracion <= 0) {
       return res.status(400).json({
         success: false,
@@ -164,34 +211,28 @@ const updateService = async (req, res) => {
       });
     }
 
-    if (
-      multisucursal &&
-      (!sucursalesMultisucursal || sucursalesMultisucursal.length < 2)
-    ) {
+    if (multisucursal && (!sucursalesMultisucursal || sucursalesMultisucursal.length < 2)) {
       return res.status(400).json({
         success: false,
-        message:
-          "Para servicios multisucursal debe seleccionar al menos 2 sucursales",
+        message: "Para servicios multisucursal debe seleccionar al menos 2 sucursales",
       });
     }
 
-    // Validar que las sucursales multisucursal estén dentro de las disponibles
     if (multisucursal) {
       const invalidSucursales = sucursalesMultisucursal.filter(
         (sucursalId) => !sucursales.includes(sucursalId)
       );
-
       if (invalidSucursales.length > 0) {
         return res.status(400).json({
           success: false,
-          message:
-            "Las sucursales multisucursal deben estar entre las sucursales disponibles",
+          message: "Las sucursales multisucursal deben estar entre las sucursales disponibles",
         });
       }
     }
 
     const updatedService = await servicesService.updateService(id, {
       name,
+      description,
       price,
       maxEntries,
       sucursales,
@@ -199,6 +240,14 @@ const updateService = async (req, res) => {
       sucursalesMultisucursal: multisucursal ? sucursalesMultisucursal : [],
       tipoDuracion,
       cantidadDuracion,
+      serviceType,
+      hasTimeRange,
+      startTime,
+      endTime,
+      hasSpecificDays,
+      specificDays,
+      requiredPeopleEnabled,
+      requiredPeople,
     });
 
     res.json(updatedService);
@@ -242,6 +291,8 @@ const toggleServiceStatus = async (req, res) => {
 module.exports = {
   getAllServices,
   getSucursales,
+  getServiceTypes,
+  createServiceType,
   createService,
   updateService,
   deleteService,

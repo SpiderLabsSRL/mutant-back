@@ -2,11 +2,11 @@ const express = require("express");
 const router = express.Router();
 const servicesController = require("../controllers/servicesController");
 
-
-
 // Rutas para servicios
 router.get("/", servicesController.getAllServices);
 router.get("/sucursales", servicesController.getSucursales);
+router.get("/types", servicesController.getServiceTypes);
+router.post("/types", servicesController.createServiceType);
 router.post("/", servicesController.createService);
 router.put("/:id", servicesController.updateService);
 router.delete("/:id", servicesController.deleteService);
