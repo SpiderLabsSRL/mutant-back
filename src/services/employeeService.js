@@ -1,6 +1,9 @@
 const { query, pool } = require("../../db");
 const bcrypt = require("bcrypt");
 
+// ============================================
+// SUCURSALES
+// ============================================
 exports.getBranches = async () => {
   const result = await query(
     "SELECT id, nombre, estado FROM sucursales WHERE estado = 1 ORDER BY nombre"
@@ -8,6 +11,9 @@ exports.getBranches = async () => {
   return result.rows;
 };
 
+// ============================================
+// CAJAS
+// ============================================
 exports.getBoxes = async () => {
   const result = await query(
     "SELECT id, nombre, sucursal_id, estado FROM cajas WHERE estado = 1 ORDER BY nombre"
@@ -15,6 +21,9 @@ exports.getBoxes = async () => {
   return result.rows;
 };
 
+// ============================================
+// GET EMPLOYEES
+// ============================================
 exports.getEmployees = async () => {
   const result = await query(`
     SELECT 
@@ -41,28 +50,36 @@ exports.getEmployees = async () => {
     WHERE e.estado IN (0, 1)
     ORDER BY p.nombres, p.apellidos
   `);
-  
-  // Obtener horarios para cada empleado
+
   const employeesWithHorarios = await Promise.all(
     result.rows.map(async (employee) => {
       const horariosResult = await query(
-        `SELECT dia_semana, hora_ingreso, hora_salida 
-         FROM horarios_empleado 
-         WHERE empleado_id = $1 
-         ORDER BY dia_semana`,
+        `SELECT 
+          he.dia_semana, 
+          he.hora_ingreso, 
+          he.hora_salida,
+          he.sucursal_id,
+          s.nombre as sucursal_nombre
+         FROM horarios_empleado he
+         LEFT JOIN sucursales s ON he.sucursal_id = s.id
+         WHERE he.empleado_id = $1 
+         ORDER BY he.dia_semana, he.hora_ingreso`,
         [employee.id]
       );
-      
+
       return {
         ...employee,
-        horarios: horariosResult.rows
+        horarios: horariosResult.rows,
       };
     })
   );
-  
+
   return employeesWithHorarios;
 };
 
+// ============================================
+// CREATE EMPLOYEE
+// ============================================
 exports.createEmployee = async (employeeData) => {
   const {
     nombres,
@@ -74,23 +91,23 @@ exports.createEmployee = async (employeeData) => {
     caja_id,
     horarios,
     username,
-    password
+    password,
   } = employeeData;
 
   const client = await pool.connect();
 
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
     // 1. Crear persona
     const personaResult = await client.query(
-      `INSERT INTO personas (nombres, apellidos, ci, telefono) 
-       VALUES ($1, $2, $3, $4) RETURNING id`,
+      `INSERT INTO personas (nombres, apellidos, ci, telefono, estado) 
+       VALUES ($1, $2, $3, $4, 1) RETURNING id`,
       [nombres, apellidos, ci, telefono]
     );
     const personaId = personaResult.rows[0].id;
 
-    // 2. Crear empleado (para admin, sucursal_id es null)
+    // 2. Crear empleado
     const empleadoResult = await client.query(
       `INSERT INTO empleados (persona_id, rol, sucursal_id, estado) 
        VALUES ($1, $2, $3, 1) RETURNING id`,
@@ -107,21 +124,28 @@ exports.createEmployee = async (employeeData) => {
       );
     }
 
-    // 4. Crear horarios si no es admin y hay horarios definidos
+    // 4. Crear horarios con sucursal_id (solo si no es admin)
     if (cargo !== "admin" && horarios && horarios.length > 0) {
       for (const horario of horarios) {
         if (horario.hora_ingreso && horario.hora_salida) {
           await client.query(
-            `INSERT INTO horarios_empleado (empleado_id, dia_semana, hora_ingreso, hora_salida) 
-             VALUES ($1, $2, $3, $4)`,
-            [empleadoId, horario.dia_semana, horario.hora_ingreso, horario.hora_salida]
+            `INSERT INTO horarios_empleado 
+              (empleado_id, dia_semana, hora_ingreso, hora_salida, sucursal_id) 
+             VALUES ($1, $2, $3, $4, $5)`,
+            [
+              empleadoId,
+              horario.dia_semana,
+              horario.hora_ingreso,
+              horario.hora_salida,
+              horario.sucursal_id || sucursal_id || null,
+            ]
           );
         }
       }
     }
 
-    // 5. Crear usuario si es necesario (para admin y recepcionista)
-    if (username && password && ['admin', 'recepcionista'].includes(cargo)) {
+    // 5. Crear usuario si es necesario
+    if (username && password && ["admin", "recepcionista"].includes(cargo)) {
       const hashedPassword = await bcrypt.hash(password, 10);
       await client.query(
         `INSERT INTO usuarios (username, password_hash, empleado_id) 
@@ -130,18 +154,21 @@ exports.createEmployee = async (employeeData) => {
       );
     }
 
-    await client.query('COMMIT');
+    await client.query("COMMIT");
 
-    const newEmployee = await this.getEmployeeById(empleadoId);
+    const newEmployee = await exports.getEmployeeById(empleadoId);
     return newEmployee;
   } catch (error) {
-    await client.query('ROLLBACK');
+    await client.query("ROLLBACK");
     throw error;
   } finally {
     client.release();
   }
 };
 
+// ============================================
+// UPDATE EMPLOYEE
+// ============================================
 exports.updateEmployee = async (id, employeeData) => {
   const {
     nombres,
@@ -153,24 +180,24 @@ exports.updateEmployee = async (id, employeeData) => {
     caja_id,
     horarios,
     username,
-    password
+    password,
   } = employeeData;
 
   const client = await pool.connect();
 
   try {
-    await client.query('BEGIN');
+    await client.query("BEGIN");
 
-    // 1. Obtener el persona_id del empleado
+    // 1. Obtener persona_id
     const empleadoResult = await client.query(
-      'SELECT persona_id FROM empleados WHERE id = $1',
+      "SELECT persona_id FROM empleados WHERE id = $1",
       [id]
     );
-    
+
     if (empleadoResult.rows.length === 0) {
-      throw new Error('Empleado no encontrado');
+      throw new Error("Empleado no encontrado");
     }
-    
+
     const personaId = empleadoResult.rows[0].persona_id;
 
     // 2. Actualizar persona
@@ -180,28 +207,25 @@ exports.updateEmployee = async (id, employeeData) => {
       [nombres, apellidos, ci, telefono, personaId]
     );
 
-    // 3. Actualizar empleado (para admin, sucursal_id es null)
+    // 3. Actualizar empleado
     await client.query(
       `UPDATE empleados SET rol = $1, sucursal_id = $2 WHERE id = $3`,
       [cargo, cargo === "admin" ? null : sucursal_id, id]
     );
 
-    // 4. Manejar asignación de caja (solo para recepcionista)
+    // 4. Manejar caja (solo recepcionista)
     if (cargo === "recepcionista" && caja_id) {
-      // Verificar si ya existe una asignación
       const asignacionExistente = await client.query(
-        'SELECT id FROM empleado_caja WHERE empleado_id = $1 AND estado = 1',
+        "SELECT id FROM empleado_caja WHERE empleado_id = $1 AND estado = 1",
         [id]
       );
 
       if (asignacionExistente.rows.length > 0) {
-        // Actualizar asignación existente
         await client.query(
-          'UPDATE empleado_caja SET caja_id = $1 WHERE empleado_id = $2 AND estado = 1',
+          "UPDATE empleado_caja SET caja_id = $1 WHERE empleado_id = $2 AND estado = 1",
           [caja_id, id]
         );
       } else {
-        // Crear nueva asignación
         await client.query(
           `INSERT INTO empleado_caja (empleado_id, caja_id, estado) 
            VALUES ($1, $2, 1)`,
@@ -209,66 +233,66 @@ exports.updateEmployee = async (id, employeeData) => {
         );
       }
     } else {
-      // Eliminar asignación de caja si el cargo ya no es recepcionista
       await client.query(
-        'UPDATE empleado_caja SET estado = 0 WHERE empleado_id = $1',
+        "UPDATE empleado_caja SET estado = 0 WHERE empleado_id = $1",
         [id]
       );
     }
 
-    // 5. Manejar horarios (solo para roles que no son admin)
+    // 5. Manejar horarios (borrar y recrear, CON sucursal_id)
     if (cargo !== "admin") {
-      // Eliminar horarios existentes
       await client.query(
-        'DELETE FROM horarios_empleado WHERE empleado_id = $1',
+        "DELETE FROM horarios_empleado WHERE empleado_id = $1",
         [id]
       );
 
-      // Insertar nuevos horarios
       if (horarios && horarios.length > 0) {
         for (const horario of horarios) {
           if (horario.hora_ingreso && horario.hora_salida) {
             await client.query(
-              `INSERT INTO horarios_empleado (empleado_id, dia_semana, hora_ingreso, hora_salida) 
-               VALUES ($1, $2, $3, $4)`,
-              [id, horario.dia_semana, horario.hora_ingreso, horario.hora_salida]
+              `INSERT INTO horarios_empleado 
+                (empleado_id, dia_semana, hora_ingreso, hora_salida, sucursal_id) 
+               VALUES ($1, $2, $3, $4, $5)`,
+              [
+                id,
+                horario.dia_semana,
+                horario.hora_ingreso,
+                horario.hora_salida,
+                horario.sucursal_id || sucursal_id || null,
+              ]
             );
           }
         }
       }
     } else {
-      // Eliminar horarios si el cargo cambia a admin
+      // Si es admin, eliminar todos los horarios
       await client.query(
-        'DELETE FROM horarios_empleado WHERE empleado_id = $1',
+        "DELETE FROM horarios_empleado WHERE empleado_id = $1",
         [id]
       );
     }
 
     // 6. Manejar usuario (para admin y recepcionista)
-    if (['admin', 'recepcionista'].includes(cargo)) {
-      // Verificar si ya existe un usuario
+    if (["admin", "recepcionista"].includes(cargo)) {
       const usuarioExistente = await client.query(
-        'SELECT id FROM usuarios WHERE empleado_id = $1',
+        "SELECT id FROM usuarios WHERE empleado_id = $1",
         [id]
       );
 
       if (usuarioExistente.rows.length > 0) {
-        // Actualizar usuario existente
         if (password) {
           const hashedPassword = await bcrypt.hash(password, 10);
           await client.query(
-            'UPDATE usuarios SET username = $1, password_hash = $2 WHERE empleado_id = $3',
+            "UPDATE usuarios SET username = $1, password_hash = $2 WHERE empleado_id = $3",
             [username, hashedPassword, id]
           );
         } else {
-          // Solo actualizar username si no se cambia la contraseña
           await client.query(
-            'UPDATE usuarios SET username = $1 WHERE empleado_id = $2',
+            "UPDATE usuarios SET username = $1 WHERE empleado_id = $2",
             [username, id]
           );
         }
       } else if (username && password) {
-        // Crear nuevo usuario
         const hashedPassword = await bcrypt.hash(password, 10);
         await client.query(
           `INSERT INTO usuarios (username, password_hash, empleado_id) 
@@ -277,36 +301,38 @@ exports.updateEmployee = async (id, employeeData) => {
         );
       }
     } else {
-      // Eliminar usuario si el cargo ya no requiere acceso
-      await client.query(
-        'DELETE FROM usuarios WHERE empleado_id = $1',
-        [id]
-      );
+      await client.query("DELETE FROM usuarios WHERE empleado_id = $1", [id]);
     }
 
-    await client.query('COMMIT');
+    await client.query("COMMIT");
 
-    const updatedEmployee = await this.getEmployeeById(id);
+    const updatedEmployee = await exports.getEmployeeById(id);
     return updatedEmployee;
   } catch (error) {
-    await client.query('ROLLBACK');
+    await client.query("ROLLBACK");
     throw error;
   } finally {
     client.release();
   }
 };
 
+// ============================================
+// DELETE EMPLOYEE (soft delete)
+// ============================================
 exports.deleteEmployee = async (id) => {
   const result = await query(
-    'UPDATE empleados SET estado = 2 WHERE id = $1 RETURNING id',
+    "UPDATE empleados SET estado = 2 WHERE id = $1 RETURNING id",
     [id]
   );
-  
+
   if (result.rows.length === 0) {
-    throw new Error('Empleado no encontrado');
+    throw new Error("Empleado no encontrado");
   }
 };
 
+// ============================================
+// TOGGLE EMPLOYEE STATUS
+// ============================================
 exports.toggleEmployeeStatus = async (id) => {
   const result = await query(
     `UPDATE empleados 
@@ -315,36 +341,42 @@ exports.toggleEmployeeStatus = async (id) => {
      RETURNING id, estado`,
     [id]
   );
-  
+
   if (result.rows.length === 0) {
-    throw new Error('Empleado no encontrado');
+    throw new Error("Empleado no encontrado");
   }
-  
-  const updatedEmployee = await this.getEmployeeById(id);
+
+  const updatedEmployee = await exports.getEmployeeById(id);
   return updatedEmployee;
 };
 
+// ============================================
+// REGISTER FINGERPRINT
+// ============================================
 exports.registerFingerprint = async (id) => {
   const empleadoResult = await query(
-    'SELECT persona_id FROM empleados WHERE id = $1',
+    "SELECT persona_id FROM empleados WHERE id = $1",
     [id]
   );
-  
+
   if (empleadoResult.rows.length === 0) {
-    throw new Error('Empleado no encontrado');
+    throw new Error("Empleado no encontrado");
   }
-  
+
   const personaId = empleadoResult.rows[0].persona_id;
-  
-  // Simular registro de huella
+
   await query(
-    'UPDATE personas SET huella_digital = $1 WHERE id = $2',
-    [Buffer.from('simulated_fingerprint_data'), personaId]
+    "UPDATE personas SET huella_digital = $1 WHERE id = $2",
+    [Buffer.from("simulated_fingerprint_data"), personaId]
   );
 };
 
+// ============================================
+// GET EMPLOYEE BY ID
+// ============================================
 exports.getEmployeeById = async (id) => {
-  const result = await query(`
+  const result = await query(
+    `
     SELECT 
       e.id,
       e.persona_id,
@@ -367,23 +399,30 @@ exports.getEmployeeById = async (id) => {
     LEFT JOIN cajas c ON ec.caja_id = c.id
     LEFT JOIN usuarios u ON e.id = u.empleado_id
     WHERE e.id = $1
-  `, [id]);
-  
-  if (result.rows.length === 0) {
-    throw new Error('Empleado no encontrado');
-  }
-  
-  // Obtener horarios del empleado
-  const horariosResult = await query(
-    `SELECT dia_semana, hora_ingreso, hora_salida 
-     FROM horarios_empleado 
-     WHERE empleado_id = $1 
-     ORDER BY dia_semana`,
+  `,
     [id]
   );
-  
+
+  if (result.rows.length === 0) {
+    throw new Error("Empleado no encontrado");
+  }
+
+  const horariosResult = await query(
+    `SELECT 
+      he.dia_semana, 
+      he.hora_ingreso, 
+      he.hora_salida,
+      he.sucursal_id,
+      s.nombre as sucursal_nombre
+     FROM horarios_empleado he
+     LEFT JOIN sucursales s ON he.sucursal_id = s.id
+     WHERE he.empleado_id = $1 
+     ORDER BY he.dia_semana, he.hora_ingreso`,
+    [id]
+  );
+
   return {
     ...result.rows[0],
-    horarios: horariosResult.rows
+    horarios: horariosResult.rows,
   };
 };
