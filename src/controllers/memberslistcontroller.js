@@ -1,31 +1,18 @@
+// server/controllers/memberslistcontroller.js
 const membersListService = require("../services/memberslistservice");
 
-// Obtener miembros con paginación
 const getMembers = async (req, res) => {
   try {
     const {
       page = 1,
-      limit = 10,
       searchTerm = "",
       serviceFilter = "all",
       statusFilter = "all",
       sucursalFilter = "all",
     } = req.query;
 
-    console.log("Controlador getMembers - Parámetros recibidos:", {
-      page,
-      limit,
-      searchTerm,
-      serviceFilter,
-      statusFilter,
-      sucursalFilter,
-      userSucursalId: req.user?.sucursal_id,
-      userRol: req.user?.rol,
-    });
-
-    // Validar parámetros de paginación
     const pageNum = parseInt(page) || 1;
-    const limitNum = 10; // Fijo en 10
+    const limitNum = 10; // ✅ Fijo en 10, ignoramos cualquier limit del frontend
     const search = searchTerm || "";
     const service = serviceFilter || "all";
     const status = statusFilter || "all";
@@ -42,14 +29,6 @@ const getMembers = async (req, res) => {
       req.user?.rol
     );
 
-    console.log("Resultado de getMembers:", {
-      totalCount: result.totalCount,
-      currentPage: result.currentPage,
-      totalPages: result.totalPages,
-      itemsPerPage: result.itemsPerPage,
-      membersCount: result.members.length,
-    });
-
     res.json({
       success: true,
       ...result,
@@ -63,7 +42,6 @@ const getMembers = async (req, res) => {
     });
   }
 };
-
 // Obtener todos los miembros para exportar (sin paginación)
 const getAllMembers = async (req, res) => {
   try {
@@ -111,7 +89,7 @@ const getAllMembers = async (req, res) => {
 const editMember = async (req, res) => {
   try {
     const { id } = req.params;
-    const { nombres, apellidos, ci, phone} = req.body;
+    const { nombres, apellidos, ci, phone } = req.body;
 
     console.log("Controlador editMember - Datos recibidos:", {
       id,
@@ -122,7 +100,6 @@ const editMember = async (req, res) => {
       userRol: req.user?.rol,
     });
 
-    // Validar datos requeridos
     if (!nombres || !apellidos || !ci || !phone) {
       return res.status(400).json({
         success: false,
@@ -234,11 +211,54 @@ const testRoute = async (req, res) => {
   });
 };
 
+// ✅ NUEVA FUNCIÓN: Actualizar fechas de inscripción
+const updateInscriptionDates = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { serviceName, startDate, expirationDate } = req.body;
+
+    console.log("Controlador updateInscriptionDates - Datos:", {
+      id,
+      serviceName,
+      startDate,
+      expirationDate,
+    });
+
+    if (!serviceName || !startDate || !expirationDate) {
+      return res.status(400).json({
+        success: false,
+        message: "serviceName, startDate y expirationDate son requeridos",
+      });
+    }
+
+    const result = await membersListService.updateInscriptionDates(
+      id,
+      serviceName,
+      startDate,
+      expirationDate
+    );
+
+    res.json({
+      success: true,
+      message: "Fechas actualizadas exitosamente",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Error en updateInscriptionDates controller:", error);
+    res.status(500).json({
+      success: false,
+      message: error.message || "Error al actualizar fechas",
+      error: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+};
+
 module.exports = {
   getMembers,
   getAllMembers,
   editMember,
   deleteMember,
+  updateInscriptionDates,
   getAvailableServices,
   getAvailableBranches,
   testRoute,

@@ -1,9 +1,10 @@
+// server/services/memberslistservice.js
 const { query } = require("../../db");
 
-// Obtener miembros con paginación y filtros - ACTUALIZADO con paginación fija de 10
+// Obtener miembros con paginación y filtros
 const getMembers = async (
   page = 1,
-  limit = 10, // Establecer 10 por defecto
+  limit = 10,
   searchTerm,
   serviceFilter,
   statusFilter,
@@ -12,18 +13,6 @@ const getMembers = async (
   userRol
 ) => {
   try {
-    console.log("Parámetros del servicio:", {
-      page,
-      limit,
-      searchTerm,
-      serviceFilter,
-      statusFilter,
-      sucursalFilter,
-      userSucursalId,
-      userRol,
-    });
-
-    // Validar y asegurar que el límite sea 10
     const itemsPerPage = 10;
     const currentPage = Math.max(1, parseInt(page) || 1);
     const offset = (currentPage - 1) * itemsPerPage;
@@ -43,21 +32,55 @@ const getMembers = async (
       queryParams.push(parseInt(sucursalFilter));
     }
 
-    // Excluir empleados - solo personas con servicios
+    // Excluir empleados
     whereConditions.push(
       `p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)`
     );
 
-    // SOLO MOSTRAR PERSONAS ACTIVAS (estado = 0)
+    // SOLO MOSTRAR PERSONAS ACTIVAS
     whereConditions.push(`p.estado = 0`);
 
-    // Filtro de búsqueda
+    // ✅ BÚSQUEDA ULTRA ROBUSTA: normaliza espacios múltiples + sin acentos + case-insensitive
     if (searchTerm && searchTerm.trim() !== "") {
       paramCount++;
-      whereConditions.push(
-        `(p.nombres ILIKE $${paramCount} OR p.apellidos ILIKE $${paramCount} OR p.ci ILIKE $${paramCount})`
-      );
-      queryParams.push(`%${searchTerm}%`);
+
+      const normalizedSearch = searchTerm.trim().replace(/\s+/g, " ");
+
+      whereConditions.push(`
+        (
+          unaccent(LOWER(REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g'))) 
+            ILIKE unaccent(LOWER($${paramCount}))
+          
+          OR unaccent(LOWER(REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g'))) 
+            ILIKE unaccent(LOWER($${paramCount}))
+          
+          OR TRIM(p.ci) ILIKE $${paramCount}
+          
+          OR unaccent(LOWER(
+            REGEXP_REPLACE(
+              TRIM(CONCAT(
+                REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g'),
+                ' ',
+                REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g')
+              )),
+              '\\s+', ' ', 'g'
+            )
+          )) ILIKE unaccent(LOWER($${paramCount}))
+          
+          OR unaccent(LOWER(
+            REGEXP_REPLACE(
+              TRIM(CONCAT(
+                REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g'),
+                ' ',
+                REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g')
+              )),
+              '\\s+', ' ', 'g'
+            )
+          )) ILIKE unaccent(LOWER($${paramCount}))
+        )
+      `);
+
+      queryParams.push(`%${normalizedSearch}%`);
     }
 
     // Filtro por servicio
@@ -67,32 +90,20 @@ const getMembers = async (
       queryParams.push(serviceFilter);
     }
 
-    // Filtro por estado - CORREGIDO para manejar ingresos_disponibles NULL
-    if (statusFilter && statusFilter !== "all") {
-      if (statusFilter === "active") {
-        whereConditions.push(
-          `i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date AND (i.ingresos_disponibles > 0 OR i.ingresos_disponibles IS NULL)`
-        );
-      } else if (statusFilter === "inactive") {
-        whereConditions.push(
-          `(i.fecha_vencimiento < TIMEZONE('America/La_Paz', NOW())::date OR (i.ingresos_disponibles = 0 AND i.ingresos_disponibles IS NOT NULL))`
-        );
-      }
-    }
-
     const whereClause =
       whereConditions.length > 0
         ? `WHERE ${whereConditions.join(" AND ")}`
         : "";
 
-    // Subconsulta para obtener la última inscripción por servicio, persona y sucursal
+    // ✅ Usamos MAX(i.id) en lugar de MAX(i.fecha_inicio) porque la fecha_inicio
+    // puede cambiar y no es un buen identificador único.
     const membersQuery = `
       WITH UltimasInscripciones AS (
         SELECT 
           i.persona_id,
           i.servicio_id,
           i.sucursal_id,
-          MAX(i.fecha_inicio) as ultima_fecha
+          MAX(i.id) as ultima_inscripcion_id
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id
         GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
@@ -120,14 +131,11 @@ const getMembers = async (
           END as servicio_status
         FROM personas p
         INNER JOIN UltimasInscripciones ui ON p.id = ui.persona_id
-        INNER JOIN inscripciones i ON p.id = i.persona_id 
-          AND i.servicio_id = ui.servicio_id 
-          AND i.sucursal_id = ui.sucursal_id 
-          AND i.fecha_inicio = ui.ultima_fecha
+        INNER JOIN inscripciones i ON i.id = ui.ultima_inscripcion_id
         INNER JOIN servicios s ON i.servicio_id = s.id
         INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
         ${whereClause}
-        ORDER BY ui.persona_id, ui.sucursal_id, ui.servicio_id, ui.ultima_fecha DESC
+        ORDER BY ui.persona_id, ui.sucursal_id, ui.servicio_id, i.id DESC
       ),
       PersonasUnicas AS (
         SELECT DISTINCT ON (persona_id, sucursal_id)
@@ -146,10 +154,10 @@ const getMembers = async (
         pu.name,
         pu.ci,
         pu.telefono as phone,
-        TO_CHAR(pu.fecha_nacimiento, 'YYYY-MM-DD') as birthDate,
+        TO_CHAR(pu.fecha_nacimiento, 'YYYY-MM-DD') as birthdate,
         pu.sucursal_id,
         pu.sucursal_name,
-        TO_CHAR(MIN(su.fecha_inicio), 'YYYY-MM-DD') as registrationDate,
+        TO_CHAR(MIN(su.fecha_inicio), 'YYYY-MM-DD') as registrationdate,
         CASE 
           WHEN EXISTS (
             SELECT 1 FROM inscripciones i2 
@@ -161,21 +169,22 @@ const getMembers = async (
           ELSE 'inactive'
         END as member_status
       FROM PersonasUnicas pu
-      LEFT JOIN ServiciosUnicos su ON pu.persona_id = su.persona_id AND pu.sucursal_id = su.sucursal_id
+      LEFT JOIN ServiciosUnicos su 
+        ON pu.persona_id = su.persona_id 
+        AND pu.sucursal_id = su.sucursal_id
       GROUP BY pu.persona_id, pu.name, pu.ci, pu.telefono, pu.fecha_nacimiento, 
                pu.sucursal_id, pu.sucursal_name
-      ORDER BY pu.name
+      ORDER BY pu.name, pu.sucursal_id
       LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}
     `;
 
-    // Consulta para contar total
     const countQuery = `
       WITH UltimasInscripciones AS (
         SELECT 
           i.persona_id,
           i.servicio_id,
           i.sucursal_id,
-          MAX(i.fecha_inicio) as ultima_fecha
+          MAX(i.id) as ultima_inscripcion_id
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id
         GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
@@ -186,10 +195,7 @@ const getMembers = async (
           ui.sucursal_id
         FROM personas p
         INNER JOIN UltimasInscripciones ui ON p.id = ui.persona_id
-        INNER JOIN inscripciones i ON p.id = i.persona_id 
-          AND i.servicio_id = ui.servicio_id 
-          AND i.sucursal_id = ui.sucursal_id 
-          AND i.fecha_inicio = ui.ultima_fecha
+        INNER JOIN inscripciones i ON i.id = ui.ultima_inscripcion_id
         INNER JOIN servicios s ON i.servicio_id = s.id
         INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
         ${whereClause}
@@ -201,34 +207,42 @@ const getMembers = async (
 
     queryParams.push(itemsPerPage, offset);
 
-    console.log("Ejecutando consulta members:", membersQuery);
-    console.log("Parámetros:", queryParams);
-
     const membersResult = await query(membersQuery, queryParams);
     const countResult = await query(countQuery, queryParams.slice(0, -2));
 
     const totalCount = parseInt(countResult.rows[0]?.total_count || 0);
-    console.log("Total de miembros encontrados:", totalCount);
 
-    // Ahora obtener los servicios para cada miembro
-    const membersWithServices = [];
-    
-    for (const member of membersResult.rows) {
-      const servicesQuery = `
+    // Optimización: una sola query para TODOS los servicios de la página
+    const memberKeys = membersResult.rows.map((m) => ({
+      persona_id: m.id,
+      sucursal_id: m.sucursal_id,
+    }));
+
+    let allServices = [];
+
+    if (memberKeys.length > 0) {
+      // Construir array de pares (persona_id, sucursal_id) únicos
+      const uniqueIds = [...new Set(memberKeys.map((m) => m.persona_id))];
+      const placeholders = uniqueIds.map((_, i) => `$${i + 1}`).join(",");
+
+      const allServicesQuery = `
         WITH UltimasInscripciones AS (
           SELECT 
             i.persona_id,
             i.servicio_id,
             i.sucursal_id,
-            MAX(i.fecha_inicio) as ultima_fecha
+            MAX(i.id) as ultima_inscripcion_id
           FROM inscripciones i
           INNER JOIN servicios s ON i.servicio_id = s.id
-          WHERE i.persona_id = $1 AND i.sucursal_id = $2
+          WHERE i.persona_id IN (${placeholders})
           GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
         )
         SELECT 
+          ui.persona_id,
+          ui.sucursal_id,
           s.nombre as servicio_nombre,
           i.ingresos_disponibles,
+          TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') as fecha_inicio,
           TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
           CASE 
             WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
@@ -237,35 +251,42 @@ const getMembers = async (
             ELSE 'inactive'
           END as servicio_status
         FROM UltimasInscripciones ui
-        INNER JOIN inscripciones i ON ui.persona_id = i.persona_id 
-          AND ui.servicio_id = i.servicio_id 
-          AND ui.sucursal_id = i.sucursal_id 
-          AND ui.ultima_fecha = i.fecha_inicio
+        INNER JOIN inscripciones i ON i.id = ui.ultima_inscripcion_id
         INNER JOIN servicios s ON i.servicio_id = s.id
-        ORDER BY s.nombre
+        ORDER BY ui.persona_id, ui.sucursal_id, s.nombre
       `;
-      
-      const servicesResult = await query(servicesQuery, [member.id, member.sucursal_id]);
-      
-      const memberData = {
-        id: member.id.toString(),
-        name: member.name || "",
-        ci: member.ci || "",
-        phone: member.phone || "",
-        birthDate: member.birthdate || "",
-        sucursal: member.sucursal_id ? member.sucursal_id.toString() : "",
-        status: member.member_status || "inactive",
-        registrationDate: member.registrationdate || "",
-        services: servicesResult.rows.map(service => ({
-          name: service.servicio_nombre,
-          expirationDate: service.fecha_vencimiento,
-          status: service.servicio_status,
-          ingresos_disponibles: service.ingresos_disponibles,
-        })),
-      };
-      
-      membersWithServices.push(memberData);
+
+      const servicesResult = await query(allServicesQuery, uniqueIds);
+      allServices = servicesResult.rows;
     }
+
+    const servicesByMember = new Map();
+    allServices.forEach((svc) => {
+      const key = `${svc.persona_id}-${svc.sucursal_id}`;
+      if (!servicesByMember.has(key)) {
+        servicesByMember.set(key, []);
+      }
+      servicesByMember.get(key).push({
+        name: svc.servicio_nombre,
+        startDate: svc.fecha_inicio || "",
+        expirationDate: svc.fecha_vencimiento,
+        status: svc.servicio_status,
+        ingresos_disponibles: svc.ingresos_disponibles,
+      });
+    });
+
+    const membersWithServices = membersResult.rows.map((member) => ({
+      id: member.id.toString(),
+      name: member.name || "",
+      ci: member.ci || "",
+      phone: member.phone || "",
+      birthDate: member.birthdate || "",
+      sucursal: member.sucursal_id ? member.sucursal_id.toString() : "",
+      status: member.member_status || "inactive",
+      registrationDate: member.registrationdate || "",
+      services:
+        servicesByMember.get(`${member.id}-${member.sucursal_id}`) || [],
+    }));
 
     return {
       members: membersWithServices,
@@ -296,7 +317,6 @@ const getAllMembers = async (
     let queryParams = [];
     let paramCount = 0;
 
-    // Filtrar por sucursal según el rol del usuario
     if (userRol === "recepcionista" && userSucursalId) {
       paramCount++;
       whereConditions.push(`i.sucursal_id = $${paramCount}`);
@@ -307,41 +327,57 @@ const getAllMembers = async (
       queryParams.push(parseInt(sucursalFilter));
     }
 
-    // Excluir empleados - solo personas con servicios
     whereConditions.push(
       `p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)`
     );
-
-    // SOLO MOSTRAR PERSONAS ACTIVAS (estado = 0)
     whereConditions.push(`p.estado = 0`);
 
-    // Filtro de búsqueda
     if (searchTerm && searchTerm.trim() !== "") {
       paramCount++;
-      whereConditions.push(
-        `(p.nombres ILIKE $${paramCount} OR p.apellidos ILIKE $${paramCount} OR p.ci ILIKE $${paramCount})`
-      );
-      queryParams.push(`%${searchTerm}%`);
+
+      const normalizedSearch = searchTerm.trim().replace(/\s+/g, " ");
+
+      whereConditions.push(`
+        (
+          unaccent(LOWER(REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g'))) 
+            ILIKE unaccent(LOWER($${paramCount}))
+          
+          OR unaccent(LOWER(REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g'))) 
+            ILIKE unaccent(LOWER($${paramCount}))
+          
+          OR TRIM(p.ci) ILIKE $${paramCount}
+          
+          OR unaccent(LOWER(
+            REGEXP_REPLACE(
+              TRIM(CONCAT(
+                REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g'),
+                ' ',
+                REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g')
+              )),
+              '\\s+', ' ', 'g'
+            )
+          )) ILIKE unaccent(LOWER($${paramCount}))
+          
+          OR unaccent(LOWER(
+            REGEXP_REPLACE(
+              TRIM(CONCAT(
+                REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g'),
+                ' ',
+                REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g')
+              )),
+              '\\s+', ' ', 'g'
+            )
+          )) ILIKE unaccent(LOWER($${paramCount}))
+        )
+      `);
+
+      queryParams.push(`%${normalizedSearch}%`);
     }
 
-    // Filtro por servicio
     if (serviceFilter && serviceFilter !== "all") {
       paramCount++;
       whereConditions.push(`s.nombre = $${paramCount}`);
       queryParams.push(serviceFilter);
-    }
-
-    // Filtro por estado - CORREGIDO para manejar ingresos_disponibles NULL
-    if (statusFilter && statusFilter !== "all") {
-      if (statusFilter === "active") {
-        whereConditions.push(
-          `i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date AND (i.ingresos_disponibles > 0 OR i.ingresos_disponibles IS NULL)`
-        );
-      } else if (statusFilter === "inactive") {
-        whereConditions.push(
-          `(i.fecha_vencimiento < TIMEZONE('America/La_Paz', NOW())::date OR (i.ingresos_disponibles = 0 AND i.ingresos_disponibles IS NOT NULL))`
-        );
-      }
     }
 
     const whereClause =
@@ -349,14 +385,13 @@ const getAllMembers = async (
         ? `WHERE ${whereConditions.join(" AND ")}`
         : "";
 
-    // Subconsulta para obtener la última inscripción por servicio, persona y sucursal
     const queryText = `
       WITH UltimasInscripciones AS (
         SELECT 
           i.persona_id,
           i.servicio_id,
           i.sucursal_id,
-          MAX(i.fecha_inicio) as ultima_fecha
+          MAX(i.id) as ultima_inscripcion_id
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id
         GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
@@ -384,29 +419,27 @@ const getAllMembers = async (
           END as servicio_status
         FROM personas p
         INNER JOIN UltimasInscripciones ui ON p.id = ui.persona_id
-        INNER JOIN inscripciones i ON p.id = i.persona_id 
-          AND i.servicio_id = ui.servicio_id 
-          AND i.sucursal_id = ui.sucursal_id 
-          AND i.fecha_inicio = ui.ultima_fecha
-        INNER JOIN servicios s ON i.servicio_id = s.id AND
+        INNER JOIN inscripciones i ON i.id = ui.ultima_inscripcion_id
+        INNER JOIN servicios s ON i.servicio_id = s.id
         INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
         ${whereClause}
-        ORDER BY ui.persona_id, ui.sucursal_id, ui.servicio_id, ui.ultima_fecha DESC
+        ORDER BY ui.persona_id, ui.sucursal_id, ui.servicio_id, i.id DESC
       )
       SELECT 
         persona_id as id,
         CONCAT(nombres, ' ', apellidos) as name,
         ci,
         telefono as phone,
-        TO_CHAR(fecha_nacimiento, 'YYYY-MM-DD') as birthDate,
+        TO_CHAR(fecha_nacimiento, 'YYYY-MM-DD') as birthdate,
         sucursal_id,
         sucursal_name,
         servicio_id,
         servicio_nombre,
         ingresos_disponibles,
+        TO_CHAR(fecha_inicio, 'YYYY-MM-DD') as fecha_inicio,
         TO_CHAR(fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
         servicio_status,
-        TO_CHAR(fecha_inicio, 'YYYY-MM-DD') as registrationDate,
+        TO_CHAR(fecha_inicio, 'YYYY-MM-DD') as registrationdate,
         CASE 
           WHEN EXISTS (
             SELECT 1 FROM inscripciones i2 
@@ -418,15 +451,11 @@ const getAllMembers = async (
           ELSE 'inactive'
         END as member_status
       FROM ServiciosUnicos
-      ORDER BY nombres, apellidos, servicio_nombre
+      ORDER BY nombres, apellidos, sucursal_id, servicio_nombre
     `;
-
-    console.log("Ejecutando consulta todos los miembros:", queryText);
-    console.log("Parámetros:", queryParams);
 
     const result = await query(queryText, queryParams);
 
-    // Agrupar servicios por persona y sucursal
     const membersMap = new Map();
 
     result.rows.forEach((row) => {
@@ -447,15 +476,14 @@ const getAllMembers = async (
       }
 
       const member = membersMap.get(key);
-
-      // Verificar si el servicio ya existe antes de agregarlo
       const servicioExistente = member.services.find(
-        service => service.name === row.servicio_nombre
+        (service) => service.name === row.servicio_nombre
       );
 
       if (!servicioExistente) {
         member.services.push({
           name: row.servicio_nombre,
+          startDate: row.fecha_inicio || "",
           expirationDate: row.fecha_vencimiento,
           status: row.servicio_status,
           ingresos_disponibles: row.ingresos_disponibles,
@@ -475,7 +503,6 @@ const getAllMembers = async (
 // Editar miembro
 const editMember = async (id, nombres, apellidos, ci, phone) => {
   try {
-    // Verificar si el CI ya existe en otro miembro ACTIVO
     const checkCiQuery = `
       SELECT id, nombres, apellidos, ci, telefono, fecha_nacimiento
       FROM personas WHERE ci = $1 AND id != $2 AND estado = 0
@@ -496,14 +523,6 @@ const editMember = async (id, nombres, apellidos, ci, phone) => {
       RETURNING *
     `;
 
-    console.log("Ejecutando update de miembro:", {
-      id,
-      nombres,
-      apellidos,
-      ci,
-      phone,
-    });
-
     const result = await query(updateQuery, [
       nombres,
       apellidos,
@@ -519,14 +538,68 @@ const editMember = async (id, nombres, apellidos, ci, phone) => {
     return result.rows[0];
   } catch (error) {
     console.error("Error en editMember service:", error);
-
-    // Si ya es un error personalizado, re-lanzarlo
     if (error.message.includes("La persona ya existe")) {
       throw error;
     }
-
     throw new Error(
       `Error al editar miembro en la base de datos: ${error.message}`
+    );
+  }
+};
+
+// ✅ Actualizar fechas de inscripción (inicio y vencimiento)
+const updateInscriptionDates = async (
+  personaId,
+  serviceName,
+  startDate,
+  expirationDate
+) => {
+  try {
+    console.log("updateInscriptionDates - Buscando inscripción:", {
+      personaId,
+      serviceName,
+    });
+
+    const findQuery = `
+      SELECT i.id, i.fecha_inicio, i.fecha_vencimiento
+      FROM inscripciones i
+      INNER JOIN servicios s ON i.servicio_id = s.id
+      WHERE i.persona_id = $1 AND s.nombre = $2
+      ORDER BY i.id DESC
+      LIMIT 1
+    `;
+
+    const findResult = await query(findQuery, [personaId, serviceName]);
+
+    if (findResult.rows.length === 0) {
+      throw new Error(
+        `No se encontró inscripción para la persona ${personaId} con el servicio ${serviceName}`
+      );
+    }
+
+    const inscripcionId = findResult.rows[0].id;
+    console.log("Inscripción encontrada:", findResult.rows[0]);
+
+    const updateQuery = `
+      UPDATE inscripciones
+      SET fecha_inicio = $1::date, fecha_vencimiento = $2::date
+      WHERE id = $3
+      RETURNING id, TO_CHAR(fecha_inicio, 'YYYY-MM-DD') as fecha_inicio, 
+                TO_CHAR(fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento
+    `;
+
+    const result = await query(updateQuery, [
+      startDate,
+      expirationDate,
+      inscripcionId,
+    ]);
+
+    console.log("Inscripción actualizada:", result.rows[0]);
+    return result.rows[0];
+  } catch (error) {
+    console.error("Error en updateInscriptionDates service:", error);
+    throw new Error(
+      `Error al actualizar fechas de inscripción: ${error.message}`
     );
   }
 };
@@ -534,7 +607,6 @@ const editMember = async (id, nombres, apellidos, ci, phone) => {
 // Eliminar miembro
 const deleteMember = async (id) => {
   try {
-    // Verificar si el miembro existe y está activo
     const checkQuery = "SELECT * FROM personas WHERE id = $1 AND estado = 0";
     const checkResult = await query(checkQuery, [id]);
 
@@ -542,7 +614,6 @@ const deleteMember = async (id) => {
       throw new Error("Miembro no encontrado o ya está eliminado");
     }
 
-    // Actualizar el estado a 1 (eliminado) en lugar de borrar
     const result = await query(
       "UPDATE personas SET estado = 1 WHERE id = $1 AND estado = 0 RETURNING *",
       [id]
@@ -565,9 +636,7 @@ const getAvailableServices = async () => {
       WHERE estado = 1 
       ORDER BY nombre
     `;
-
     const result = await query(queryText);
-
     return result.rows.map((row) => row.nombre);
   } catch (error) {
     console.error("Error en getAvailableServices service:", error);
@@ -585,9 +654,7 @@ const getAvailableBranches = async () => {
       WHERE estado = 1 
       ORDER BY nombre
     `;
-
     const result = await query(queryText);
-
     return result.rows.map((row) => ({
       id: row.id.toString(),
       name: row.nombre,
@@ -605,6 +672,7 @@ module.exports = {
   getAllMembers,
   editMember,
   deleteMember,
+  updateInscriptionDates,
   getAvailableServices,
   getAvailableBranches,
 };
