@@ -1,5 +1,8 @@
 const RegisterMemberService = require("../services/RegisterMemberService");
 
+// ============================================
+// SERVICIOS POR SUCURSAL
+// ============================================
 exports.getServicesByBranch = async (req, res) => {
   try {
     const { sucursalId } = req.params;
@@ -11,6 +14,9 @@ exports.getServicesByBranch = async (req, res) => {
   }
 };
 
+// ============================================
+// BUSCAR PERSONAS
+// ============================================
 exports.searchPeople = async (req, res) => {
   try {
     const { q } = req.query;
@@ -25,16 +31,22 @@ exports.searchPeople = async (req, res) => {
   }
 };
 
+// ============================================
+// SUSCRIPCIONES ACTIVAS
+// ============================================
 exports.getActiveSubscriptions = async (req, res) => {
   try {
     const { personaId } = req.params;
     const { sucursalId } = req.query;
-    
+
     if (!sucursalId) {
       return res.status(400).json({ message: "sucursalId es requerido" });
     }
-    
-    const subscriptions = await RegisterMemberService.getActiveSubscriptions(personaId, sucursalId);
+
+    const subscriptions = await RegisterMemberService.getActiveSubscriptions(
+      personaId,
+      sucursalId
+    );
     res.json(subscriptions);
   } catch (error) {
     console.error("Error in getActiveSubscriptions:", error);
@@ -42,6 +54,9 @@ exports.getActiveSubscriptions = async (req, res) => {
   }
 };
 
+// ============================================
+// ESTADO DE CAJA
+// ============================================
 exports.getCashRegisterStatus = async (req, res) => {
   try {
     const { cajaId } = req.params;
@@ -53,6 +68,49 @@ exports.getCashRegisterStatus = async (req, res) => {
   }
 };
 
+// ============================================
+// VALIDAR CUPÓN
+// ============================================
+exports.validateCoupon = async (req, res) => {
+  try {
+    const { codigo, sucursalId } = req.query;
+
+    if (!codigo || !sucursalId) {
+      return res.status(400).json({
+        message: "codigo y sucursalId son requeridos",
+      });
+    }
+
+    const cupon = await RegisterMemberService.validateCoupon(
+      codigo,
+      parseInt(sucursalId)
+    );
+    res.json(cupon);
+  } catch (error) {
+    console.error("Error in validateCoupon:", error);
+    res.status(400).json({ message: error.message });
+  }
+};
+
+// ============================================
+// LISTAR CUPONES DISPONIBLES
+// ============================================
+exports.getAvailableCoupons = async (req, res) => {
+  try {
+    const { sucursalId } = req.params;
+    const cupones = await RegisterMemberService.getAvailableCoupons(
+      parseInt(sucursalId)
+    );
+    res.json(cupones);
+  } catch (error) {
+    console.error("Error in getAvailableCoupons:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ============================================
+// REGISTRAR MIEMBRO
+// ============================================
 exports.registerMember = async (req, res) => {
   try {
     const registrationData = req.body;
@@ -60,19 +118,28 @@ exports.registerMember = async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error("Error in registerMember:", error);
-    
+
     if (error.message === "La persona ya existe") {
-      return res.status(409).json({ 
+      return res.status(409).json({
         message: error.message,
-        existingPerson: error.existingPerson 
+        existingPerson: error.existingPerson,
       });
     }
-    
+
+    if (
+      error.message.includes("Cupón") ||
+      error.message.includes("cupón")
+    ) {
+      return res.status(400).json({ message: error.message });
+    }
+
     res.status(500).json({ message: error.message });
   }
 };
 
-// Obtener pagos pendientes de una persona
+// ============================================
+// PAGOS PENDIENTES
+// ============================================
 exports.getPagosPendientes = async (req, res) => {
   try {
     const { personaId } = req.params;
@@ -84,17 +151,21 @@ exports.getPagosPendientes = async (req, res) => {
   }
 };
 
-// Actualizar pago pendiente
 exports.updatePagoPendiente = async (req, res) => {
   try {
     const { pagoId } = req.params;
     const { montoPagado } = req.body;
-    
+
     if (!montoPagado || montoPagado <= 0) {
-      return res.status(400).json({ message: "Monto pagado debe ser mayor a 0" });
+      return res
+        .status(400)
+        .json({ message: "Monto pagado debe ser mayor a 0" });
     }
-    
-    const result = await RegisterMemberService.updatePagoPendiente(pagoId, montoPagado);
+
+    const result = await RegisterMemberService.updatePagoPendiente(
+      pagoId,
+      montoPagado
+    );
     res.json(result);
   } catch (error) {
     console.error("Error in updatePagoPendiente:", error);
