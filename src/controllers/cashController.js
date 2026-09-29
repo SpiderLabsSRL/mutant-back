@@ -1,5 +1,8 @@
 const cashService = require("../services/cashService");
 
+// ============================================
+// SUCURSALES
+// ============================================
 exports.getBranches = async (req, res) => {
   try {
     const branches = await cashService.getBranches();
@@ -10,6 +13,9 @@ exports.getBranches = async (req, res) => {
   }
 };
 
+// ============================================
+// CAJAS POR SUCURSAL
+// ============================================
 exports.getCashBoxesByBranch = async (req, res) => {
   try {
     const { branchId } = req.params;
@@ -21,6 +27,9 @@ exports.getCashBoxesByBranch = async (req, res) => {
   }
 };
 
+// ============================================
+// ESTADO DE CAJA (monto final)
+// ============================================
 exports.getCashBoxStatus = async (req, res) => {
   try {
     const { cashBoxId } = req.params;
@@ -32,6 +41,9 @@ exports.getCashBoxStatus = async (req, res) => {
   }
 };
 
+// ============================================
+// MOVIMIENTOS POR CAJA (con paginación)
+// ============================================
 exports.getTransactionsByCashBox = async (req, res) => {
   try {
     const { cashBoxId } = req.params;
@@ -54,7 +66,6 @@ exports.getTransactionsByCashBox = async (req, res) => {
       pageSize,
     });
 
-    // Preparar filtros
     const filters = {
       dateFilterType,
       specificDate,
@@ -62,7 +73,6 @@ exports.getTransactionsByCashBox = async (req, res) => {
       endDate,
     };
 
-    // Validar página
     const pageNum = Math.max(1, parseInt(page));
     const pageSizeNum = Math.max(1, Math.min(parseInt(pageSize), 100));
 
@@ -75,7 +85,9 @@ exports.getTransactionsByCashBox = async (req, res) => {
       pageSizeNum
     );
 
-    console.log(`✅ Transacciones obtenidas: ${result.transactions.length} registros de página ${pageNum}`);
+    console.log(
+      `✅ Movimientos obtenidos: ${result.transactions.length} registros de página ${pageNum}`
+    );
 
     res.json({
       transactions: result.transactions,
@@ -87,6 +99,9 @@ exports.getTransactionsByCashBox = async (req, res) => {
   }
 };
 
+// ============================================
+// TOTALES DE MOVIMIENTOS (sin paginación)
+// ============================================
 exports.getTransactionTotals = async (req, res) => {
   try {
     const {
@@ -97,7 +112,7 @@ exports.getTransactionTotals = async (req, res) => {
       endDate,
     } = req.query;
 
-    console.log("📊 Filtros recibidos para totales de transacciones:", {
+    console.log("📊 Filtros recibidos para totales de movimientos:", {
       cashBoxId,
       dateFilterType,
       specificDate,
@@ -105,7 +120,6 @@ exports.getTransactionTotals = async (req, res) => {
       endDate,
     });
 
-    // Preparar filtros
     const filters = {
       dateFilterType,
       specificDate,
@@ -113,26 +127,28 @@ exports.getTransactionTotals = async (req, res) => {
       endDate,
     };
 
-    console.log("📊 Calculando totales de transacciones con filtros:", filters);
-
-    // Llamar al servicio para obtener totales
     const totals = await cashService.getTransactionTotals(cashBoxId, filters);
 
-    console.log("✅ Totales de transacciones calculados:", totals);
+    console.log("✅ Totales de movimientos calculados:", totals);
 
     res.json(totals);
   } catch (error) {
     console.error("❌ Error in getTransactionTotals:", error);
     res.status(500).json({
-      error: error.message || "Error al calcular los totales de transacciones",
+      error: error.message || "Error al calcular los totales de movimientos",
     });
   }
 };
 
+// ============================================
+// MOVIMIENTOS DE LACTOBAR POR SUCURSAL
+// ============================================
 exports.getLactobarTransactions = async (req, res) => {
   try {
     const { branchId } = req.params;
-    const transactions = await cashService.getLactobarTransactionsByBranch(branchId);
+    const transactions = await cashService.getLactobarTransactionsByBranch(
+      branchId
+    );
     res.json(transactions);
   } catch (error) {
     console.error("Error in getLactobarTransactions:", error);
