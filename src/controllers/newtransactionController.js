@@ -1,5 +1,8 @@
 const newtransactionService = require("../services/newtransactionService");
 
+// ============================================
+// GET ALL TRANSACTIONS
+// ============================================
 exports.getTransactions = async (req, res) => {
   try {
     const transactions = await newtransactionService.getTransactions();
@@ -10,19 +13,23 @@ exports.getTransactions = async (req, res) => {
   }
 };
 
+// ============================================
+// GET TRANSACTIONS BY CASH REGISTER AND USER
+// ============================================
 exports.getTransactionsByCashRegisterAndUser = async (req, res) => {
   try {
     const { idCaja } = req.params;
     const { idUsuario } = req.query;
-    
+
     if (!idUsuario) {
       return res.status(400).json({ error: "ID de usuario requerido" });
     }
-    
-    const transactions = await newtransactionService.getTransactionsByCashRegisterAndUser(
-      parseInt(idCaja),
-      parseInt(idUsuario)
-    );
+
+    const transactions =
+      await newtransactionService.getTransactionsByCashRegisterAndUser(
+        parseInt(idCaja),
+        parseInt(idUsuario)
+      );
     res.json(transactions);
   } catch (error) {
     console.error("Error in getTransactionsByCashRegisterAndUser:", error);
@@ -30,22 +37,31 @@ exports.getTransactionsByCashRegisterAndUser = async (req, res) => {
   }
 };
 
+// ============================================
+// CREATE TRANSACTION
+// ============================================
 exports.createTransaction = async (req, res) => {
   try {
     const { tipo, descripcion, monto, caja_id, usuario_id } = req.body;
-    
+
     if (!usuario_id) {
       return res.status(400).json({ error: "ID de usuario requerido" });
     }
-    
+
+    if (!tipo || !["ingreso", "egreso"].includes(tipo)) {
+      return res
+        .status(400)
+        .json({ error: "Tipo inválido. Debe ser 'ingreso' o 'egreso'" });
+    }
+
     const transaction = await newtransactionService.createTransaction({
       tipo,
       descripcion,
       monto: parseFloat(monto),
       idCaja: parseInt(caja_id),
-      idUsuario: parseInt(usuario_id)
+      idUsuario: parseInt(usuario_id),
     });
-    
+
     res.status(201).json(transaction);
   } catch (error) {
     console.error("Error in createTransaction:", error);
@@ -53,10 +69,15 @@ exports.createTransaction = async (req, res) => {
   }
 };
 
+// ============================================
+// GET CASH REGISTER STATUS
+// ============================================
 exports.getCashRegisterStatus = async (req, res) => {
   try {
     const { idCaja } = req.params;
-    const status = await newtransactionService.getCashRegisterStatus(parseInt(idCaja));
+    const status = await newtransactionService.getCashRegisterStatus(
+      parseInt(idCaja)
+    );
     res.json(status);
   } catch (error) {
     console.error("Error in getCashRegisterStatus:", error);
@@ -64,40 +85,51 @@ exports.getCashRegisterStatus = async (req, res) => {
   }
 };
 
+// ============================================
+// GET ASSIGNED CASH REGISTER
+// ============================================
 exports.getAssignedCashRegister = async (req, res) => {
   try {
     const { idUsuario } = req.query;
-    
+
     if (!idUsuario) {
       return res.status(400).json({ error: "ID de usuario requerido" });
     }
-    
-    const idCaja = await newtransactionService.getAssignedCashRegister(parseInt(idUsuario));
+
+    const idCaja = await newtransactionService.getAssignedCashRegister(
+      parseInt(idUsuario)
+    );
     res.json({ idCaja });
   } catch (error) {
     console.error("Error in getAssignedCashRegister:", error);
-    res.status(500).json({ 
+    res.status(500).json({
       error: error.message,
-      details: "El usuario no tiene una caja asignada o ocurrió un error interno"
+      details:
+        "El usuario no tiene una caja asignada o ocurrió un error interno",
     });
   }
 };
 
+// ============================================
+// OPEN CASH REGISTER
+// ============================================
 exports.openCashRegister = async (req, res) => {
   try {
     const { caja_id, monto_inicial, usuario_id, descripcion } = req.body;
-    
+
     if (!caja_id || monto_inicial === undefined || !usuario_id) {
-      return res.status(400).json({ error: "Datos incompletos para abrir la caja" });
+      return res
+        .status(400)
+        .json({ error: "Datos incompletos para abrir la caja" });
     }
-    
+
     const result = await newtransactionService.openCashRegister(
       parseInt(caja_id),
       parseFloat(monto_inicial),
       parseInt(usuario_id),
       descripcion
     );
-    
+
     res.status(201).json(result);
   } catch (error) {
     console.error("Error in openCashRegister:", error);
@@ -105,21 +137,26 @@ exports.openCashRegister = async (req, res) => {
   }
 };
 
+// ============================================
+// CLOSE CASH REGISTER
+// ============================================
 exports.closeCashRegister = async (req, res) => {
   try {
     const { caja_id, monto_final, usuario_id, descripcion } = req.body;
-    
+
     if (!caja_id || monto_final === undefined || !usuario_id) {
-      return res.status(400).json({ error: "Datos incompletos para cerrar la caja" });
+      return res
+        .status(400)
+        .json({ error: "Datos incompletos para cerrar la caja" });
     }
-    
+
     const result = await newtransactionService.closeCashRegister(
       parseInt(caja_id),
       parseFloat(monto_final),
       parseInt(usuario_id),
       descripcion
     );
-    
+
     res.status(200).json(result);
   } catch (error) {
     console.error("Error in closeCashRegister:", error);
