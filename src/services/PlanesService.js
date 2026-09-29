@@ -1,176 +1,201 @@
 // src/services/PlanesService.js
-const { query } = require("../../db");
+const { query, pool } = require("../../db");
+
+// ============================================
+// HELPERS
+// ============================================
+const bufferToDataUrl = (buffer) => {
+  if (!buffer) return null;
+  if (typeof buffer === "string") return buffer;
+  if (Buffer.isBuffer(buffer)) {
+    return `data:image/png;base64,${buffer.toString("base64")}`;
+  }
+  return null;
+};
+
+const DAY_MAP_REVERSE = {
+  1: "monday",
+  2: "tuesday",
+  3: "wednesday",
+  4: "thursday",
+  5: "friday",
+  6: "saturday",
+  7: "sunday",
+};
 
 class PlanesService {
-  // Obtener todos los planes con sus sucursales
+  // ============================================
+  // GET ALL PLANES
+  // ============================================
   async getAllPlanes() {
     try {
-      // Primero obtener todos los servicios (planes)
-      const serviciosQuery = `
+      const result = await query(`
         SELECT 
           s.id,
           s.nombre,
+          s.descripcion,
           s.precio,
-          s.numero_ingresos,
+          s.numero_ingresos AS "numeroIngresos",
           s.estado,
-          s.tipo_duracion,
-          s.cantidad_duracion,
-          s.multisucursal
+          s.tipo_duracion AS "tipoDuracion",
+          s.cantidad_duracion AS "cantidadDuracion",
+          s.multisucursal,
+          COALESCE(
+            (
+              SELECT json_agg(
+                json_build_object(
+                  'id', ss.sucursal_id,
+                  'nombre', suc.nombre,
+                  'disponible', ss.disponible,
+                  'multisucursal', ss.multisucursal
+                ) ORDER BY suc.nombre
+              )
+              FROM servicio_sucursal ss
+              INNER JOIN sucursales suc ON ss.sucursal_id = suc.id
+              WHERE ss.servicio_id = s.id
+                AND suc.estado = 1
+            ),
+            '[]'::json
+          ) AS sucursales,
+          (COUNT(hs.id) > 0) AS "hasTimeRange",
+          MIN(hs.hora_inicio)::text AS "startTime",
+          MAX(hs.hora_fin)::text AS "endTime",
+          (COUNT(DISTINCT hs.dia_semana) > 0) AS "hasSpecificDays",
+          COALESCE(
+            ARRAY_AGG(DISTINCT hs.dia_semana) FILTER (WHERE hs.dia_semana IS NOT NULL),
+            ARRAY[]::int[]
+          ) AS "specificDaysRaw"
         FROM servicios s
-        WHERE s.estado IN (1, 2)
+        LEFT JOIN horarios_servicio hs ON s.id = hs.servicio_id
+        WHERE s.estado IN (0, 1, 2)
+        GROUP BY s.id
         ORDER BY s.nombre
-      `;
+      `);
 
-      const serviciosResult = await query(serviciosQuery);
-      const servicios = serviciosResult.rows;
-
-      // Obtener todas las sucursales relacionadas
-      const sucursalesQuery = `
-        SELECT 
-          ss.servicio_id,
-          ss.sucursal_id,
-          suc.nombre as sucursal_nombre,
-          ss.disponible,
-          ss.multisucursal
-        FROM servicio_sucursal ss
-        INNER JOIN sucursales suc ON ss.sucursal_id = suc.id
-        WHERE ss.servicio_id = ANY($1)
-        AND suc.estado = 1
-        ORDER BY ss.servicio_id, suc.nombre
-      `;
-
-      const servicioIds = servicios.map((s) => s.id);
-      const sucursalesResult = await query(sucursalesQuery, [servicioIds]);
-      const sucursales = sucursalesResult.rows;
-
-      return {
-        servicios: servicios,
-        sucursales: sucursales,
-      };
+      return result.rows.map((row) => {
+        const { specificDaysRaw, ...rest } = row;
+        return {
+          ...rest,
+          specificDays: (specificDaysRaw || [])
+            .map((d) => DAY_MAP_REVERSE[d])
+            .filter(Boolean),
+        };
+      });
     } catch (error) {
       console.error("Error en getAllPlanes:", error);
       throw new Error("Error al obtener los planes desde la base de datos");
     }
   }
 
-  // Obtener solo planes activos (estado = 1)
+  // ============================================
+  // GET ACTIVE PLANES
+  // ============================================
   async getActivePlanes() {
     try {
-      // Primero obtener todos los servicios activos
-      const serviciosQuery = `
+      const result = await query(`
         SELECT 
           s.id,
           s.nombre,
+          s.descripcion,
           s.precio,
-          s.numero_ingresos,
+          s.numero_ingresos AS "numeroIngresos",
           s.estado,
-          s.tipo_duracion,
-          s.cantidad_duracion,
-          s.multisucursal
+          s.tipo_duracion AS "tipoDuracion",
+          s.cantidad_duracion AS "cantidadDuracion",
+          s.multisucursal,
+          COALESCE(
+            (
+              SELECT json_agg(
+                json_build_object(
+                  'id', ss.sucursal_id,
+                  'nombre', suc.nombre,
+                  'disponible', ss.disponible,
+                  'multisucursal', ss.multisucursal
+                ) ORDER BY suc.nombre
+              )
+              FROM servicio_sucursal ss
+              INNER JOIN sucursales suc ON ss.sucursal_id = suc.id
+              WHERE ss.servicio_id = s.id
+                AND suc.estado = 1
+                AND ss.disponible = TRUE
+            ),
+            '[]'::json
+          ) AS sucursales,
+          (COUNT(hs.id) > 0) AS "hasTimeRange",
+          MIN(hs.hora_inicio)::text AS "startTime",
+          MAX(hs.hora_fin)::text AS "endTime",
+          (COUNT(DISTINCT hs.dia_semana) > 0) AS "hasSpecificDays",
+          COALESCE(
+            ARRAY_AGG(DISTINCT hs.dia_semana) FILTER (WHERE hs.dia_semana IS NOT NULL),
+            ARRAY[]::int[]
+          ) AS "specificDaysRaw"
         FROM servicios s
+        LEFT JOIN horarios_servicio hs ON s.id = hs.servicio_id
         WHERE s.estado = 1
+        GROUP BY s.id
         ORDER BY s.nombre
-      `;
+      `);
 
-      const serviciosResult = await query(serviciosQuery);
-      const servicios = serviciosResult.rows;
-
-      // Obtener todas las sucursales relacionadas
-      const sucursalesQuery = `
-        SELECT 
-          ss.servicio_id,
-          ss.sucursal_id,
-          suc.nombre as sucursal_nombre,
-          ss.disponible,
-          ss.multisucursal
-        FROM servicio_sucursal ss
-        INNER JOIN sucursales suc ON ss.sucursal_id = suc.id
-        WHERE ss.servicio_id = ANY($1)
-        AND suc.estado = 1
-        AND ss.disponible = true
-        ORDER BY ss.servicio_id, suc.nombre
-      `;
-
-      const servicioIds = servicios.map((s) => s.id);
-      const sucursalesResult = await query(sucursalesQuery, [servicioIds]);
-      const sucursales = sucursalesResult.rows;
-
-      return {
-        servicios: servicios,
-        sucursales: sucursales,
-      };
+      return result.rows.map((row) => {
+        const { specificDaysRaw, ...rest } = row;
+        return {
+          ...rest,
+          specificDays: (specificDaysRaw || [])
+            .map((d) => DAY_MAP_REVERSE[d])
+            .filter(Boolean),
+        };
+      });
     } catch (error) {
       console.error("Error en getActivePlanes:", error);
       throw new Error(
-        "Error al obtener los planes activos desde la base de datos",
+        "Error al obtener los planes activos desde la base de datos"
       );
     }
   }
 
-  // Crear un nuevo plan
+  // ============================================
+  // CREATE PLAN
+  // ============================================
   async createPlan(planData) {
-    const client = await query.getClient();
+    const client = await pool.connect();
 
     try {
       await client.query("BEGIN");
 
-      // Insertar el servicio principal
-      const insertServicioQuery = `
-        INSERT INTO servicios (
-          nombre, 
-          precio, 
-          numero_ingresos, 
-          estado, 
-          tipo_duracion, 
-          cantidad_duracion, 
-          multisucursal
-        ) VALUES ($1, $2, $3, $4, $5, $6, $7)
-        RETURNING *
-      `;
-
-      const servicioValues = [
-        planData.nombre,
-        planData.precio.toString(),
-        planData.numeroIngresos,
-        1, // estado activo por defecto
-        planData.tipoDuracion,
-        planData.cantidadDuracion,
-        planData.multisucursal,
-      ];
-
       const servicioResult = await client.query(
-        insertServicioQuery,
-        servicioValues,
+        `
+        INSERT INTO servicios (
+          nombre, descripcion, precio, numero_ingresos, estado,
+          tipo_duracion, cantidad_duracion, multisucursal
+        ) VALUES ($1, $2, $3, $4, 1, $5, $6, $7)
+        RETURNING id, nombre
+        `,
+        [
+          planData.nombre,
+          planData.descripcion || null,
+          planData.precio,
+          planData.numeroIngresos || null,
+          planData.tipoDuracion,
+          planData.cantidadDuracion,
+          planData.multisucursal || false,
+        ]
       );
+
       const newServicio = servicioResult.rows[0];
 
-      // Insertar las sucursales relacionadas
       if (planData.sucursalesIds && planData.sucursalesIds.length > 0) {
-        const insertSucursalesQuery = `
-          INSERT INTO servicio_sucursal (servicio_id, sucursal_id, multisucursal, disponible)
-          VALUES ${planData.sucursalesIds
-            .map(
-              (_, i) =>
-                `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}, $${i * 4 + 4})`,
-            )
-            .join(", ")}
-        `;
-
-        const sucursalesValues = [];
-        planData.sucursalesIds.forEach((sucursalId) => {
-          sucursalesValues.push(
-            newServicio.id,
-            sucursalId,
-            planData.multisucursal,
-            true, // disponible por defecto
+        for (const sucursalId of planData.sucursalesIds) {
+          await client.query(
+            `
+            INSERT INTO servicio_sucursal (servicio_id, sucursal_id, multisucursal, disponible)
+            VALUES ($1, $2, $3, TRUE)
+            `,
+            [newServicio.id, sucursalId, planData.multisucursal || false]
           );
-        });
-
-        await client.query(insertSucursalesQuery, sucursalesValues);
+        }
       }
 
       await client.query("COMMIT");
-
       return newServicio;
     } catch (error) {
       await client.query("ROLLBACK");
@@ -181,98 +206,38 @@ class PlanesService {
     }
   }
 
-  // Actualizar un plan
+  // ============================================
+  // UPDATE PLAN
+  // ============================================
   async updatePlan(id, planData) {
-    const client = await query.getClient();
-
     try {
-      await client.query("BEGIN");
-
-      // Actualizar el servicio principal
-      const updateServicioQuery = `
+      const result = await query(
+        `
         UPDATE servicios 
         SET 
           nombre = $1,
-          precio = $2,
-          numero_ingresos = $3,
-          tipo_duracion = $4,
-          cantidad_duracion = $5,
-          multisucursal = $6,
-          estado = $7
-        WHERE id = $8
-        RETURNING *
-      `;
-
-      const servicioValues = [
-        planData.nombre,
-        planData.precio.toString(),
-        planData.numeroIngresos,
-        planData.tipoDuracion,
-        planData.cantidadDuracion,
-        planData.multisucursal,
-        planData.estado || 1,
-        id,
-      ];
-
-      const servicioResult = await client.query(
-        updateServicioQuery,
-        servicioValues,
+          descripcion = $2,
+          precio = $3,
+          numero_ingresos = $4,
+          tipo_duracion = $5,
+          cantidad_duracion = $6,
+          multisucursal = $7,
+          estado = $8
+        WHERE id = $9
+        RETURNING id, nombre
+        `,
+        [
+          planData.nombre,
+          planData.descripcion || null,
+          planData.precio,
+          planData.numeroIngresos || null,
+          planData.tipoDuracion,
+          planData.cantidadDuracion,
+          planData.multisucursal || false,
+          planData.estado || 1,
+          id,
+        ]
       );
-
-      if (servicioResult.rowCount === 0) {
-        throw new Error("Plan no encontrado");
-      }
-
-      const updatedServicio = servicioResult.rows[0];
-
-      await client.query("COMMIT");
-
-      return updatedServicio;
-    } catch (error) {
-      await client.query("ROLLBACK");
-      console.error("Error en updatePlan:", error);
-      throw new Error("Error al actualizar el plan en la base de datos");
-    } finally {
-      client.release();
-    }
-  }
-
-  // Eliminar un plan (cambiar estado a 2 = eliminado)
-  async deletePlan(id) {
-    try {
-      const deleteQuery = `
-        UPDATE servicios 
-        SET estado = 2 
-        WHERE id = $1
-      `;
-
-      const result = await query(deleteQuery, [id]);
-
-      if (result.rowCount === 0) {
-        throw new Error("Plan no encontrado");
-      }
-
-      return { success: true };
-    } catch (error) {
-      console.error("Error en deletePlan:", error);
-      throw new Error("Error al eliminar el plan en la base de datos");
-    }
-  }
-
-  // Cambiar estado de un plan (activar/desactivar)
-  async togglePlanStatus(id) {
-    try {
-      const toggleQuery = `
-        UPDATE servicios 
-        SET estado = CASE 
-          WHEN estado = 1 THEN 0 
-          ELSE 1 
-        END
-        WHERE id = $1
-        RETURNING *
-      `;
-
-      const result = await query(toggleQuery, [id]);
 
       if (result.rowCount === 0) {
         throw new Error("Plan no encontrado");
@@ -280,81 +245,106 @@ class PlanesService {
 
       return result.rows[0];
     } catch (error) {
-      console.error("Error en togglePlanStatus:", error);
-      throw new Error(
-        "Error al cambiar el estado del plan en la base de datos",
-      );
+      console.error("Error en updatePlan:", error);
+      throw new Error("Error al actualizar el plan en la base de datos");
     }
   }
 
-  // Obtener tipos de duración disponibles
+  // ============================================
+  // DELETE PLAN (soft)
+  // ============================================
+  async deletePlan(id) {
+    const result = await query(
+      `UPDATE servicios SET estado = 2 WHERE id = $1`,
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      throw new Error("Plan no encontrado");
+    }
+
+    return { success: true };
+  }
+
+  // ============================================
+  // TOGGLE STATUS
+  // ============================================
+  async togglePlanStatus(id) {
+    const result = await query(
+      `
+      UPDATE servicios 
+      SET estado = CASE 
+        WHEN estado = 1 THEN 0 
+        ELSE 1 
+      END
+      WHERE id = $1
+      RETURNING id, nombre, estado
+      `,
+      [id]
+    );
+
+    if (result.rowCount === 0) {
+      throw new Error("Plan no encontrado");
+    }
+
+    return result.rows[0];
+  }
+
+  // ============================================
+  // TIPOS DURACIÓN
+  // ============================================
   async getTiposDuracion() {
-    try {
-      const tiposQuery = `
-        SELECT DISTINCT tipo_duracion 
-        FROM servicios 
-        WHERE estado = 1 
-        ORDER BY tipo_duracion
-      `;
-
-      const result = await query(tiposQuery);
-      return result.rows.map((row) => row.tipo_duracion);
-    } catch (error) {
-      console.error("Error en getTiposDuracion:", error);
-      throw new Error(
-        "Error al obtener los tipos de duración desde la base de datos",
-      );
-    }
+    const result = await query(`
+      SELECT DISTINCT tipo_duracion 
+      FROM servicios 
+      WHERE estado = 1 
+      ORDER BY tipo_duracion
+    `);
+    return result.rows.map((row) => row.tipo_duracion);
   }
 
-  // Obtener sucursales de un plan específico
+  // ============================================
+  // SUCURSALES POR PLAN
+  // ============================================
   async getSucursalesByPlan(planId) {
-    try {
-      const sucursalesQuery = `
-        SELECT 
-          ss.servicio_id,
-          ss.sucursal_id,
-          suc.nombre as sucursal_nombre,
-          ss.disponible,
-          ss.multisucursal
-        FROM servicio_sucursal ss
-        INNER JOIN sucursales suc ON ss.sucursal_id = suc.id
-        WHERE ss.servicio_id = $1
+    const result = await query(
+      `
+      SELECT 
+        ss.servicio_id,
+        ss.sucursal_id,
+        suc.nombre AS sucursal_nombre,
+        ss.disponible,
+        ss.multisucursal
+      FROM servicio_sucursal ss
+      INNER JOIN sucursales suc ON ss.sucursal_id = suc.id
+      WHERE ss.servicio_id = $1
         AND suc.estado = 1
-        ORDER BY suc.nombre
-      `;
-
-      const result = await query(sucursalesQuery, [planId]);
-      return result.rows;
-    } catch (error) {
-      console.error("Error en getSucursalesByPlan:", error);
-      throw new Error(
-        "Error al obtener las sucursales del plan desde la base de datos",
-      );
-    }
+      ORDER BY suc.nombre
+      `,
+      [planId]
+    );
+    return result.rows;
   }
 
-  // Actualizar sucursales de un plan
+  // ============================================
+  // UPDATE SUCURSALES
+  // ============================================
   async updatePlanSucursales(planId, sucursalesIds) {
-    const client = await query.getClient();
+    const client = await pool.connect();
 
     try {
       await client.query("BEGIN");
 
-      // Primero eliminar todas las sucursales existentes
-      const deleteQuery = `
-        DELETE FROM servicio_sucursal 
-        WHERE servicio_id = $1
-      `;
-      await client.query(deleteQuery, [planId]);
+      await client.query(
+        `DELETE FROM servicio_sucursal WHERE servicio_id = $1`,
+        [planId]
+      );
 
-      // Luego insertar las nuevas sucursales
       if (sucursalesIds && sucursalesIds.length > 0) {
-        // Obtener información del servicio para el campo multisucursal
-        const servicioQuery = `
-          SELECT multisucursal FROM servicios WHERE id = $1
-        `;
-        const servicioResult = await client.query(servicioQuery, [planId]);
+        const servicioResult = await client.query(
+          `SELECT multisucursal FROM servicios WHERE id = $1`,
+          [planId]
+        );
 
         if (servicioResult.rowCount === 0) {
           throw new Error("Plan no encontrado");
@@ -362,39 +352,111 @@ class PlanesService {
 
         const { multisucursal } = servicioResult.rows[0];
 
-        const insertQuery = `
-          INSERT INTO servicio_sucursal (servicio_id, sucursal_id, multisucursal, disponible)
-          VALUES ${sucursalesIds
-            .map(
-              (_, i) =>
-                `($${i * 4 + 1}, $${i * 4 + 2}, $${i * 4 + 3}, $${i * 4 + 4})`,
-            )
-            .join(", ")}
-        `;
-
-        const values = [];
-        sucursalesIds.forEach((sucursalId) => {
-          values.push(planId, sucursalId, multisucursal, true);
-        });
-
-        await client.query(insertQuery, values);
+        for (const sucursalId of sucursalesIds) {
+          await client.query(
+            `
+            INSERT INTO servicio_sucursal (servicio_id, sucursal_id, multisucursal, disponible)
+            VALUES ($1, $2, $3, TRUE)
+            `,
+            [planId, sucursalId, multisucursal]
+          );
+        }
       }
 
       await client.query("COMMIT");
-
-      return {
-        success: true,
-        updatedCount: sucursalesIds?.length || 0,
-      };
+      return { success: true, updatedCount: sucursalesIds?.length || 0 };
     } catch (error) {
       await client.query("ROLLBACK");
       console.error("Error en updatePlanSucursales:", error);
-      throw new Error(
-        "Error al actualizar las sucursales del plan en la base de datos",
-      );
+      throw new Error("Error al actualizar las sucursales del plan");
     } finally {
       client.release();
     }
+  }
+
+  // ============================================
+  // TIENDA: Productos landing
+  // ============================================
+  async getProductosLanding() {
+    const result = await query(`
+      SELECT 
+        p.id,
+        p.nombre,
+        p.descripcion,
+        p.codigo,
+        p.precio_venta AS precio,
+        p.imagen,
+        p.landing,
+        p.estado,
+        COALESCE(
+          SUM(ps.stock) FILTER (WHERE ps.stock IS NOT NULL),
+          0
+        ) AS stock_total
+      FROM productos p
+      LEFT JOIN producto_sucursal ps ON p.id = ps.producto_id
+      WHERE p.estado = 1
+        AND p.landing = TRUE
+      GROUP BY p.id
+      ORDER BY p.nombre
+    `);
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      nombre: row.nombre,
+      descripcion: row.descripcion || "",
+      codigo: row.codigo,
+      precio: parseFloat(row.precio) || 0,
+      imagen: bufferToDataUrl(row.imagen),
+      landing: row.landing,
+      stock: parseInt(row.stock_total) || 0,
+      categoria: "General",
+      destacado: false,
+    }));
+  }
+
+  // ============================================
+  // TIENDA: Producto por ID
+  // ============================================
+  async getProductoById(id) {
+    const result = await query(
+      `
+      SELECT 
+        p.id,
+        p.nombre,
+        p.descripcion,
+        p.codigo,
+        p.precio_venta AS precio,
+        p.imagen,
+        p.landing,
+        p.estado,
+        COALESCE(
+          SUM(ps.stock) FILTER (WHERE ps.stock IS NOT NULL),
+          0
+        ) AS stock_total
+      FROM productos p
+      LEFT JOIN producto_sucursal ps ON p.id = ps.producto_id
+      WHERE p.id = $1
+        AND p.estado = 1
+      GROUP BY p.id
+      `,
+      [id]
+    );
+
+    if (result.rows.length === 0) return null;
+
+    const row = result.rows[0];
+    return {
+      id: row.id,
+      nombre: row.nombre,
+      descripcion: row.descripcion || "",
+      codigo: row.codigo,
+      precio: parseFloat(row.precio) || 0,
+      imagen: bufferToDataUrl(row.imagen),
+      landing: row.landing,
+      stock: parseInt(row.stock_total) || 0,
+      categoria: "General",
+      destacado: false,
+    };
   }
 }
 

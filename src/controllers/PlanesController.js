@@ -2,7 +2,10 @@
 const planesService = require("../services/PlanesService");
 
 class PlanesController {
-  // Obtener todos los planes con sus sucursales
+  // ============================================
+  // PLANES
+  // ============================================
+
   async getPlanes(req, res) {
     try {
       const planes = await planesService.getAllPlanes();
@@ -15,7 +18,6 @@ class PlanesController {
     }
   }
 
-  // Obtener solo planes activos (estado = 1)
   async getPlanesActivos(req, res) {
     try {
       const planes = await planesService.getActivePlanes();
@@ -28,7 +30,6 @@ class PlanesController {
     }
   }
 
-  // Crear un nuevo plan
   async createPlan(req, res) {
     try {
       const planData = req.body;
@@ -42,7 +43,6 @@ class PlanesController {
     }
   }
 
-  // Actualizar un plan
   async updatePlan(req, res) {
     try {
       const { id } = req.params;
@@ -57,7 +57,6 @@ class PlanesController {
     }
   }
 
-  // Eliminar un plan
   async deletePlan(req, res) {
     try {
       const { id } = req.params;
@@ -71,7 +70,6 @@ class PlanesController {
     }
   }
 
-  // Cambiar estado de un plan (activar/desactivar)
   async togglePlanStatus(req, res) {
     try {
       const { id } = req.params;
@@ -85,7 +83,6 @@ class PlanesController {
     }
   }
 
-  // Obtener tipos de duración disponibles
   async getTiposDuracion(req, res) {
     try {
       const tipos = await planesService.getTiposDuracion();
@@ -98,7 +95,6 @@ class PlanesController {
     }
   }
 
-  // Obtener sucursales de un plan específico
   async getSucursalesByPlan(req, res) {
     try {
       const { id } = req.params;
@@ -112,20 +108,51 @@ class PlanesController {
     }
   }
 
-  // Actualizar sucursales de un plan
   async updatePlanSucursales(req, res) {
     try {
       const { id } = req.params;
       const { sucursalesIds } = req.body;
       const result = await planesService.updatePlanSucursales(
         id,
-        sucursalesIds,
+        sucursalesIds
       );
       res.json(result);
     } catch (error) {
       console.error("Error en updatePlanSucursales:", error);
       res.status(400).json({
         error: error.message || "Error al actualizar las sucursales del plan",
+      });
+    }
+  }
+
+  // ============================================
+  // TIENDA (Productos con landing=true)
+  // ============================================
+
+  async getProductosLanding(req, res) {
+    try {
+      const productos = await planesService.getProductosLanding();
+      res.json(productos);
+    } catch (error) {
+      console.error("Error en getProductosLanding:", error);
+      res.status(500).json({
+        error: error.message || "Error al obtener productos de la tienda",
+      });
+    }
+  }
+
+  async getProductoById(req, res) {
+    try {
+      const { id } = req.params;
+      const producto = await planesService.getProductoById(id);
+      if (!producto) {
+        return res.status(404).json({ error: "Producto no encontrado" });
+      }
+      res.json(producto);
+    } catch (error) {
+      console.error("Error en getProductoById:", error);
+      res.status(500).json({
+        error: error.message || "Error al obtener el producto",
       });
     }
   }
