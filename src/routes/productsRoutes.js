@@ -9,6 +9,7 @@ router.get("/products/:id", productsController.getProductById);
 router.put("/products/:id", productsController.updateProduct);
 router.delete("/products/:id", productsController.deleteProduct);
 router.patch("/products/:id/update-status", productsController.toggleProductStatus);
+router.patch("/products/:id/toggle-landing", productsController.toggleProductLanding);
 router.get("/products/:id/stock", productsController.getProductStock);
 router.post("/products/:id/add-stock", productsController.addStock);
 
