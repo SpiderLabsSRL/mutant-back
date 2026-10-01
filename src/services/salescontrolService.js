@@ -7,7 +7,6 @@ const { query } = require("../../db");
 
 /**
  * Regex flexible para extraer efectivo de detalle_pago
- * Acepta: "Efectivo: 100", "Efectivo: Bs. 100", "efectivo=100.50", "Efectivo Bs 100,50"
  */
 const EFECTIVO_REGEX =
   "(?:efectivo|Efectivo)\\s*[:=]?\\s*(?:Bs\\.?)?\\s*([0-9]+(?:[.,][0-9]+)?)";
@@ -18,83 +17,164 @@ const EFECTIVO_REGEX =
 const QR_REGEX =
   "(?:QR|qr|Q\\.R\\.)\\s*[:=]?\\s*(?:Bs\\.?)?\\s*([0-9]+(?:[.,][0-9]+)?)";
 
+/**
+ * ✅ Helper para comparar fechas respetando zona horaria La Paz
+ */
+const LA_PAZ_DATE = (alias) =>
+  `(${alias}.fecha AT TIME ZONE 'America/La_Paz')::date`;
+
 // ============================================
-// GET SALES (con paginación)
+// HELPER: Construye filtros de fecha (compartido por getSales y getTotals)
+// ============================================
+const buildDateFilters = async (
+  whereConditions,
+  params,
+  paramCount,
+  tableAlias,
+  filters,
+  hoyLaPaz
+) => {
+  let newParamCount = paramCount;
+  const col = LA_PAZ_DATE(tableAlias);
+
+  if (filters.dateFilterType === "specific" && filters.specificDate) {
+    whereConditions.push(`${col} = $${newParamCount}`);
+    params.push(filters.specificDate);
+    newParamCount++;
+  } else if (
+    filters.dateFilterType === "range" &&
+    filters.startDate &&
+    filters.endDate
+  ) {
+    whereConditions.push(
+      `${col} BETWEEN $${newParamCount} AND $${newParamCount + 1}`
+    );
+    params.push(filters.startDate, filters.endDate);
+    newParamCount += 2;
+  } else if (filters.dateFilterType === "today") {
+    whereConditions.push(`${col} = $${newParamCount}`);
+    params.push(hoyLaPaz);
+    newParamCount++;
+  } else if (filters.dateFilterType === "yesterday") {
+    const ayerResult = await query(
+      "SELECT ($1::date - INTERVAL '1 day')::date as ayer",
+      [hoyLaPaz]
+    );
+    const ayerLaPaz = ayerResult.rows[0].ayer;
+    whereConditions.push(`${col} = $${newParamCount}`);
+    params.push(ayerLaPaz);
+    newParamCount++;
+  } else if (filters.dateFilterType === "thisWeek") {
+    const thisWeekResult = await query(
+      `SELECT 
+        date_trunc('week', $1::date)::date as inicio_semana,
+        (date_trunc('week', $1::date) + INTERVAL '6 days')::date as fin_semana`,
+      [hoyLaPaz]
+    );
+    const { inicio_semana, fin_semana } = thisWeekResult.rows[0];
+    whereConditions.push(`${col} >= $${newParamCount}`);
+    params.push(inicio_semana);
+    newParamCount++;
+    whereConditions.push(`${col} <= $${newParamCount}`);
+    params.push(fin_semana);
+    newParamCount++;
+  } else if (filters.dateFilterType === "lastWeek") {
+    const lastWeekResult = await query(
+      `SELECT 
+        (date_trunc('week', $1::date) - INTERVAL '7 days')::date as inicio_semana_pasada,
+        (date_trunc('week', $1::date) - INTERVAL '1 day')::date as fin_semana_pasada`,
+      [hoyLaPaz]
+    );
+    const { inicio_semana_pasada, fin_semana_pasada } =
+      lastWeekResult.rows[0];
+    whereConditions.push(`${col} >= $${newParamCount}`);
+    params.push(inicio_semana_pasada);
+    newParamCount++;
+    whereConditions.push(`${col} <= $${newParamCount}`);
+    params.push(fin_semana_pasada);
+    newParamCount++;
+  } else if (filters.dateFilterType === "thisMonth") {
+    const thisMonthResult = await query(
+      `SELECT 
+        date_trunc('month', $1::date)::date as inicio_mes,
+        (date_trunc('month', $1::date) + INTERVAL '1 month - 1 day')::date as fin_mes`,
+      [hoyLaPaz]
+    );
+    const { inicio_mes, fin_mes } = thisMonthResult.rows[0];
+    whereConditions.push(`${col} >= $${newParamCount}`);
+    params.push(inicio_mes);
+    newParamCount++;
+    whereConditions.push(`${col} <= $${newParamCount}`);
+    params.push(fin_mes);
+    newParamCount++;
+  } else if (filters.dateFilterType === "lastMonth") {
+    const lastMonthResult = await query(
+      `SELECT 
+        date_trunc('month', $1::date - INTERVAL '1 month')::date as inicio_mes_pasado,
+        (date_trunc('month', $1::date) - INTERVAL '1 day')::date as fin_mes_pasado`,
+      [hoyLaPaz]
+    );
+    const { inicio_mes_pasado, fin_mes_pasado } = lastMonthResult.rows[0];
+    whereConditions.push(`${col} >= $${newParamCount}`);
+    params.push(inicio_mes_pasado);
+    newParamCount++;
+    whereConditions.push(`${col} <= $${newParamCount}`);
+    params.push(fin_mes_pasado);
+    newParamCount++;
+  }
+  // "all" → sin filtro de fecha
+
+  return newParamCount;
+};
+
+// ============================================
+// GET SALES
 // ============================================
 const getSales = async (filters = {}, page = 1, pageSize = 20) => {
   try {
-    console.log("🔍 Filtros recibidos en sales service:", filters);
-    console.log("📄 Paginación:", { page, pageSize });
-
-    // Obtener la fecha actual en La Paz
     const todayResult = await query(
       "SELECT (NOW() AT TIME ZONE 'America/La_Paz')::date as hoy_la_paz"
     );
     const hoyLaPaz = todayResult.rows[0].hoy_la_paz;
-    console.log(`📅 Fecha actual en La Paz: ${hoyLaPaz}`);
 
     const offset = (page - 1) * pageSize;
 
-    // Preparar condiciones WHERE para productos
     let whereConditionsProductos = [];
     let paramsProductos = [];
     let paramCountProductos = 1;
 
-    // Preparar condiciones WHERE para servicios
     let whereConditionsServicios = [];
     let paramsServicios = [];
     let paramCountServicios = 1;
 
-    // Condición base para ambas consultas
     const baseConditionProductos = "vp.subtotal > 0";
     const baseConditionServicios = "vs.subtotal > 0";
 
-    // Filtro por sucursal - PRODUCTOS
-    if (filters.sucursal && filters.sucursal !== "all") {
+    // Sucursal
+    if (filters.sucursal) {
       whereConditionsProductos.push(`vp.sucursal_id = $${paramCountProductos}`);
       paramsProductos.push(filters.sucursal);
       paramCountProductos++;
-    }
 
-    // Filtro por sucursal - SERVICIOS
-    if (filters.sucursal && filters.sucursal !== "all") {
       whereConditionsServicios.push(`vs.sucursal_id = $${paramCountServicios}`);
       paramsServicios.push(filters.sucursal);
       paramCountServicios++;
     }
 
-    // Filtro por empleado - PRODUCTOS
+    // Empleado
     if (filters.empleadoId) {
-      console.log(`🔄 Filtro por empleadoId: ${filters.empleadoId}`);
-
       const usuarioResult = await query(
         "SELECT empleado_id FROM usuarios WHERE id = $1",
         [filters.empleadoId]
       );
-
       if (usuarioResult.rows.length > 0) {
         const empleadoIdReal = usuarioResult.rows[0].empleado_id;
-        console.log(
-          `🔍 usuario_id ${filters.empleadoId} → empleado_id ${empleadoIdReal}`
-        );
-
         whereConditionsProductos.push(
           `vp.empleado_id = $${paramCountProductos}`
         );
         paramsProductos.push(empleadoIdReal);
         paramCountProductos++;
-      }
-    }
 
-    // Filtro por empleado - SERVICIOS
-    if (filters.empleadoId) {
-      const usuarioResult = await query(
-        "SELECT empleado_id FROM usuarios WHERE id = $1",
-        [filters.empleadoId]
-      );
-
-      if (usuarioResult.rows.length > 0) {
-        const empleadoIdReal = usuarioResult.rows[0].empleado_id;
         whereConditionsServicios.push(
           `vs.empleado_id = $${paramCountServicios}`
         );
@@ -103,158 +183,25 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       }
     }
 
-    // Función para agregar filtros de fecha
-    const addDateFilters = async (
-      whereConditions,
-      params,
-      paramCount,
-      tableAlias
-    ) => {
-      let newParamCount = paramCount;
-
-      if (filters.dateFilterType === "specific" && filters.specificDate) {
-        console.log(
-          `📅 [Service] Usando fecha específica: ${filters.specificDate}`
-        );
-        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
-        params.push(filters.specificDate);
-        newParamCount++;
-      } else if (
-        filters.dateFilterType === "range" &&
-        filters.startDate &&
-        filters.endDate
-      ) {
-        console.log(
-          `📅 [Service] Usando rango: ${filters.startDate} - ${filters.endDate}`
-        );
-        whereConditions.push(
-          `DATE(${tableAlias}.fecha) BETWEEN $${newParamCount} AND $${newParamCount + 1}`
-        );
-        params.push(filters.startDate, filters.endDate);
-        newParamCount += 2;
-      } else if (filters.dateFilterType === "today") {
-        console.log(`📅 [Service] Usando HOY en La Paz: ${hoyLaPaz}`);
-        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
-        params.push(hoyLaPaz);
-        newParamCount++;
-      } else if (filters.dateFilterType === "yesterday") {
-        const ayerResult = await query(
-          "SELECT ($1::date - INTERVAL '1 day')::date as ayer",
-          [hoyLaPaz]
-        );
-        const ayerLaPaz = ayerResult.rows[0].ayer;
-        console.log(`📅 [Service] Usando AYER en La Paz: ${ayerLaPaz}`);
-        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
-        params.push(ayerLaPaz);
-        newParamCount++;
-      } else if (filters.dateFilterType === "thisWeek") {
-        const thisWeekResult = await query(
-          `
-          SELECT 
-            date_trunc('week', $1::date)::date as inicio_semana,
-            (date_trunc('week', $1::date) + INTERVAL '6 days')::date as fin_semana
-        `,
-          [hoyLaPaz]
-        );
-
-        const { inicio_semana, fin_semana } = thisWeekResult.rows[0];
-        console.log(
-          `📅 [Service] Esta semana: ${inicio_semana} - ${fin_semana}`
-        );
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
-        params.push(inicio_semana);
-        newParamCount++;
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount}`);
-        params.push(fin_semana);
-        newParamCount++;
-      } else if (filters.dateFilterType === "lastWeek") {
-        const lastWeekResult = await query(
-          `
-          SELECT 
-            (date_trunc('week', $1::date) - INTERVAL '7 days')::date as inicio_semana_pasada,
-            (date_trunc('week', $1::date) - INTERVAL '1 day')::date as fin_semana_pasada
-        `,
-          [hoyLaPaz]
-        );
-
-        const { inicio_semana_pasada, fin_semana_pasada } =
-          lastWeekResult.rows[0];
-        console.log(
-          `📅 [Service] Semana pasada: ${inicio_semana_pasada} - ${fin_semana_pasada}`
-        );
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
-        params.push(inicio_semana_pasada);
-        newParamCount++;
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount}`);
-        params.push(fin_semana_pasada);
-        newParamCount++;
-      } else if (filters.dateFilterType === "thisMonth") {
-        const thisMonthResult = await query(
-          `
-          SELECT 
-            date_trunc('month', $1::date)::date as inicio_mes,
-            (date_trunc('month', $1::date) + INTERVAL '1 month - 1 day')::date as fin_mes
-        `,
-          [hoyLaPaz]
-        );
-
-        const { inicio_mes, fin_mes } = thisMonthResult.rows[0];
-        console.log(`📅 [Service] Este mes: ${inicio_mes} - ${fin_mes}`);
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
-        params.push(inicio_mes);
-        newParamCount++;
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount}`);
-        params.push(fin_mes);
-        newParamCount++;
-      } else if (filters.dateFilterType === "lastMonth") {
-        const lastMonthResult = await query(
-          `
-          SELECT 
-            date_trunc('month', $1::date - INTERVAL '1 month')::date as inicio_mes_pasado,
-            (date_trunc('month', $1::date) - INTERVAL '1 day')::date as fin_mes_pasado
-        `,
-          [hoyLaPaz]
-        );
-
-        const { inicio_mes_pasado, fin_mes_pasado } = lastMonthResult.rows[0];
-        console.log(
-          `📅 [Service] Mes pasado: ${inicio_mes_pasado} - ${fin_mes_pasado}`
-        );
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
-        params.push(inicio_mes_pasado);
-        newParamCount++;
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount}`);
-        params.push(fin_mes_pasado);
-        newParamCount++;
-      }
-
-      return newParamCount;
-    };
-
-    // Agregar filtros de fecha
-    paramCountProductos = await addDateFilters(
+    // Fechas
+    paramCountProductos = await buildDateFilters(
       whereConditionsProductos,
       paramsProductos,
       paramCountProductos,
-      "vp"
+      "vp",
+      filters,
+      hoyLaPaz
     );
 
-    paramCountServicios = await addDateFilters(
+    paramCountServicios = await buildDateFilters(
       whereConditionsServicios,
       paramsServicios,
       paramCountServicios,
-      "vs"
+      "vs",
+      filters,
+      hoyLaPaz
     );
 
-    // Construir WHERE clauses
     const whereClauseProductos =
       whereConditionsProductos.length > 0
         ? `WHERE ${baseConditionProductos} AND ${whereConditionsProductos.join(" AND ")}`
@@ -265,7 +212,6 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         ? `WHERE ${baseConditionServicios} AND ${whereConditionsServicios.join(" AND ")}`
         : `WHERE ${baseConditionServicios}`;
 
-    // Queries de conteo
     const countQueryProductos = `
       SELECT COUNT(DISTINCT vp.id) as total_count 
       FROM ventas_productos vp
@@ -278,11 +224,10 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       ${whereClauseServicios}
     `;
 
-    // Query para ventas de productos (con paginación) - CON REGEX MEJORADA
     let queryStrProductos = `
       SELECT 
         vp.id,
-        TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+        TO_CHAR(vp.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
         NULL as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
@@ -305,7 +250,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
                 )::numeric,
                 0
               ),
-              vp.total / 2  -- fallback 50/50 si no matchea
+              vp.total / 2
             )
           ELSE 0 
         END as efectivo,
@@ -321,7 +266,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
                 )::numeric,
                 0
               ),
-              vp.total / 2  -- fallback 50/50 si no matchea
+              vp.total / 2
             )
           ELSE 0 
         END as qr,
@@ -340,11 +285,10 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       LIMIT $${paramCountProductos} OFFSET $${paramCountProductos + 1}
     `;
 
-    // Query para ventas de servicios (con paginación) - CON REGEX MEJORADA
     let queryStrServicios = `
       SELECT 
         vs.id,
-        TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+        TO_CHAR(vs.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
         CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
@@ -408,8 +352,6 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
     const paramsProductosPaginados = [...paramsProductos, pageSize, offset];
     const paramsServiciosPaginados = [...paramsServicios, pageSize, offset];
 
-    console.log("🔄 Ejecutando consultas...");
-
     const [
       countProductosResult,
       countServiciosResult,
@@ -430,26 +372,15 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
     );
     const totalCount = totalProductos + totalServicios;
 
-    console.log(
-      `✅ Productos encontrados: ${productSalesResult.rows.length} de ${totalProductos} totales`
-    );
-    console.log(
-      `✅ Servicios encontrados: ${serviceSalesResult.rows.length} de ${totalServicios} totales`
-    );
-
-    // Combinar resultados
     let allSales = [...productSalesResult.rows, ...serviceSalesResult.rows];
 
-    // Función auxiliar para parsear fecha desde string formateado
     function parseDateFromString(dateStr) {
       try {
         const parts = dateStr.split(", ");
         const datePart = parts[0];
         const timePart = parts[1];
-
         const [day, month, year] = datePart.split("/");
         const [hours, minutes, seconds] = timePart.split(":");
-
         return new Date(
           parseInt(year),
           parseInt(month) - 1,
@@ -459,21 +390,15 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
           parseInt(seconds)
         );
       } catch (e) {
-        console.warn("⚠️ Error parseando fecha:", dateStr, e);
         return new Date();
       }
     }
 
-    // Ordenar por fecha descendente
     allSales.sort((a, b) => {
       const dateA = parseDateFromString(a.fecha);
       const dateB = parseDateFromString(b.fecha);
       return dateB - dateA;
     });
-
-    console.log(
-      `📊 Ventas encontradas: ${allSales.length} de ${totalCount} totales (página ${page})`
-    );
 
     return {
       sales: allSales.map((sale) => ({
@@ -495,23 +420,19 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
     };
   } catch (error) {
     console.error("❌ Error in getSales service:", error);
-    console.error("Stack trace:", error.stack);
     throw error;
   }
 };
 
 // ============================================
-// GET TOTALS (sin paginación)
+// GET TOTALS
 // ============================================
 const getTotals = async (filters = {}) => {
   try {
-    console.log("📊 Calculando totales con filtros:", filters);
-
     const todayResult = await query(
       "SELECT (NOW() AT TIME ZONE 'America/La_Paz')::date as hoy_la_paz"
     );
     const hoyLaPaz = todayResult.rows[0].hoy_la_paz;
-    console.log(`📅 [Totales] Fecha actual en La Paz: ${hoyLaPaz}`);
 
     let whereConditionsProductos = [];
     let paramsProductos = [];
@@ -524,7 +445,6 @@ const getTotals = async (filters = {}) => {
     const baseConditionProductos = "vp.subtotal > 0";
     const baseConditionServicios = "vs.subtotal > 0";
 
-    // Filtro por sucursal
     if (filters.sucursal) {
       whereConditionsProductos.push(`vp.sucursal_id = $${paramCountProductos}`);
       paramsProductos.push(filters.sucursal);
@@ -535,16 +455,13 @@ const getTotals = async (filters = {}) => {
       paramCountServicios++;
     }
 
-    // Filtro por empleado
     if (filters.empleadoId) {
       const usuarioResult = await query(
         "SELECT empleado_id FROM usuarios WHERE id = $1",
         [filters.empleadoId]
       );
-
       if (usuarioResult.rows.length > 0) {
         const empleadoIdReal = usuarioResult.rows[0].empleado_id;
-
         whereConditionsProductos.push(
           `vp.empleado_id = $${paramCountProductos}`
         );
@@ -559,136 +476,22 @@ const getTotals = async (filters = {}) => {
       }
     }
 
-    // Función para agregar filtros de fecha (misma lógica)
-    const addDateFilters = async (
-      whereConditions,
-      params,
-      paramCount,
-      tableAlias
-    ) => {
-      let newParamCount = paramCount;
-
-      if (filters.dateFilterType === "specific" && filters.specificDate) {
-        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
-        params.push(filters.specificDate);
-        newParamCount++;
-      } else if (
-        filters.dateFilterType === "range" &&
-        filters.startDate &&
-        filters.endDate
-      ) {
-        whereConditions.push(
-          `DATE(${tableAlias}.fecha) BETWEEN $${newParamCount} AND $${newParamCount + 1}`
-        );
-        params.push(filters.startDate, filters.endDate);
-        newParamCount += 2;
-      } else if (filters.dateFilterType === "today") {
-        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
-        params.push(hoyLaPaz);
-        newParamCount++;
-      } else if (filters.dateFilterType === "yesterday") {
-        const ayerResult = await query(
-          "SELECT ($1::date - INTERVAL '1 day')::date as ayer",
-          [hoyLaPaz]
-        );
-        const ayerLaPaz = ayerResult.rows[0].ayer;
-        whereConditions.push(`DATE(${tableAlias}.fecha) = $${newParamCount}`);
-        params.push(ayerLaPaz);
-        newParamCount++;
-      } else if (filters.dateFilterType === "thisWeek") {
-        const thisWeekResult = await query(
-          `
-          SELECT 
-            date_trunc('week', $1::date)::date as inicio_semana,
-            (date_trunc('week', $1::date) + INTERVAL '6 days')::date as fin_semana
-        `,
-          [hoyLaPaz]
-        );
-
-        const { inicio_semana, fin_semana } = thisWeekResult.rows[0];
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
-        params.push(inicio_semana);
-        newParamCount++;
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount}`);
-        params.push(fin_semana);
-        newParamCount++;
-      } else if (filters.dateFilterType === "lastWeek") {
-        const lastWeekResult = await query(
-          `
-          SELECT 
-            (date_trunc('week', $1::date) - INTERVAL '7 days')::date as inicio_semana_pasada,
-            (date_trunc('week', $1::date) - INTERVAL '1 day')::date as fin_semana_pasada
-        `,
-          [hoyLaPaz]
-        );
-
-        const { inicio_semana_pasada, fin_semana_pasada } =
-          lastWeekResult.rows[0];
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
-        params.push(inicio_semana_pasada);
-        newParamCount++;
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount}`);
-        params.push(fin_semana_pasada);
-        newParamCount++;
-      } else if (filters.dateFilterType === "thisMonth") {
-        const thisMonthResult = await query(
-          `
-          SELECT 
-            date_trunc('month', $1::date)::date as inicio_mes,
-            (date_trunc('month', $1::date) + INTERVAL '1 month - 1 day')::date as fin_mes
-        `,
-          [hoyLaPaz]
-        );
-
-        const { inicio_mes, fin_mes } = thisMonthResult.rows[0];
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
-        params.push(inicio_mes);
-        newParamCount++;
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount}`);
-        params.push(fin_mes);
-        newParamCount++;
-      } else if (filters.dateFilterType === "lastMonth") {
-        const lastMonthResult = await query(
-          `
-          SELECT 
-            date_trunc('month', $1::date - INTERVAL '1 month')::date as inicio_mes_pasado,
-            (date_trunc('month', $1::date) - INTERVAL '1 day')::date as fin_mes_pasado
-        `,
-          [hoyLaPaz]
-        );
-
-        const { inicio_mes_pasado, fin_mes_pasado } = lastMonthResult.rows[0];
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) >= $${newParamCount}`);
-        params.push(inicio_mes_pasado);
-        newParamCount++;
-
-        whereConditions.push(`DATE(${tableAlias}.fecha) <= $${newParamCount}`);
-        params.push(fin_mes_pasado);
-        newParamCount++;
-      }
-
-      return newParamCount;
-    };
-
-    paramCountProductos = await addDateFilters(
+    paramCountProductos = await buildDateFilters(
       whereConditionsProductos,
       paramsProductos,
       paramCountProductos,
-      "vp"
+      "vp",
+      filters,
+      hoyLaPaz
     );
 
-    paramCountServicios = await addDateFilters(
+    paramCountServicios = await buildDateFilters(
       whereConditionsServicios,
       paramsServicios,
       paramCountServicios,
-      "vs"
+      "vs",
+      filters,
+      hoyLaPaz
     );
 
     const whereClauseProductos =
@@ -701,7 +504,6 @@ const getTotals = async (filters = {}) => {
         ? `WHERE ${baseConditionServicios} AND ${whereConditionsServicios.join(" AND ")}`
         : `WHERE ${baseConditionServicios}`;
 
-    // Query para totales de productos - CON REGEX MEJORADA
     const totalsQueryProductos = `
       SELECT 
         COALESCE(SUM(vp.total), 0) as total_productos,
@@ -745,7 +547,6 @@ const getTotals = async (filters = {}) => {
       ${whereClauseProductos}
     `;
 
-    // Query para totales de servicios - CON REGEX MEJORADA
     const totalsQueryServicios = `
       SELECT 
         COALESCE(SUM(vs.total), 0) as total_servicios,
@@ -818,7 +619,7 @@ const getTotals = async (filters = {}) => {
     const efectivoGeneral = efectivoProductos + efectivoServicios;
     const qrGeneral = qrProductos + qrServicios;
 
-    const totals = {
+    return {
       totalGeneral,
       efectivoGeneral,
       qrGeneral,
@@ -829,12 +630,8 @@ const getTotals = async (filters = {}) => {
       efectivoServicios,
       qrServicios,
     };
-
-    console.log("✅ Totales calculados:", totals);
-    return totals;
   } catch (error) {
     console.error("❌ Error in getTotals service:", error);
-    console.error("Stack trace:", error.stack);
     throw error;
   }
 };
@@ -844,15 +641,11 @@ const getTotals = async (filters = {}) => {
 // ============================================
 const getSaleDetails = async (saleId, saleType) => {
   try {
-    console.log(
-      `🔍 Obteniendo detalles de venta ${saleId} de tipo ${saleType}`
-    );
-
     if (saleType === "producto") {
       const saleResult = await query(
         `SELECT 
           vp.*,
-          TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
+          TO_CHAR(vp.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
           u.username as usuario_creador
@@ -894,7 +687,7 @@ const getSaleDetails = async (saleId, saleType) => {
       const saleResult = await query(
         `SELECT 
           vs.*,
-          TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
+          TO_CHAR(vs.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
           CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente_nombre,
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
