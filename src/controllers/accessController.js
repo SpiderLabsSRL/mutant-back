@@ -7,11 +7,13 @@ exports.getAccessLogs = async (req, res) => {
   try {
     const { search, type, limit, branchId } = req.query;
 
+    const branchIdParsed = branchId ? parseInt(branchId) : null;
+
     const logs = await accessService.getAccessLogs(
       search,
       type,
       limit ? parseInt(limit) : 100,
-      parseInt(branchId)
+      branchIdParsed
     );
     res.json(logs);
   } catch (error) {
@@ -32,10 +34,15 @@ exports.searchMembers = async (req, res) => {
         .json({ message: "Término de búsqueda debe tener al menos 2 caracteres" });
     }
 
+    const branchIdParsed =
+      branchId !== undefined && branchId !== null && branchId !== ""
+        ? parseInt(branchId)
+        : null;
+
     const members = await accessService.searchMembers(
       search,
       type,
-      parseInt(branchId)
+      branchIdParsed
     );
     res.json(members);
   } catch (error) {
@@ -52,12 +59,8 @@ exports.getClientSubscriptions = async (req, res) => {
     const { personId } = req.params;
     const { branchId } = req.query;
 
-    console.log("🔍 getClientSubscriptions llamado:", { personId, branchId });
-
-    // ✅ Validación flexible (acepta string numérico)
     const personIdNum = Number(personId);
     if (!personId || isNaN(personIdNum) || personIdNum <= 0) {
-      console.error("❌ personId inválido:", personId);
       return res.status(400).json({
         message: "personId inválido",
         received: personId,
@@ -65,7 +68,8 @@ exports.getClientSubscriptions = async (req, res) => {
     }
 
     const branchIdNum = branchId ? Number(branchId) : null;
-    const branchIdValid = branchIdNum && !isNaN(branchIdNum) ? branchIdNum : null;
+    const branchIdValid =
+      branchIdNum && !isNaN(branchIdNum) ? branchIdNum : null;
 
     const subscriptions = await accessService.getClientSubscriptions(
       personIdNum,
@@ -80,6 +84,7 @@ exports.getClientSubscriptions = async (req, res) => {
     });
   }
 };
+
 // ============================================
 // VALIDATE CLIENT ACCESS
 // ============================================
@@ -113,8 +118,6 @@ exports.validateClientAccess = async (req, res) => {
 exports.registerClientAccess = async (req, res) => {
   try {
     const { personId, serviceId, branchId, userId } = req.body;
-
-    console.log("Datos recibidos para acceso:", { personId, serviceId, branchId, userId });
 
     if (!personId || !serviceId || !branchId || !userId) {
       return res.status(400).json({
@@ -183,7 +186,7 @@ exports.registerEmployeeCheckOut = async (req, res) => {
 };
 
 // ============================================
-// REGISTER ACCESS DENIED (sin suscripción)
+// REGISTER ACCESS DENIED
 // ============================================
 exports.registerAccessDeniedNoSubscription = async (req, res) => {
   try {

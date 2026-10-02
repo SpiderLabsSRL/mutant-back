@@ -83,12 +83,10 @@ const validarHorarioServicio = async (servicioId, fechaActual) => {
 };
 
 // ============================================
-// GET CLIENT SUBSCRIPTIONS (agrupado por NOMBRE + sucursal)
+// GET CLIENT SUBSCRIPTIONS
 // ============================================
 exports.getClientSubscriptions = async (personId, branchId = null) => {
   try {
-    console.log("🔍 getClientSubscriptions service:", { personId, branchId });
-
     const params = [personId];
 
     let sql = `
@@ -118,12 +116,15 @@ exports.getClientSubscriptions = async (personId, branchId = null) => {
         AND i.estado = 1
     `;
 
-    if (branchId !== null && branchId !== undefined) {
-      params.push(branchId);
+    if (
+      branchId !== null &&
+      branchId !== undefined &&
+      !Number.isNaN(Number(branchId))
+    ) {
+      params.push(Number(branchId));
       sql += ` AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)`;
     }
 
-    // ✅ Orden por nombre + sucursal, luego fecha_inicio DESC
     sql += ` ORDER BY 
       s.nombre,
       i.sucursal_id,
@@ -131,47 +132,26 @@ exports.getClientSubscriptions = async (personId, branchId = null) => {
       i.id DESC
     `;
 
-    console.log("📝 SQL:", sql);
-    console.log("📝 Params:", params);
-
     const result = await query(sql, params);
 
-    console.log(
-      `✅ Encontradas ${result.rows.length} inscripciones (sin agrupar)`
-    );
-
-    // ============================================
-    // ✅ AGRUPAR por NOMBRE + sucursal (no por servicio_id)
-    // ============================================
     const groupedMap = new Map();
 
     result.rows.forEach((row) => {
-      // Key: nombre normalizado + sucursal
       const key = `${row.service_name.toLowerCase().trim()}-${row.sucursal_id}`;
 
       if (!groupedMap.has(key)) {
-        // Primera vez que vemos este nombre+sucursal → la más reciente
         groupedMap.set(key, row);
       }
-      // Si ya existe, no sobreescribimos
     });
 
     const uniqueSubscriptions = Array.from(groupedMap.values());
 
-    console.log(
-      `✅ Suscripciones únicas (agrupadas): ${uniqueSubscriptions.length}`
-    );
-
-    // ============================================
-    // ✅ ORDENAR: activas → pendientes → vencidas
-    // ============================================
     uniqueSubscriptions.sort((a, b) => {
       const order = { active: 0, pending: 1, expired: 2 };
       const aOrder = order[a.computed_status] ?? 3;
       const bOrder = order[b.computed_status] ?? 3;
       if (aOrder !== bOrder) return aOrder - bOrder;
 
-      // Dentro del mismo estado, ordenar por fecha_vencimiento DESC
       return b.fecha_vencimiento.localeCompare(a.fecha_vencimiento);
     });
 
@@ -193,7 +173,7 @@ exports.getClientSubscriptions = async (personId, branchId = null) => {
 };
 
 // ============================================
-// GET ACCESS LOGS (con búsqueda ultra robusta)
+// GET ACCESS LOGS
 // ============================================
 exports.getAccessLogs = async (
   searchTerm,
@@ -226,30 +206,22 @@ exports.getAccessLogs = async (
   const params = [];
   const whereClauses = [];
 
-  if (branchId) {
+  if (branchId && !Number.isNaN(Number(branchId))) {
     whereClauses.push(`ra.sucursal_id = $${params.length + 1}`);
-    params.push(branchId);
+    params.push(Number(branchId));
   }
 
-  // ✅ BÚSQUEDA ULTRA ROBUSTA (igual que memberslistservice)
   if (searchTerm && searchTerm.trim() !== "") {
     const normalizedSearch = searchTerm.trim().replace(/\s+/g, " ");
     const paramIndex = params.length + 1;
 
     whereClauses.push(`
       (
-        -- 1. Solo NOMBRES
         unaccent(LOWER(REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g'))) 
           ILIKE unaccent(LOWER($${paramIndex}))
-        
-        -- 2. Solo APELLIDOS
         OR unaccent(LOWER(REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g'))) 
           ILIKE unaccent(LOWER($${paramIndex}))
-        
-        -- 3. CI
         OR TRIM(p.ci) ILIKE $${paramIndex}
-        
-        -- 4. "NOMBRES APELLIDOS"
         OR unaccent(LOWER(
           REGEXP_REPLACE(
             TRIM(CONCAT(
@@ -260,8 +232,6 @@ exports.getAccessLogs = async (
             '\\s+', ' ', 'g'
           )
         )) ILIKE unaccent(LOWER($${paramIndex}))
-        
-        -- 5. "APELLIDOS NOMBRES" (invertido)
         OR unaccent(LOWER(
           REGEXP_REPLACE(
             TRIM(CONCAT(
@@ -306,30 +276,26 @@ const formatDate = (dateString) => {
 };
 
 // ============================================
-// SEARCH MEMBERS (con búsqueda ultra robusta)
+// SEARCH MEMBERS
 // ============================================
 exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
-  // ✅ BÚSQUEDA ULTRA ROBUSTA
   const normalizedSearch = (searchTerm || "").trim().replace(/\s+/g, " ");
   const searchParam = `%${normalizedSearch}%`;
 
   const results = [];
 
-  // Helper reutilizable para el WHERE de personas
+  const filtrarPorSucursal =
+    branchId !== null &&
+    branchId !== undefined &&
+    !Number.isNaN(Number(branchId));
+
   const buildPersonSearchWhere = (alias = "p", paramIndex = 1) => `
     (
-      -- 1. Solo NOMBRES
       unaccent(LOWER(REGEXP_REPLACE(TRIM(${alias}.nombres), '\\s+', ' ', 'g'))) 
         ILIKE unaccent(LOWER($${paramIndex}))
-      
-      -- 2. Solo APELLIDOS
       OR unaccent(LOWER(REGEXP_REPLACE(TRIM(${alias}.apellidos), '\\s+', ' ', 'g'))) 
         ILIKE unaccent(LOWER($${paramIndex}))
-      
-      -- 3. CI
       OR TRIM(${alias}.ci) ILIKE $${paramIndex}
-      
-      -- 4. "NOMBRES APELLIDOS"
       OR unaccent(LOWER(
         REGEXP_REPLACE(
           TRIM(CONCAT(
@@ -340,8 +306,6 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
           '\\s+', ' ', 'g'
         )
       )) ILIKE unaccent(LOWER($${paramIndex}))
-      
-      -- 5. "APELLIDOS NOMBRES" (invertido)
       OR unaccent(LOWER(
         REGEXP_REPLACE(
           TRIM(CONCAT(
@@ -355,11 +319,20 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
     )
   `;
 
-  // ============================================
   // CLIENTES
-  // ============================================
   if (typeFilter === "all" || typeFilter === "cliente") {
-    const clientParams = [searchParam, branchId];
+    const clientParams = [searchParam];
+    let branchFilterIn = "";
+
+    if (filtrarPorSucursal) {
+      clientParams.push(Number(branchId));
+      branchFilterIn = `AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)`;
+    }
+
+    const orderByBranch = filtrarPorSucursal
+      ? "CASE WHEN i.sucursal_id = $2 THEN 0 ELSE 1 END,"
+      : "";
+
     let clientSql = `
       WITH todas_las_inscripciones AS (
         SELECT 
@@ -375,11 +348,9 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
           s.multisucursal,
           s.numero_ingresos as servicio_ingresos_ilimitados,
           ROW_NUMBER() OVER (
-            PARTITION BY 
-              i.servicio_id, 
-              i.persona_id
+            PARTITION BY i.servicio_id, i.persona_id
             ORDER BY 
-              CASE WHEN i.sucursal_id = $2 THEN 0 ELSE 1 END,
+              ${orderByBranch}
               i.fecha_inicio DESC, 
               i.id DESC
           ) as rn,
@@ -402,7 +373,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id
         WHERE i.estado = 1
-        AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)
+        ${branchFilterIn}
       )
       SELECT 
         p.id as idpersona,
@@ -451,11 +422,16 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
     results.push(...clientResult.rows);
   }
 
-  // ============================================
   // EMPLEADOS
-  // ============================================
   if (typeFilter === "all" || typeFilter === "empleado") {
-    const employeeParams = [searchParam, branchId];
+    const employeeParams = [searchParam];
+    let branchCond = "";
+
+    if (filtrarPorSucursal) {
+      employeeParams.push(Number(branchId));
+      branchCond = `AND (e.sucursal_id = $2 OR e.rol = 'limpieza')`;
+    }
+
     let employeeSql = `
       SELECT 
         p.id as idpersona,
@@ -476,7 +452,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
             WHERE ra.persona_id = p.id 
             AND ra.tipo_persona = 'empleado' 
             AND ra.detalle LIKE '%Entrada%'
-            AND ra.sucursal_id = $2
+            ${filtrarPorSucursal ? "AND ra.sucursal_id = $2" : ""}
           ),
           'ultimo_registro_salida', (
             SELECT MAX(ra.fecha) 
@@ -484,7 +460,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
             WHERE ra.persona_id = p.id 
             AND ra.tipo_persona = 'empleado' 
             AND ra.detalle LIKE '%Salida%'
-            AND ra.sucursal_id = $2
+            ${filtrarPorSucursal ? "AND ra.sucursal_id = $2" : ""}
           ),
           'estado_actual', CASE 
             WHEN EXISTS (
@@ -492,14 +468,14 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
               WHERE ra.persona_id = p.id 
               AND ra.tipo_persona = 'empleado' 
               AND ra.detalle LIKE '%Entrada%'
-              AND ra.sucursal_id = $2
+              ${filtrarPorSucursal ? "AND ra.sucursal_id = $2" : ""}
               AND ra.fecha > COALESCE((
                 SELECT MAX(ra2.fecha) 
                 FROM registros_acceso ra2 
                 WHERE ra2.persona_id = p.id 
                 AND ra2.tipo_persona = 'empleado' 
                 AND ra2.detalle LIKE '%Salida%'
-                AND ra2.sucursal_id = $2
+                ${filtrarPorSucursal ? "AND ra2.sucursal_id = $2" : ""}
               ), '1900-01-01')
             ) THEN 'in' 
             ELSE 'out' 
@@ -510,7 +486,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       WHERE ${buildPersonSearchWhere("p", 1)}
       AND e.estado = 1
       AND p.estado = 0
-      AND (e.sucursal_id = $2 OR e.rol = 'limpieza')
+      ${branchCond}
     `;
 
     const employeeResult = await query(employeeSql, employeeParams);
@@ -521,7 +497,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
 };
 
 // ============================================
-// VALIDATE CLIENT ACCESS (solo consulta)
+// VALIDATE CLIENT ACCESS
 // ============================================
 exports.validateClientAccess = async (personId, serviceId, branchId) => {
   const inscriptionResult = await query(
@@ -668,9 +644,7 @@ const checkPagosPendientes = async (personId) => {
       [personId]
     );
 
-    if (result.rows.length === 0) {
-      return null;
-    }
+    if (result.rows.length === 0) return null;
 
     const pago = result.rows[0];
 
@@ -686,7 +660,8 @@ const checkPagosPendientes = async (personId) => {
 };
 
 // ============================================
-// REGISTER CLIENT ACCESS (con validación de horarios)
+// REGISTER CLIENT ACCESS
+// ✅ SIEMPRE registra el intento (exitoso o denegado)
 // ============================================
 exports.registerClientAccess = async (
   personId,
@@ -712,10 +687,39 @@ exports.registerClientAccess = async (
     [personId, serviceId, branchId]
   );
 
+  // ============================================
+  // ✅ NUEVO: registrar intento denegado en vez de throw
+  // ============================================
   if (client.rows.length === 0) {
-    throw new Error(
-      "Inscripción no encontrada, no válida para esta sucursal, servicio eliminado o cliente eliminado"
+    const servicioInfo = await query(
+      `SELECT s.nombre 
+       FROM servicios s
+       INNER JOIN inscripciones i ON i.servicio_id = s.id
+       WHERE i.id = $1`,
+      [serviceId]
     );
+    const nombreServicio = servicioInfo.rows[0]?.nombre || "Desconocido";
+
+    await query(
+      `
+      INSERT INTO registros_acceso 
+      (persona_id, servicio_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
+      VALUES ($1, $2, $3, $4, $5, $6, TIMEZONE('America/La_Paz', NOW()), 'cliente')
+    `,
+      [
+        personId,
+        servicioInfo.rows[0] ? serviceId : null,
+        `Acceso denegado - Inscripción no válida para esta sucursal (${nombreServicio})`,
+        "denegado",
+        branchId,
+        userId,
+      ]
+    );
+
+    return {
+      success: false,
+      message: "Inscripción no encontrada o no válida para esta sucursal",
+    };
   }
 
   const inscription = client.rows[0];
@@ -854,12 +858,13 @@ exports.registerClientAccess = async (
 
   if (!isUnlimitedService) {
     if (inscription.multisucursal) {
-      latestMultisucursalInscriptions = await getLatestMultisucursalInscriptions(
-        personId,
-        inscription.servicio_real_id,
-        inscription.fecha_inicio,
-        inscription.fecha_vencimiento
-      );
+      latestMultisucursalInscriptions =
+        await getLatestMultisucursalInscriptions(
+          personId,
+          inscription.servicio_real_id,
+          inscription.fecha_inicio,
+          inscription.fecha_vencimiento
+        );
 
       for (const multiInscription of latestMultisucursalInscriptions) {
         await query(
@@ -939,7 +944,7 @@ exports.registerClientAccess = async (
 };
 
 // ============================================
-// HELPER: EMPLOYEE SCHEDULE
+// HELPER: EMPLOYEE SCHEDULE (día real)
 // ============================================
 const getEmployeeScheduleForToday = async (employeeId) => {
   const employeeResult = await query(
@@ -958,64 +963,24 @@ const getEmployeeScheduleForToday = async (employeeId) => {
   }
 
   const dayResult = await query(
-    `SELECT EXTRACT(DOW FROM TIMEZONE('America/La_Paz', NOW())) as dia_semana_postgres`
+    `SELECT EXTRACT(ISODOW FROM TIMEZONE('America/La_Paz', NOW()))::int as dia`
   );
-  let diaSemanaActual = dayResult.rows[0].dia_semana_postgres;
-
-  let diaSemanaBusqueda;
-
-  if (diaSemanaActual === 0) {
-    diaSemanaBusqueda = 7;
-  } else if (diaSemanaActual >= 1 && diaSemanaActual <= 5) {
-    diaSemanaBusqueda = 1;
-  } else if (diaSemanaActual === 6) {
-    diaSemanaBusqueda = 6;
-  } else {
-    diaSemanaBusqueda = diaSemanaActual;
-  }
+  const diaSemanaActual = dayResult.rows[0].dia;
 
   const horarioResult = await query(
     `SELECT hora_ingreso, hora_salida 
      FROM horarios_empleado 
      WHERE empleado_id = $1 AND dia_semana = $2`,
-    [employeeId, diaSemanaBusqueda]
+    [employeeId, diaSemanaActual]
   );
 
   if (horarioResult.rows.length > 0) {
     return horarioResult.rows[0];
   }
 
-  if (diaSemanaBusqueda === 1) {
-    const anyScheduleResult = await query(
-      `SELECT hora_ingreso, hora_salida 
-       FROM horarios_empleado 
-       WHERE empleado_id = $1 
-       ORDER BY dia_semana 
-       LIMIT 1`,
-      [employeeId]
-    );
-
-    if (anyScheduleResult.rows.length > 0) {
-      return anyScheduleResult.rows[0];
-    }
-  }
-
-  if (diaSemanaBusqueda === 6 || diaSemanaBusqueda === 7) {
-    const anyScheduleResult = await query(
-      `SELECT hora_ingreso, hora_salida 
-       FROM horarios_empleado 
-       WHERE empleado_id = $1 
-       ORDER BY dia_semana 
-       LIMIT 1`,
-      [employeeId]
-    );
-
-    if (anyScheduleResult.rows.length > 0) {
-      return anyScheduleResult.rows[0];
-    }
-  }
-
-  throw new Error("El empleado no tiene horarios definidos");
+  throw new Error(
+    `El empleado no tiene horario asignado para hoy (día ${diaSemanaActual})`
+  );
 };
 
 // ============================================
@@ -1207,7 +1172,7 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
 };
 
 // ============================================
-// REGISTER ACCESS DENIED (sin suscripción)
+// REGISTER ACCESS DENIED
 // ============================================
 exports.registerAccessDeniedNoActiveSubscription = async (
   personId,
