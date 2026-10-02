@@ -24,7 +24,7 @@ const LA_PAZ_DATE = (alias) =>
   `(${alias}.fecha AT TIME ZONE 'America/La_Paz')::date`;
 
 // ============================================
-// HELPER: Construye filtros de fecha (compartido por getSales y getTotals)
+// HELPER: Construye filtros de fecha
 // ============================================
 const buildDateFilters = async (
   whereConditions,
@@ -224,6 +224,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       ${whereClauseServicios}
     `;
 
+    // ✅ CORREGIDO: Se agrega subconsulta json_agg para items
     let queryStrProductos = `
       SELECT 
         vp.id,
@@ -233,6 +234,20 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         s.nombre as sucursal,
         'producto' as tipo,
         STRING_AGG(CONCAT(dp.cantidad, 'x ', pro.nombre), ', ') as detalle,
+        (
+          SELECT json_agg(
+            json_build_object(
+              'nombre', pro2.nombre,
+              'cantidad', dp2.cantidad,
+              'precio_unitario', dp2.precio_unitario::float,
+              'subtotal', dp2.subtotal::float
+            )
+            ORDER BY dp2.id
+          )
+          FROM detalle_venta_productos dp2
+          INNER JOIN productos pro2 ON dp2.producto_id = pro2.id
+          WHERE dp2.venta_producto_id = vp.id
+        ) as items,
         vp.subtotal::text,
         vp.descuento::text,
         vp.total::text,
@@ -285,6 +300,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       LIMIT $${paramCountProductos} OFFSET $${paramCountProductos + 1}
     `;
 
+    // ✅ CORREGIDO: Se agrega subconsulta json_agg para items
     let queryStrServicios = `
       SELECT 
         vs.id,
@@ -294,6 +310,21 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         s.nombre as sucursal,
         'servicio' as tipo,
         STRING_AGG(CONCAT(ser.nombre, ' (', dvs.precio::text, ' Bs.)'), ', ') as detalle,
+        (
+          SELECT json_agg(
+            json_build_object(
+              'nombre', ser2.nombre,
+              'cantidad', 1,
+              'precio_unitario', dvs2.precio::float,
+              'subtotal', dvs2.precio::float
+            )
+            ORDER BY dvs2.id
+          )
+          FROM detalle_venta_servicios dvs2
+          INNER JOIN inscripciones ins2 ON dvs2.inscripcion_id = ins2.id
+          INNER JOIN servicios ser2 ON ins2.servicio_id = ser2.id
+          WHERE dvs2.venta_servicio_id = vs.id
+        ) as items,
         vs.subtotal::text,
         vs.descuento::text,
         vs.total::text,
@@ -410,6 +441,8 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         total: parseFloat(sale.total) || 0,
         efectivo: sale.efectivo ? parseFloat(sale.efectivo) : 0,
         qr: sale.qr ? parseFloat(sale.qr) : 0,
+        // ✅ items ya viene como array desde SQL (json_agg) o null
+        items: sale.items || [],
       })),
       pagination: {
         page,
