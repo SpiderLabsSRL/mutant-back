@@ -1,7 +1,9 @@
 // services/PendientesService.js
 const { query, pool } = require("../../db");
 
-// Obtener todos los pagos pendientes
+// ============================================
+// OBTENER PAGOS PENDIENTES
+// ============================================
 exports.getPagosPendientes = async (sucursalId) => {
   const result = await query(`
     SELECT 
@@ -36,13 +38,16 @@ exports.getPagosPendientes = async (sucursalId) => {
   }));
 };
 
-// Registrar un pago
+// ============================================
+// REGISTRAR PAGO
+// ============================================
 exports.registrarPago = async (pagoId, pagoData) => {
   const client = await pool.connect();
   
   try {
     await client.query('BEGIN');
     
+    // 1. Obtener datos actuales del pago pendiente
     const pagoActual = await client.query(`
       SELECT 
         pp.monto_pagado, 
@@ -58,19 +63,27 @@ exports.registrarPago = async (pagoId, pagoData) => {
       throw new Error("Pago pendiente no encontrado");
     }
     
-    const { monto_pagado, monto_pendiente, monto_total, persona_id, venta_servicio_id } = pagoActual.rows[0];
+    const { 
+      monto_pagado, 
+      monto_pendiente, 
+      monto_total, 
+      persona_id, 
+      venta_servicio_id 
+    } = pagoActual.rows[0];
     
     const montoPagadoActual = parseFloat(monto_pagado);
     const montoPendienteActual = parseFloat(monto_pendiente);
     const montoTotalActual = parseFloat(monto_total);
+    const montoPagadoNuevo = parseFloat(pagoData.montoPagado);
     
-    const nuevoMontoPagado = montoPagadoActual + parseFloat(pagoData.montoPagado);
-    const nuevoMontoPendiente = montoPendienteActual - parseFloat(pagoData.montoPagado);
+    const nuevoMontoPagado = montoPagadoActual + montoPagadoNuevo;
+    const nuevoMontoPendiente = montoPendienteActual - montoPagadoNuevo;
     
     if (nuevoMontoPendiente < 0) {
       throw new Error("El monto pagado no puede ser mayor al monto pendiente");
     }
     
+    // 2. Fecha actual en zona horaria La Paz
     const fechaActualResult = await client.query(`
       SELECT TIMEZONE('America/La_Paz', NOW()) as fecha_actual
     `);
@@ -78,6 +91,7 @@ exports.registrarPago = async (pagoId, pagoData) => {
     
     const nuevoEstado = nuevoMontoPendiente === 0 ? 'completado' : 'pendiente';
     
+    // 3. Actualizar pagos_pendientes
     await client.query(`
       UPDATE pagos_pendientes 
       SET 
@@ -88,7 +102,7 @@ exports.registrarPago = async (pagoId, pagoData) => {
       WHERE id = $5
     `, [nuevoMontoPagado, nuevoMontoPendiente, fechaActual, nuevoEstado, pagoId]);
     
-    // Obtener el usuario_id correspondiente al empleado
+    // 4. Obtener el usuario_id correspondiente al empleado
     const usuarioResult = await client.query(`
       SELECT id as usuario_id 
       FROM usuarios 
@@ -101,47 +115,31 @@ exports.registrarPago = async (pagoId, pagoData) => {
     
     const usuarioId = usuarioResult.rows[0].usuario_id;
     
-    if (pagoData.formaPago === 'efectivo' || pagoData.formaPago === 'mixto') {
-      const montoEfectivo = pagoData.formaPago === 'efectivo' 
-        ? pagoData.montoPagado 
-        : pagoData.montoEfectivo;
-      
-      if (montoEfectivo > 0) {
-        // Obtener el último estado de caja
-        const lastCashStatus = await client.query(`
-          SELECT id as estado_caja_id, monto_final 
-          FROM estado_caja 
-          WHERE caja_id = $1 
-          ORDER BY id DESC 
-          LIMIT 1
-        `, [pagoData.cajaId]);
-        
-        const montoInicial = lastCashStatus.rows.length > 0 ? parseFloat(lastCashStatus.rows[0].monto_final) : 0;
-        const montoFinal = montoInicial + parseFloat(montoEfectivo);
-        
-        // Insertar nuevo estado de caja usando usuario_id
-        const estadoCajaResult = await client.query(`
-          INSERT INTO estado_caja (caja_id, estado, monto_inicial, monto_final, usuario_id)
-          VALUES ($1, 'abierta', $2, $3, $4)
-          RETURNING id
-        `, [pagoData.cajaId, montoInicial, montoFinal, usuarioId]);
-        
-        const nuevoEstadoCajaId = estadoCajaResult.rows[0].id;
-        
-        // Insertar transacción de caja usando usuario_id
-        await client.query(`
-          INSERT INTO transacciones_caja (caja_id, estado_caja_id, tipo, descripcion, monto, fecha, usuario_id)
-          VALUES ($1, $2, 'ingreso', 'Pago pendiente de servicio', $3, TIMEZONE('America/La_Paz', NOW()), $4)
-        `, [pagoData.cajaId, nuevoEstadoCajaId, montoEfectivo, usuarioId]);
-      }
+    // 5. Verificar que la caja existe y obtener su total actual
+    const cajaResult = await client.query(`
+      SELECT id, total, estado_caja
+      FROM cajas
+      WHERE id = $1
+    `, [pagoData.cajaId]);
+    
+    if (cajaResult.rows.length === 0) {
+      throw new Error("Caja no encontrada");
     }
     
-    const detallePago = pagoData.formaPago === 'efectivo' 
-      ? 'Pago en efectivo de pendiente' 
-      : pagoData.formaPago === 'qr' 
-        ? 'Pago con QR de pendiente'
-        : `Pago mixto de pendiente - Efectivo: ${pagoData.montoEfectivo}, QR: ${pagoData.montoQr}`;
+    const montoAnteriorCaja = parseFloat(cajaResult.rows[0].total) || 0;
     
+    // 6. Construir detalle_pago en formato limpio y compatible con regex
+    //    → efectivo: "Efectivo: 50"
+    //    → qr:       "QR: 50"
+    //    → mixto:    "Efectivo: 50, QR: 50"
+    const detallePago =
+      pagoData.formaPago === 'efectivo'
+        ? `Efectivo: ${montoPagadoNuevo}`
+        : pagoData.formaPago === 'qr'
+          ? `QR: ${montoPagadoNuevo}`
+          : `Efectivo: ${pagoData.montoEfectivo}, QR: ${pagoData.montoQr}`;
+    
+    // 7. Insertar la venta de servicio (registro contable del pago)
     const ventaResult = await client.query(`
       INSERT INTO ventas_servicios (
         persona_id, empleado_id, subtotal, descuento, descripcion_descuento, 
@@ -152,10 +150,10 @@ exports.registrarPago = async (pagoId, pagoData) => {
     `, [
       persona_id,
       pagoData.empleadoId,
-      pagoData.montoPagado,
+      montoPagadoNuevo,
       0,
       'Pago de deuda pendiente',
-      pagoData.montoPagado,
+      montoPagadoNuevo,
       pagoData.formaPago,
       detallePago,
       pagoData.sucursalId,
@@ -164,6 +162,7 @@ exports.registrarPago = async (pagoId, pagoData) => {
     
     const nuevaVentaId = ventaResult.rows[0].id;
     
+    // 8. Copiar el detalle de la venta original al nuevo registro
     const inscripcionResult = await client.query(`
       SELECT dvs.inscripcion_id
       FROM detalle_venta_servicios dvs
@@ -177,7 +176,44 @@ exports.registrarPago = async (pagoId, pagoData) => {
       await client.query(`
         INSERT INTO detalle_venta_servicios (venta_servicio_id, inscripcion_id, precio)
         VALUES ($1, $2, $3)
-      `, [nuevaVentaId, inscripcionId, pagoData.montoPagado]);
+      `, [nuevaVentaId, inscripcionId, montoPagadoNuevo]);
+    }
+    
+    // 9. Calcular monto en efectivo real (solo lo que entra físicamente a caja)
+    const montoEfectivo =
+      pagoData.formaPago === 'efectivo'
+        ? montoPagadoNuevo
+        : pagoData.formaPago === 'mixto'
+          ? parseFloat(pagoData.montoEfectivo) || 0
+          : 0; // qr puro → no entra efectivo a caja
+    
+    // 10. Registrar movimiento de caja (solo si hay efectivo)
+    if (montoEfectivo > 0) {
+      const montoActualCaja = montoAnteriorCaja + montoEfectivo;
+      
+      await client.query(`
+        INSERT INTO movimientos_caja (
+          caja_id, usuario_id, monto, tipo, descripcion,
+          monto_anterior, monto_actual, fecha,
+          venta_servicio_id
+        )
+        VALUES ($1, $2, $3, 'ingreso', $4, $5, $6, TIMEZONE('America/La_Paz', NOW()), $7)
+      `, [
+        pagoData.cajaId,
+        usuarioId,
+        montoEfectivo,
+        `Pago de deuda pendiente (${detallePago})`,
+        montoAnteriorCaja,
+        montoActualCaja,
+        nuevaVentaId
+      ]);
+      
+      // 11. Actualizar el total de la caja
+      await client.query(`
+        UPDATE cajas
+        SET total = $1
+        WHERE id = $2
+      `, [montoActualCaja, pagoData.cajaId]);
     }
     
     await client.query('COMMIT');
@@ -198,7 +234,9 @@ exports.registrarPago = async (pagoId, pagoData) => {
   }
 };
 
-// Cancelar pago pendiente
+// ============================================
+// CANCELAR PAGO PENDIENTE
+// ============================================
 exports.cancelarPagoPendiente = async (pagoId) => {
   const client = await pool.connect();
   
