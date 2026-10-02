@@ -224,7 +224,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       ${whereClauseServicios}
     `;
 
-    // ✅ CORREGIDO: Se agrega subconsulta json_agg para items
+    // ✅ Query de productos (con items y sin duplicados en detalle)
     let queryStrProductos = `
       SELECT 
         vp.id,
@@ -300,16 +300,32 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       LIMIT $${paramCountProductos} OFFSET $${paramCountProductos + 1}
     `;
 
-    // ✅ CORREGIDO: Se agrega subconsulta json_agg para items
+    // ✅ Query de servicios (con items, cliente múltiple y detalle sin duplicados)
     let queryStrServicios = `
       SELECT 
         vs.id,
         TO_CHAR(vs.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
-        CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente,
+        (
+          SELECT STRING_AGG(DISTINCT CONCAT(p_cli2.nombres, ' ', p_cli2.apellidos), ', ')
+          FROM detalle_venta_servicios dvs2
+          INNER JOIN inscripciones ins2 ON dvs2.inscripcion_id = ins2.id
+          INNER JOIN personas p_cli2 ON ins2.persona_id = p_cli2.id
+          WHERE dvs2.venta_servicio_id = vs.id
+        ) as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
         'servicio' as tipo,
-        STRING_AGG(CONCAT(ser.nombre, ' (', dvs.precio::text, ' Bs.)'), ', ') as detalle,
+        (
+          SELECT STRING_AGG(servicio_detalle, ', ')
+          FROM (
+            SELECT DISTINCT
+              CONCAT(ser2.nombre, ' (', dvs2.precio::text, ' Bs.)') as servicio_detalle
+            FROM detalle_venta_servicios dvs2
+            INNER JOIN inscripciones ins2 ON dvs2.inscripcion_id = ins2.id
+            INNER JOIN servicios ser2 ON ins2.servicio_id = ser2.id
+            WHERE dvs2.venta_servicio_id = vs.id
+          ) sub
+        ) as detalle,
         (
           SELECT json_agg(
             json_build_object(
@@ -365,17 +381,10 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         vs.descripcion_descuento as "descripcionDescuento",
         vs.descripcion_descuento as "justificacionDescuento"
       FROM ventas_servicios vs
-      INNER JOIN personas p_cli ON vs.persona_id = p_cli.id
       INNER JOIN empleados e ON vs.empleado_id = e.id
       INNER JOIN personas p_emp ON e.persona_id = p_emp.id
       INNER JOIN sucursales s ON vs.sucursal_id = s.id
-      INNER JOIN detalle_venta_servicios dvs ON vs.id = dvs.venta_servicio_id
-      INNER JOIN inscripciones ins ON dvs.inscripcion_id = ins.id
-      INNER JOIN servicios ser ON ins.servicio_id = ser.id
       ${whereClauseServicios}
-      GROUP BY vs.id, vs.fecha, p_cli.nombres, p_cli.apellidos, 
-               p_emp.nombres, p_emp.apellidos, s.nombre, 
-               vs.forma_pago, vs.detalle_pago, vs.descripcion_descuento, vs.total
       ORDER BY vs.fecha DESC
       LIMIT $${paramCountServicios} OFFSET $${paramCountServicios + 1}
     `;
@@ -441,7 +450,6 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
         total: parseFloat(sale.total) || 0,
         efectivo: sale.efectivo ? parseFloat(sale.efectivo) : 0,
         qr: sale.qr ? parseFloat(sale.qr) : 0,
-        // ✅ items ya viene como array desde SQL (json_agg) o null
         items: sale.items || [],
       })),
       pagination: {
@@ -717,16 +725,22 @@ const getSaleDetails = async (saleId, saleType) => {
         descripcionDescuento: sale.descripcion_descuento,
       };
     } else {
+      // ✅ CORREGIDO: cliente con TODOS los clientes de la venta
       const saleResult = await query(
         `SELECT 
           vs.*,
           TO_CHAR(vs.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
-          CONCAT(p_cli.nombres, ' ', p_cli.apellidos) as cliente_nombre,
+          (
+            SELECT STRING_AGG(DISTINCT CONCAT(p_cli2.nombres, ' ', p_cli2.apellidos), ', ')
+            FROM detalle_venta_servicios dvs2
+            INNER JOIN inscripciones ins2 ON dvs2.inscripcion_id = ins2.id
+            INNER JOIN personas p_cli2 ON ins2.persona_id = p_cli2.id
+            WHERE dvs2.venta_servicio_id = vs.id
+          ) as cliente_nombre,
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
           u.username as usuario_creador
          FROM ventas_servicios vs
-         INNER JOIN personas p_cli ON vs.persona_id = p_cli.id
          INNER JOIN empleados e ON vs.empleado_id = e.id
          INNER JOIN personas p_emp ON e.persona_id = p_emp.id
          INNER JOIN sucursales s ON vs.sucursal_id = s.id
