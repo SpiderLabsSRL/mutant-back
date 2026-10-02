@@ -20,19 +20,60 @@ exports.getServicesByBranch = async (sucursalId) => {
 };
 
 // ============================================
-// BUSCAR PERSONAS
+// BUSCAR PERSONAS (ULTRA ROBUSTA - igual que memberslistservice)
 // ============================================
 exports.searchPeople = async (searchTerm) => {
+  if (!searchTerm || searchTerm.trim() === "") {
+    return [];
+  }
+
+  const normalizedSearch = searchTerm.trim().replace(/\s+/g, " ");
+
   const result = await query(
     `
     SELECT id, nombres, apellidos, ci, telefono, fecha_nacimiento
     FROM personas
-    WHERE (nombres ILIKE $1 OR apellidos ILIKE $1 OR ci ILIKE $1)
+    WHERE (
+      -- 1. Busca solo en NOMBRES
+      unaccent(LOWER(REGEXP_REPLACE(TRIM(nombres), '\\s+', ' ', 'g'))) 
+        ILIKE unaccent(LOWER($1))
+      
+      -- 2. Busca solo en APELLIDOS
+      OR unaccent(LOWER(REGEXP_REPLACE(TRIM(apellidos), '\\s+', ' ', 'g'))) 
+        ILIKE unaccent(LOWER($1))
+      
+      -- 3. Busca en CI (cédula)
+      OR TRIM(ci) ILIKE $1
+      
+      -- 4. Busca en "NOMBRES APELLIDOS"
+      OR unaccent(LOWER(
+        REGEXP_REPLACE(
+          TRIM(CONCAT(
+            REGEXP_REPLACE(TRIM(nombres), '\\s+', ' ', 'g'),
+            ' ',
+            REGEXP_REPLACE(TRIM(apellidos), '\\s+', ' ', 'g')
+          )),
+          '\\s+', ' ', 'g'
+        )
+      )) ILIKE unaccent(LOWER($1))
+      
+      -- 5. Busca en "APELLIDOS NOMBRES" (orden invertido)
+      OR unaccent(LOWER(
+        REGEXP_REPLACE(
+          TRIM(CONCAT(
+            REGEXP_REPLACE(TRIM(apellidos), '\\s+', ' ', 'g'),
+            ' ',
+            REGEXP_REPLACE(TRIM(nombres), '\\s+', ' ', 'g')
+          )),
+          '\\s+', ' ', 'g'
+        )
+      )) ILIKE unaccent(LOWER($1))
+    )
     AND estado = 0
     ORDER BY apellidos, nombres
     LIMIT 10
   `,
-    [`%${searchTerm}%`]
+    [`%${normalizedSearch}%`]
   );
 
   return result.rows;

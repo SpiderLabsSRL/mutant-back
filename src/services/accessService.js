@@ -193,7 +193,7 @@ exports.getClientSubscriptions = async (personId, branchId = null) => {
 };
 
 // ============================================
-// GET ACCESS LOGS
+// GET ACCESS LOGS (con búsqueda ultra robusta)
 // ============================================
 exports.getAccessLogs = async (
   searchTerm,
@@ -231,13 +231,50 @@ exports.getAccessLogs = async (
     params.push(branchId);
   }
 
-  if (searchTerm) {
-    whereClauses.push(
-      `(p.nombres ILIKE $${params.length + 1} 
-        OR p.apellidos ILIKE $${params.length + 1} 
-        OR p.ci ILIKE $${params.length + 1})`
-    );
-    params.push(`%${searchTerm}%`);
+  // ✅ BÚSQUEDA ULTRA ROBUSTA (igual que memberslistservice)
+  if (searchTerm && searchTerm.trim() !== "") {
+    const normalizedSearch = searchTerm.trim().replace(/\s+/g, " ");
+    const paramIndex = params.length + 1;
+
+    whereClauses.push(`
+      (
+        -- 1. Solo NOMBRES
+        unaccent(LOWER(REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g'))) 
+          ILIKE unaccent(LOWER($${paramIndex}))
+        
+        -- 2. Solo APELLIDOS
+        OR unaccent(LOWER(REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g'))) 
+          ILIKE unaccent(LOWER($${paramIndex}))
+        
+        -- 3. CI
+        OR TRIM(p.ci) ILIKE $${paramIndex}
+        
+        -- 4. "NOMBRES APELLIDOS"
+        OR unaccent(LOWER(
+          REGEXP_REPLACE(
+            TRIM(CONCAT(
+              REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g'),
+              ' ',
+              REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g')
+            )),
+            '\\s+', ' ', 'g'
+          )
+        )) ILIKE unaccent(LOWER($${paramIndex}))
+        
+        -- 5. "APELLIDOS NOMBRES" (invertido)
+        OR unaccent(LOWER(
+          REGEXP_REPLACE(
+            TRIM(CONCAT(
+              REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g'),
+              ' ',
+              REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g')
+            )),
+            '\\s+', ' ', 'g'
+          )
+        )) ILIKE unaccent(LOWER($${paramIndex}))
+      )
+    `);
+    params.push(`%${normalizedSearch}%`);
   }
 
   if (typeFilter && typeFilter !== "all") {
@@ -269,12 +306,58 @@ const formatDate = (dateString) => {
 };
 
 // ============================================
-// SEARCH MEMBERS
+// SEARCH MEMBERS (con búsqueda ultra robusta)
 // ============================================
 exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
-  const searchParam = `%${searchTerm}%`;
+  // ✅ BÚSQUEDA ULTRA ROBUSTA
+  const normalizedSearch = (searchTerm || "").trim().replace(/\s+/g, " ");
+  const searchParam = `%${normalizedSearch}%`;
+
   const results = [];
 
+  // Helper reutilizable para el WHERE de personas
+  const buildPersonSearchWhere = (alias = "p", paramIndex = 1) => `
+    (
+      -- 1. Solo NOMBRES
+      unaccent(LOWER(REGEXP_REPLACE(TRIM(${alias}.nombres), '\\s+', ' ', 'g'))) 
+        ILIKE unaccent(LOWER($${paramIndex}))
+      
+      -- 2. Solo APELLIDOS
+      OR unaccent(LOWER(REGEXP_REPLACE(TRIM(${alias}.apellidos), '\\s+', ' ', 'g'))) 
+        ILIKE unaccent(LOWER($${paramIndex}))
+      
+      -- 3. CI
+      OR TRIM(${alias}.ci) ILIKE $${paramIndex}
+      
+      -- 4. "NOMBRES APELLIDOS"
+      OR unaccent(LOWER(
+        REGEXP_REPLACE(
+          TRIM(CONCAT(
+            REGEXP_REPLACE(TRIM(${alias}.nombres), '\\s+', ' ', 'g'),
+            ' ',
+            REGEXP_REPLACE(TRIM(${alias}.apellidos), '\\s+', ' ', 'g')
+          )),
+          '\\s+', ' ', 'g'
+        )
+      )) ILIKE unaccent(LOWER($${paramIndex}))
+      
+      -- 5. "APELLIDOS NOMBRES" (invertido)
+      OR unaccent(LOWER(
+        REGEXP_REPLACE(
+          TRIM(CONCAT(
+            REGEXP_REPLACE(TRIM(${alias}.apellidos), '\\s+', ' ', 'g'),
+            ' ',
+            REGEXP_REPLACE(TRIM(${alias}.nombres), '\\s+', ' ', 'g')
+          )),
+          '\\s+', ' ', 'g'
+        )
+      )) ILIKE unaccent(LOWER($${paramIndex}))
+    )
+  `;
+
+  // ============================================
+  // CLIENTES
+  // ============================================
   if (typeFilter === "all" || typeFilter === "cliente") {
     const clientParams = [searchParam, branchId];
     let clientSql = `
@@ -354,7 +437,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
         ) as servicios
       FROM personas p
       LEFT JOIN todas_las_inscripciones ti ON p.id = ti.persona_id
-      WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
+      WHERE ${buildPersonSearchWhere("p", 1)}
       AND p.estado = 0
     `;
 
@@ -368,6 +451,9 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
     results.push(...clientResult.rows);
   }
 
+  // ============================================
+  // EMPLEADOS
+  // ============================================
   if (typeFilter === "all" || typeFilter === "empleado") {
     const employeeParams = [searchParam, branchId];
     let employeeSql = `
@@ -421,7 +507,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
         ) as empleado_info
       FROM personas p
       INNER JOIN empleados e ON p.id = e.persona_id
-      WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
+      WHERE ${buildPersonSearchWhere("p", 1)}
       AND e.estado = 1
       AND p.estado = 0
       AND (e.sucursal_id = $2 OR e.rol = 'limpieza')
@@ -1148,4 +1234,4 @@ exports.registerAccessDeniedNoActiveSubscription = async (
     success: false,
     message: `${memberName} no tiene inscripciones activas`,
   };
-};  
+};
