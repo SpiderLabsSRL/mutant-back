@@ -1,7 +1,90 @@
 // server/services/memberslistservice.js
 const { query } = require("../../db");
 
-// Obtener miembros con paginación y filtros
+// ============================================
+// HELPER: construir WHERE base (reusado por getMembers y getAllMembers)
+// ============================================
+function buildWhereConditions({
+  searchTerm,
+  serviceFilter,
+  sucursalFilter,
+  userSucursalId,
+  userRol,
+}) {
+  const whereConditions = [];
+  const queryParams = [];
+  let paramCount = 0;
+
+  // Sucursal según rol
+  if (userRol === "recepcionista" && userSucursalId) {
+    paramCount++;
+    whereConditions.push(`i.sucursal_id = $${paramCount}`);
+    queryParams.push(parseInt(userSucursalId));
+  } else if (sucursalFilter && sucursalFilter !== "all") {
+    paramCount++;
+    whereConditions.push(`i.sucursal_id = $${paramCount}`);
+    queryParams.push(parseInt(sucursalFilter));
+  }
+
+  // Excluir empleados
+  whereConditions.push(
+    `p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)`
+  );
+
+  // Solo personas activas
+  whereConditions.push(`p.estado = 0`);
+
+  // Búsqueda robusta
+  if (searchTerm && searchTerm.trim() !== "") {
+    paramCount++;
+    const normalizedSearch = searchTerm.trim().replace(/\s+/g, " ");
+
+    whereConditions.push(`
+      (
+        unaccent(LOWER(REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g'))) 
+          ILIKE unaccent(LOWER($${paramCount}))
+        OR unaccent(LOWER(REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g'))) 
+          ILIKE unaccent(LOWER($${paramCount}))
+        OR TRIM(p.ci) ILIKE $${paramCount}
+        OR unaccent(LOWER(
+          REGEXP_REPLACE(
+            TRIM(CONCAT(
+              REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g'),
+              ' ',
+              REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g')
+            )),
+            '\\s+', ' ', 'g'
+          )
+        )) ILIKE unaccent(LOWER($${paramCount}))
+        OR unaccent(LOWER(
+          REGEXP_REPLACE(
+            TRIM(CONCAT(
+              REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g'),
+              ' ',
+              REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g')
+            )),
+            '\\s+', ' ', 'g'
+          )
+        )) ILIKE unaccent(LOWER($${paramCount}))
+      )
+    `);
+
+    queryParams.push(`%${normalizedSearch}%`);
+  }
+
+  // Filtro por servicio (nombre del servicio)
+  if (serviceFilter && serviceFilter !== "all") {
+    paramCount++;
+    whereConditions.push(`s.nombre = $${paramCount}`);
+    queryParams.push(serviceFilter);
+  }
+
+  return { whereConditions, queryParams, paramCount };
+}
+
+// ============================================
+// GET MEMBERS (paginado)
+// ============================================
 const getMembers = async (
   page = 1,
   limit = 10,
@@ -17,191 +100,118 @@ const getMembers = async (
     const currentPage = Math.max(1, parseInt(page) || 1);
     const offset = (currentPage - 1) * itemsPerPage;
 
-    let whereConditions = [];
-    let queryParams = [];
-    let paramCount = 0;
-
-    // Filtrar por sucursal según el rol del usuario
-    if (userRol === "recepcionista" && userSucursalId) {
-      paramCount++;
-      whereConditions.push(`i.sucursal_id = $${paramCount}`);
-      queryParams.push(parseInt(userSucursalId));
-    } else if (sucursalFilter && sucursalFilter !== "all") {
-      paramCount++;
-      whereConditions.push(`i.sucursal_id = $${paramCount}`);
-      queryParams.push(parseInt(sucursalFilter));
-    }
-
-    // Excluir empleados
-    whereConditions.push(
-      `p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)`
-    );
-
-    // SOLO MOSTRAR PERSONAS ACTIVAS
-    whereConditions.push(`p.estado = 0`);
-
-    // ✅ BÚSQUEDA ULTRA ROBUSTA: normaliza espacios múltiples + sin acentos + case-insensitive
-    if (searchTerm && searchTerm.trim() !== "") {
-      paramCount++;
-
-      const normalizedSearch = searchTerm.trim().replace(/\s+/g, " ");
-
-      whereConditions.push(`
-        (
-          unaccent(LOWER(REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g'))) 
-            ILIKE unaccent(LOWER($${paramCount}))
-          
-          OR unaccent(LOWER(REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g'))) 
-            ILIKE unaccent(LOWER($${paramCount}))
-          
-          OR TRIM(p.ci) ILIKE $${paramCount}
-          
-          OR unaccent(LOWER(
-            REGEXP_REPLACE(
-              TRIM(CONCAT(
-                REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g'),
-                ' ',
-                REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g')
-              )),
-              '\\s+', ' ', 'g'
-            )
-          )) ILIKE unaccent(LOWER($${paramCount}))
-          
-          OR unaccent(LOWER(
-            REGEXP_REPLACE(
-              TRIM(CONCAT(
-                REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g'),
-                ' ',
-                REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g')
-              )),
-              '\\s+', ' ', 'g'
-            )
-          )) ILIKE unaccent(LOWER($${paramCount}))
-        )
-      `);
-
-      queryParams.push(`%${normalizedSearch}%`);
-    }
-
-    // Filtro por servicio
-    if (serviceFilter && serviceFilter !== "all") {
-      paramCount++;
-      whereConditions.push(`s.nombre = $${paramCount}`);
-      queryParams.push(serviceFilter);
-    }
+    const { whereConditions, queryParams, paramCount } = buildWhereConditions({
+      searchTerm,
+      serviceFilter,
+      sucursalFilter,
+      userSucursalId,
+      userRol,
+    });
 
     const whereClause =
       whereConditions.length > 0
         ? `WHERE ${whereConditions.join(" AND ")}`
         : "";
 
-    // ✅ Usamos MAX(i.id) en lugar de MAX(i.fecha_inicio) porque la fecha_inicio
-    // puede cambiar y no es un buen identificador único.
+    // ============================================
+    // Query principal: agrupa por tipo_servicio + sucursal
+    // Elige la activa, o si no hay, la inactiva más reciente.
+    // ============================================
     const membersQuery = `
-      WITH UltimasInscripciones AS (
+      WITH inscripciones_calculadas AS (
         SELECT 
+          i.id AS inscripcion_id,
           i.persona_id,
           i.servicio_id,
           i.sucursal_id,
-          MAX(i.id) as ultima_inscripcion_id
+          i.ingresos_disponibles,
+          i.fecha_inicio,
+          i.fecha_vencimiento,
+          i.estado_inscripcion,
+          s.nombre AS servicio_nombre,
+          COALESCE(ts.nombre, 'general') AS tipo_servicio,
+          CASE 
+            WHEN i.estado_inscripcion = 'activo' THEN true 
+            ELSE false 
+          END AS es_activa
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id
-        GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
-      ),
-      ServiciosUnicos AS (
-        SELECT DISTINCT ON (ui.persona_id, ui.sucursal_id, ui.servicio_id)
-          p.id as persona_id,
-          p.nombres,
-          p.apellidos,
-          p.ci,
-          p.telefono,
-          p.fecha_nacimiento,
-          ui.sucursal_id,
-          su.nombre as sucursal_name,
-          ui.servicio_id,
-          s.nombre as servicio_nombre,
-          i.ingresos_disponibles,
-          i.fecha_vencimiento,
-          i.fecha_inicio,
-          CASE 
-            WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
-                 AND (i.ingresos_disponibles > 0 OR i.ingresos_disponibles IS NULL) 
-                 THEN 'active'
-            ELSE 'inactive'
-          END as servicio_status
-        FROM personas p
-        INNER JOIN UltimasInscripciones ui ON p.id = ui.persona_id
-        INNER JOIN inscripciones i ON i.id = ui.ultima_inscripcion_id
-        INNER JOIN servicios s ON i.servicio_id = s.id
+        LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
+        INNER JOIN personas p ON i.persona_id = p.id
         INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
         ${whereClause}
-        ORDER BY ui.persona_id, ui.sucursal_id, ui.servicio_id, i.id DESC
+      ),
+      candidatas AS (
+        SELECT 
+          ic.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY ic.persona_id, ic.sucursal_id, ic.tipo_servicio
+            ORDER BY 
+              CASE WHEN ic.es_activa THEN 0 ELSE 1 END,
+              ic.fecha_vencimiento DESC,
+              ic.inscripcion_id DESC
+          ) AS rn_por_tipo
+        FROM inscripciones_calculadas ic
       ),
       PersonasUnicas AS (
-        SELECT DISTINCT ON (persona_id, sucursal_id)
-          persona_id,
-          CONCAT(nombres, ' ', apellidos) as name,
-          ci,
-          telefono,
-          fecha_nacimiento,
-          sucursal_id,
-          sucursal_name
-        FROM ServiciosUnicos
-        ORDER BY persona_id, sucursal_id
+        SELECT DISTINCT ON (c.persona_id, c.sucursal_id)
+          c.persona_id,
+          c.sucursal_id,
+          su.nombre AS sucursal_name
+        FROM candidatas c
+        INNER JOIN sucursales su ON c.sucursal_id = su.id
+        WHERE c.rn_por_tipo = 1
+        ORDER BY c.persona_id, c.sucursal_id
       )
       SELECT 
-        pu.persona_id as id,
-        pu.name,
-        pu.ci,
-        pu.telefono as phone,
-        TO_CHAR(pu.fecha_nacimiento, 'YYYY-MM-DD') as birthdate,
+        pu.persona_id AS id,
+        CONCAT(p.nombres, ' ', p.apellidos) AS name,
+        p.ci,
+        p.telefono AS phone,
+        TO_CHAR(p.fecha_nacimiento, 'YYYY-MM-DD') AS birthdate,
         pu.sucursal_id,
         pu.sucursal_name,
-        TO_CHAR(MIN(su.fecha_inicio), 'YYYY-MM-DD') as registrationdate,
+        TO_CHAR(MIN(c.fecha_inicio), 'YYYY-MM-DD') AS registrationdate,
         CASE 
           WHEN EXISTS (
             SELECT 1 FROM inscripciones i2 
             WHERE i2.persona_id = pu.persona_id 
             AND i2.sucursal_id = pu.sucursal_id
-            AND i2.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
-            AND (i2.ingresos_disponibles > 0 OR i2.ingresos_disponibles IS NULL)
+            AND i2.estado = 1
+            AND i2.estado_inscripcion = 'activo'
           ) THEN 'active'
           ELSE 'inactive'
-        END as member_status
+        END AS member_status
       FROM PersonasUnicas pu
-      LEFT JOIN ServiciosUnicos su 
-        ON pu.persona_id = su.persona_id 
-        AND pu.sucursal_id = su.sucursal_id
-      GROUP BY pu.persona_id, pu.name, pu.ci, pu.telefono, pu.fecha_nacimiento, 
-               pu.sucursal_id, pu.sucursal_name
-      ORDER BY pu.name, pu.sucursal_id
+      INNER JOIN personas p ON p.id = pu.persona_id
+      LEFT JOIN candidatas c 
+        ON c.persona_id = pu.persona_id 
+        AND c.sucursal_id = pu.sucursal_id
+        AND c.rn_por_tipo = 1
+      GROUP BY pu.persona_id, p.nombres, p.apellidos, p.ci, p.telefono,
+               p.fecha_nacimiento, pu.sucursal_id, pu.sucursal_name
+      ORDER BY pu.persona_id, pu.sucursal_id
       LIMIT $${paramCount + 1} OFFSET $${paramCount + 2}
     `;
 
     const countQuery = `
-      WITH UltimasInscripciones AS (
+      WITH inscripciones_calculadas AS (
         SELECT 
           i.persona_id,
-          i.servicio_id,
           i.sucursal_id,
-          MAX(i.id) as ultima_inscripcion_id
+          COALESCE(ts.nombre, 'general') AS tipo_servicio
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id
-        GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
-      ),
-      PersonasUnicas AS (
-        SELECT DISTINCT ON (p.id, ui.sucursal_id)
-          p.id as persona_id,
-          ui.sucursal_id
-        FROM personas p
-        INNER JOIN UltimasInscripciones ui ON p.id = ui.persona_id
-        INNER JOIN inscripciones i ON i.id = ui.ultima_inscripcion_id
-        INNER JOIN servicios s ON i.servicio_id = s.id
+        LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
+        INNER JOIN personas p ON i.persona_id = p.id
         INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
         ${whereClause}
-        ORDER BY p.id, ui.sucursal_id
+      ),
+      PersonasUnicas AS (
+        SELECT DISTINCT persona_id, sucursal_id
+        FROM inscripciones_calculadas
       )
-      SELECT COUNT(*) as total_count
+      SELECT COUNT(*) AS total_count
       FROM PersonasUnicas
     `;
 
@@ -212,48 +222,68 @@ const getMembers = async (
 
     const totalCount = parseInt(countResult.rows[0]?.total_count || 0);
 
-    // Optimización: una sola query para TODOS los servicios de la página
-    const memberKeys = membersResult.rows.map((m) => ({
-      persona_id: m.id,
-      sucursal_id: m.sucursal_id,
-    }));
+    // ============================================
+    // Servicios por miembro (solo las candidatas: 1 por tipo)
+    // ============================================
+    const uniqueIds = [
+      ...new Set(membersResult.rows.map((m) => m.id)),
+    ];
 
     let allServices = [];
 
-    if (memberKeys.length > 0) {
-      // Construir array de pares (persona_id, sucursal_id) únicos
-      const uniqueIds = [...new Set(memberKeys.map((m) => m.persona_id))];
+    if (uniqueIds.length > 0) {
       const placeholders = uniqueIds.map((_, i) => `$${i + 1}`).join(",");
 
       const allServicesQuery = `
-        WITH UltimasInscripciones AS (
+        WITH inscripciones_calculadas AS (
           SELECT 
+            i.id AS inscripcion_id,
             i.persona_id,
             i.servicio_id,
             i.sucursal_id,
-            MAX(i.id) as ultima_inscripcion_id
+            i.ingresos_disponibles,
+            i.fecha_inicio,
+            i.fecha_vencimiento,
+            i.estado_inscripcion,
+            s.nombre AS servicio_nombre,
+            COALESCE(ts.nombre, 'general') AS tipo_servicio,
+            CASE 
+              WHEN i.estado_inscripcion = 'activo' THEN true 
+              ELSE false 
+            END AS es_activa
           FROM inscripciones i
           INNER JOIN servicios s ON i.servicio_id = s.id
-          WHERE i.persona_id IN (${placeholders})
-          GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
+          LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
+          WHERE i.estado = 1
+            AND i.persona_id IN (${placeholders})
+        ),
+        candidatas AS (
+          SELECT 
+            ic.*,
+            ROW_NUMBER() OVER (
+              PARTITION BY ic.persona_id, ic.sucursal_id, ic.tipo_servicio
+              ORDER BY 
+                CASE WHEN ic.es_activa THEN 0 ELSE 1 END,
+                ic.fecha_vencimiento DESC,
+                ic.inscripcion_id DESC
+            ) AS rn_por_tipo
+          FROM inscripciones_calculadas ic
         )
         SELECT 
-          ui.persona_id,
-          ui.sucursal_id,
-          s.nombre as servicio_nombre,
-          i.ingresos_disponibles,
-          TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') as fecha_inicio,
-          TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
-          CASE 
-            WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
-                 AND (i.ingresos_disponibles > 0 OR i.ingresos_disponibles IS NULL) 
-                 THEN 'active'
-            ELSE 'inactive'
-          END as servicio_status
-        FROM UltimasInscripciones ui
-        INNER JOIN inscripciones i ON i.id = ui.ultima_inscripcion_id
-        INNER JOIN servicios s ON i.servicio_id = s.id
-        ORDER BY ui.persona_id, ui.sucursal_id, s.nombre
+          c.persona_id,
+          c.sucursal_id,
+          c.servicio_nombre,
+          c.ingresos_disponibles,
+          TO_CHAR(c.fecha_inicio, 'YYYY-MM-DD') AS fecha_inicio,
+          TO_CHAR(c.fecha_vencimiento, 'YYYY-MM-DD') AS fecha_vencimiento,
+          CASE WHEN c.es_activa THEN 'active' ELSE 'inactive' END AS servicio_status,
+          c.tipo_servicio
+        FROM candidatas c
+        WHERE c.rn_por_tipo = 1
+        ORDER BY c.persona_id, c.sucursal_id, 
+                 CASE WHEN c.es_activa THEN 0 ELSE 1 END,
+                 c.tipo_servicio ASC,
+                 c.fecha_vencimiento DESC
       `;
 
       const servicesResult = await query(allServicesQuery, uniqueIds);
@@ -303,7 +333,9 @@ const getMembers = async (
   }
 };
 
-// Obtener todos los miembros para exportar (sin paginación)
+// ============================================
+// GET ALL MEMBERS (sin paginación, para exportar)
+// ============================================
 const getAllMembers = async (
   searchTerm,
   serviceFilter,
@@ -313,72 +345,13 @@ const getAllMembers = async (
   userRol
 ) => {
   try {
-    let whereConditions = [];
-    let queryParams = [];
-    let paramCount = 0;
-
-    if (userRol === "recepcionista" && userSucursalId) {
-      paramCount++;
-      whereConditions.push(`i.sucursal_id = $${paramCount}`);
-      queryParams.push(parseInt(userSucursalId));
-    } else if (sucursalFilter && sucursalFilter !== "all") {
-      paramCount++;
-      whereConditions.push(`i.sucursal_id = $${paramCount}`);
-      queryParams.push(parseInt(sucursalFilter));
-    }
-
-    whereConditions.push(
-      `p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)`
-    );
-    whereConditions.push(`p.estado = 0`);
-
-    if (searchTerm && searchTerm.trim() !== "") {
-      paramCount++;
-
-      const normalizedSearch = searchTerm.trim().replace(/\s+/g, " ");
-
-      whereConditions.push(`
-        (
-          unaccent(LOWER(REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g'))) 
-            ILIKE unaccent(LOWER($${paramCount}))
-          
-          OR unaccent(LOWER(REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g'))) 
-            ILIKE unaccent(LOWER($${paramCount}))
-          
-          OR TRIM(p.ci) ILIKE $${paramCount}
-          
-          OR unaccent(LOWER(
-            REGEXP_REPLACE(
-              TRIM(CONCAT(
-                REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g'),
-                ' ',
-                REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g')
-              )),
-              '\\s+', ' ', 'g'
-            )
-          )) ILIKE unaccent(LOWER($${paramCount}))
-          
-          OR unaccent(LOWER(
-            REGEXP_REPLACE(
-              TRIM(CONCAT(
-                REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g'),
-                ' ',
-                REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g')
-              )),
-              '\\s+', ' ', 'g'
-            )
-          )) ILIKE unaccent(LOWER($${paramCount}))
-        )
-      `);
-
-      queryParams.push(`%${normalizedSearch}%`);
-    }
-
-    if (serviceFilter && serviceFilter !== "all") {
-      paramCount++;
-      whereConditions.push(`s.nombre = $${paramCount}`);
-      queryParams.push(serviceFilter);
-    }
+    const { whereConditions, queryParams } = buildWhereConditions({
+      searchTerm,
+      serviceFilter,
+      sucursalFilter,
+      userSucursalId,
+      userRol,
+    });
 
     const whereClause =
       whereConditions.length > 0
@@ -386,72 +359,76 @@ const getAllMembers = async (
         : "";
 
     const queryText = `
-      WITH UltimasInscripciones AS (
+      WITH inscripciones_calculadas AS (
         SELECT 
+          i.id AS inscripcion_id,
           i.persona_id,
           i.servicio_id,
           i.sucursal_id,
-          MAX(i.id) as ultima_inscripcion_id
-        FROM inscripciones i
-        INNER JOIN servicios s ON i.servicio_id = s.id
-        GROUP BY i.persona_id, i.servicio_id, i.sucursal_id
-      ),
-      ServiciosUnicos AS (
-        SELECT DISTINCT ON (ui.persona_id, ui.sucursal_id, ui.servicio_id)
-          p.id as persona_id,
+          i.ingresos_disponibles,
+          i.fecha_inicio,
+          i.fecha_vencimiento,
+          i.estado_inscripcion,
+          s.nombre AS servicio_nombre,
+          COALESCE(ts.nombre, 'general') AS tipo_servicio,
           p.nombres,
           p.apellidos,
           p.ci,
           p.telefono,
           p.fecha_nacimiento,
-          ui.sucursal_id,
-          su.nombre as sucursal_name,
-          ui.servicio_id,
-          s.nombre as servicio_nombre,
-          i.ingresos_disponibles,
-          i.fecha_vencimiento,
-          i.fecha_inicio,
+          su.nombre AS sucursal_name,
           CASE 
-            WHEN i.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
-                 AND (i.ingresos_disponibles > 0 OR i.ingresos_disponibles IS NULL) 
-                 THEN 'active'
-            ELSE 'inactive'
-          END as servicio_status
-        FROM personas p
-        INNER JOIN UltimasInscripciones ui ON p.id = ui.persona_id
-        INNER JOIN inscripciones i ON i.id = ui.ultima_inscripcion_id
+            WHEN i.estado_inscripcion = 'activo' THEN true 
+            ELSE false 
+          END AS es_activa
+        FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id
+        LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
+        INNER JOIN personas p ON i.persona_id = p.id
         INNER JOIN sucursales su ON i.sucursal_id = su.id AND su.estado = 1
         ${whereClause}
-        ORDER BY ui.persona_id, ui.sucursal_id, ui.servicio_id, i.id DESC
+      ),
+      candidatas AS (
+        SELECT 
+          ic.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY ic.persona_id, ic.sucursal_id, ic.tipo_servicio
+            ORDER BY 
+              CASE WHEN ic.es_activa THEN 0 ELSE 1 END,
+              ic.fecha_vencimiento DESC,
+              ic.inscripcion_id DESC
+          ) AS rn_por_tipo
+        FROM inscripciones_calculadas ic
       )
       SELECT 
-        persona_id as id,
-        CONCAT(nombres, ' ', apellidos) as name,
-        ci,
-        telefono as phone,
-        TO_CHAR(fecha_nacimiento, 'YYYY-MM-DD') as birthdate,
-        sucursal_id,
-        sucursal_name,
-        servicio_id,
-        servicio_nombre,
-        ingresos_disponibles,
-        TO_CHAR(fecha_inicio, 'YYYY-MM-DD') as fecha_inicio,
-        TO_CHAR(fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento,
-        servicio_status,
-        TO_CHAR(fecha_inicio, 'YYYY-MM-DD') as registrationdate,
+        c.persona_id,
+        CONCAT(c.nombres, ' ', c.apellidos) AS name,
+        c.ci,
+        c.telefono AS phone,
+        TO_CHAR(c.fecha_nacimiento, 'YYYY-MM-DD') AS birthdate,
+        c.sucursal_id,
+        c.sucursal_name,
+        c.servicio_nombre,
+        c.ingresos_disponibles,
+        TO_CHAR(c.fecha_inicio, 'YYYY-MM-DD') AS fecha_inicio,
+        TO_CHAR(c.fecha_vencimiento, 'YYYY-MM-DD') AS fecha_vencimiento,
+        CASE WHEN c.es_activa THEN 'active' ELSE 'inactive' END AS servicio_status,
         CASE 
           WHEN EXISTS (
             SELECT 1 FROM inscripciones i2 
-            WHERE i2.persona_id = persona_id 
-            AND i2.sucursal_id = sucursal_id
-            AND i2.fecha_vencimiento >= TIMEZONE('America/La_Paz', NOW())::date 
-            AND (i2.ingresos_disponibles > 0 OR i2.ingresos_disponibles IS NULL)
+            WHERE i2.persona_id = c.persona_id 
+            AND i2.sucursal_id = c.sucursal_id
+            AND i2.estado = 1
+            AND i2.estado_inscripcion = 'activo'
           ) THEN 'active'
           ELSE 'inactive'
-        END as member_status
-      FROM ServiciosUnicos
-      ORDER BY nombres, apellidos, sucursal_id, servicio_nombre
+        END AS member_status
+      FROM candidatas c
+      WHERE c.rn_por_tipo = 1
+      ORDER BY c.nombres, c.apellidos, c.sucursal_id,
+               CASE WHEN c.es_activa THEN 0 ELSE 1 END,
+               c.tipo_servicio ASC,
+               c.fecha_vencimiento DESC
     `;
 
     const result = await query(queryText, queryParams);
@@ -459,23 +436,25 @@ const getAllMembers = async (
     const membersMap = new Map();
 
     result.rows.forEach((row) => {
-      const key = `${row.id}-${row.sucursal_id}`;
+      const key = `${row.persona_id}-${row.sucursal_id}`;
 
       if (!membersMap.has(key)) {
         membersMap.set(key, {
-          id: row.id.toString(),
+          id: row.persona_id.toString(),
           name: row.name || "",
           ci: row.ci || "",
           phone: row.phone || "",
           birthDate: row.birthdate || "",
           sucursal: row.sucursal_id ? row.sucursal_id.toString() : "",
           status: row.member_status || "inactive",
-          registrationDate: row.registrationdate || "",
+          registrationDate: row.fecha_inicio || "",
           services: [],
         });
       }
 
       const member = membersMap.get(key);
+
+      // Ya viene 1 por tipo desde el SQL, pero por seguridad evito duplicar mismo nombre
       const servicioExistente = member.services.find(
         (service) => service.name === row.servicio_nombre
       );
@@ -500,7 +479,9 @@ const getAllMembers = async (
   }
 };
 
-// Editar miembro
+// ============================================
+// EDIT MEMBER
+// ============================================
 const editMember = async (id, nombres, apellidos, ci, phone) => {
   try {
     const checkCiQuery = `
@@ -547,7 +528,10 @@ const editMember = async (id, nombres, apellidos, ci, phone) => {
   }
 };
 
-// ✅ Actualizar fechas de inscripción (inicio y vencimiento)
+// ============================================
+// UPDATE INSCRIPTION DATES
+// Bloquea la edición si estado_inscripcion !== 'activo'
+// ============================================
 const updateInscriptionDates = async (
   personaId,
   serviceName,
@@ -561,10 +545,10 @@ const updateInscriptionDates = async (
     });
 
     const findQuery = `
-      SELECT i.id, i.fecha_inicio, i.fecha_vencimiento
+      SELECT i.id, i.fecha_inicio, i.fecha_vencimiento, i.estado_inscripcion
       FROM inscripciones i
       INNER JOIN servicios s ON i.servicio_id = s.id
-      WHERE i.persona_id = $1 AND s.nombre = $2
+      WHERE i.persona_id = $1 AND s.nombre = $2 AND i.estado = 1
       ORDER BY i.id DESC
       LIMIT 1
     `;
@@ -577,8 +561,16 @@ const updateInscriptionDates = async (
       );
     }
 
-    const inscripcionId = findResult.rows[0].id;
-    console.log("Inscripción encontrada:", findResult.rows[0]);
+    const inscripcion = findResult.rows[0];
+
+    // ✅ No se puede editar fechas de una inscripción inactiva
+    if (inscripcion.estado_inscripcion !== "activo") {
+      const error = new Error(
+        "No se pueden editar las fechas de un servicio inactivo"
+      );
+      error.code = "INSCRIPTION_INACTIVE";
+      throw error;
+    }
 
     const updateQuery = `
       UPDATE inscripciones
@@ -591,7 +583,7 @@ const updateInscriptionDates = async (
     const result = await query(updateQuery, [
       startDate,
       expirationDate,
-      inscripcionId,
+      inscripcion.id,
     ]);
 
     console.log("Inscripción actualizada:", result.rows[0]);
@@ -604,7 +596,9 @@ const updateInscriptionDates = async (
   }
 };
 
-// Eliminar miembro
+// ============================================
+// DELETE MEMBER
+// ============================================
 const deleteMember = async (id) => {
   try {
     const checkQuery = "SELECT * FROM personas WHERE id = $1 AND estado = 0";
@@ -628,6 +622,9 @@ const deleteMember = async (id) => {
   }
 };
 
+// ============================================
+// GET AVAILABLE SERVICES
+// ============================================
 const getAvailableServices = async () => {
   try {
     const queryText = `
@@ -646,6 +643,9 @@ const getAvailableServices = async () => {
   }
 };
 
+// ============================================
+// GET AVAILABLE BRANCHES
+// ============================================
 const getAvailableBranches = async () => {
   try {
     const queryText = `

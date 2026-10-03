@@ -8,11 +8,8 @@ router.get("/logs", accessController.getAccessLogs);
 // Buscar miembros (clientes y empleados)
 router.get("/members", accessController.searchMembers);
 
-// ✅ NUEVO: Obtener suscripciones detalladas de un cliente
+// Obtener suscripciones detalladas de un cliente
 router.get("/members/:personId/subscriptions", accessController.getClientSubscriptions);
-
-// ✅ Validar si el cliente puede acceder según horarios del servicio
-router.post("/validate/client-access", accessController.validateClientAccess);
 
 // Registrar acceso de cliente
 router.post("/register/client", accessController.registerClientAccess);

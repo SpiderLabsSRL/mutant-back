@@ -86,33 +86,6 @@ exports.getClientSubscriptions = async (req, res) => {
 };
 
 // ============================================
-// VALIDATE CLIENT ACCESS
-// ============================================
-exports.validateClientAccess = async (req, res) => {
-  try {
-    const { personId, serviceId, branchId } = req.body;
-
-    if (!personId || !serviceId || !branchId) {
-      return res.status(400).json({
-        message: "Faltan parámetros requeridos",
-        received: { personId, serviceId, branchId },
-      });
-    }
-
-    const result = await accessService.validateClientAccess(
-      parseInt(personId),
-      parseInt(serviceId),
-      parseInt(branchId)
-    );
-
-    res.json(result);
-  } catch (error) {
-    console.error("Error in validateClientAccess:", error);
-    res.status(500).json({ message: error.message });
-  }
-};
-
-// ============================================
 // REGISTER CLIENT ACCESS
 // ============================================
 exports.registerClientAccess = async (req, res) => {

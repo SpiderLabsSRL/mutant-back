@@ -12,7 +12,7 @@ const getMembers = async (req, res) => {
     } = req.query;
 
     const pageNum = parseInt(page) || 1;
-    const limitNum = 10; // ✅ Fijo en 10, ignoramos cualquier limit del frontend
+    const limitNum = 10;
     const search = searchTerm || "";
     const service = serviceFilter || "all";
     const status = statusFilter || "all";
@@ -42,7 +42,7 @@ const getMembers = async (req, res) => {
     });
   }
 };
-// Obtener todos los miembros para exportar (sin paginación)
+
 const getAllMembers = async (req, res) => {
   try {
     const {
@@ -85,7 +85,6 @@ const getAllMembers = async (req, res) => {
   }
 };
 
-// Editar miembro
 const editMember = async (req, res) => {
   try {
     const { id } = req.params;
@@ -139,7 +138,6 @@ const editMember = async (req, res) => {
   }
 };
 
-// Eliminar miembro
 const deleteMember = async (req, res) => {
   try {
     const { id } = req.params;
@@ -166,7 +164,6 @@ const deleteMember = async (req, res) => {
   }
 };
 
-// Obtener servicios disponibles
 const getAvailableServices = async (req, res) => {
   try {
     console.log("Controlador getAvailableServices - Usuario:", req.user);
@@ -184,7 +181,6 @@ const getAvailableServices = async (req, res) => {
   }
 };
 
-// Obtener sucursales disponibles
 const getAvailableBranches = async (req, res) => {
   try {
     console.log("Controlador getAvailableBranches - Usuario:", req.user);
@@ -202,7 +198,6 @@ const getAvailableBranches = async (req, res) => {
   }
 };
 
-// Ruta de prueba
 const testRoute = async (req, res) => {
   res.json({
     success: true,
@@ -211,7 +206,7 @@ const testRoute = async (req, res) => {
   });
 };
 
-// ✅ NUEVA FUNCIÓN: Actualizar fechas de inscripción
+// ✅ Actualizar fechas: bloquea si la inscripción está inactiva
 const updateInscriptionDates = async (req, res) => {
   try {
     const { id } = req.params;
@@ -245,6 +240,15 @@ const updateInscriptionDates = async (req, res) => {
     });
   } catch (error) {
     console.error("Error en updateInscriptionDates controller:", error);
+
+    // ✅ Error específico: no se puede editar un servicio inactivo
+    if (error.message.includes("No se pueden editar las fechas")) {
+      return res.status(400).json({
+        success: false,
+        message: error.message,
+      });
+    }
+
     res.status(500).json({
       success: false,
       message: error.message || "Error al actualizar fechas",
