@@ -90,9 +90,6 @@ const formatDate = (dateString) => {
 
 // ============================================
 // GET CLIENT SUBSCRIPTIONS
-// - Si se pasa branchId: solo inscripciones de esa sucursal.
-//   Para multisucursal, se prefiere la inscripción LOCAL de esa sucursal
-//   (si existe), evitando duplicados.
 // ============================================
 exports.getClientSubscriptions = async (personId, branchId = null) => {
   try {
@@ -148,11 +145,6 @@ exports.getClientSubscriptions = async (personId, branchId = null) => {
 
     const statusPriority = { active: 0, pending: 1, expired: 2 };
 
-    // ============================================
-    // Agrupar por tipo_servicio + sucursal,
-    // pero si tenemos branchId, agrupar solo por tipo_servicio
-    // (porque ya filtramos por sucursal y multisucursal replica).
-    // ============================================
     const targetBranchId =
       branchId !== null &&
       branchId !== undefined &&
@@ -163,8 +155,6 @@ exports.getClientSubscriptions = async (personId, branchId = null) => {
     const groupedMap = new Map();
 
     result.rows.forEach((row) => {
-      // Clave: si tenemos branchId → solo tipo_servicio.
-      //        Si no → tipo_servicio + sucursal (comportamiento previo).
       const key = targetBranchId
         ? `${row.tipo_servicio}`
         : `${row.tipo_servicio}-${row.sucursal_id}`;
@@ -176,8 +166,6 @@ exports.getClientSubscriptions = async (personId, branchId = null) => {
 
       const existing = groupedMap.get(key);
 
-      // ✅ Cuando tenemos branchId, preferir la inscripción LOCAL
-      //    (mismo sucursal_id) sobre las réplicas multisucursal.
       if (targetBranchId) {
         const existingIsLocal = existing.sucursal_id === targetBranchId;
         const newIsLocal = row.sucursal_id === targetBranchId;
@@ -187,7 +175,6 @@ exports.getClientSubscriptions = async (personId, branchId = null) => {
           return;
         }
         if (!newIsLocal && existingIsLocal) {
-          // Conservar el local
           return;
         }
       }
@@ -749,6 +736,9 @@ exports.registerClientAccess = async (
   const memberName = `${inscription.persona_nombres} ${inscription.persona_apellidos}`;
   const memberCi = inscription.persona_ci;
 
+  // ✅ ¿El servicio es ilimitado?
+  const isUnlimitedService = inscription.servicio_ingresos_ilimitados === null;
+
   // ✅ VALIDACIÓN 1: estado activo
   if (inscription.estado_inscripcion !== "activo") {
     const motivo =
@@ -775,26 +765,30 @@ exports.registerClientAccess = async (
   }
 
   // ✅ VALIDACIÓN 2: ya ingresó hoy con ESTA INSCRIPCIÓN específica
-  const ingresoPrevio = await checkYaIngresóHoy(inscripcionId);
+  //    ⚠️ SOLO aplica a servicios LIMITADOS.
+  //    Los servicios ilimitados pueden ingresar varias veces al día.
+  if (!isUnlimitedService) {
+    const ingresoPrevio = await checkYaIngresóHoy(inscripcionId);
 
-  if (ingresoPrevio) {
-    const motivo = `Ya se ingresó una vez hoy a ${ingresoPrevio.sucursal_nombre} con esta inscripción`;
-    const detalle = `Acceso denegado - ${motivo}`;
+    if (ingresoPrevio) {
+      const motivo = `Ya se ingresó una vez hoy a ${ingresoPrevio.sucursal_nombre} con esta inscripción`;
+      const detalle = `Acceso denegado - ${motivo}`;
 
-    const log = await insertLogAndReturn({
-      inscripcionId,
-      servicioId: inscription.servicio_real_id,
-      detalle,
-      estado: "denegado",
-    });
-    log.memberName = memberName;
-    log.ci = memberCi;
+      const log = await insertLogAndReturn({
+        inscripcionId,
+        servicioId: inscription.servicio_real_id,
+        detalle,
+        estado: "denegado",
+      });
+      log.memberName = memberName;
+      log.ci = memberCi;
 
-    return {
-      success: false,
-      message: motivo,
-      log,
-    };
+      return {
+        success: false,
+        message: motivo,
+        log,
+      };
+    }
   }
 
   // ✅ VALIDACIÓN 3: horario del servicio
@@ -828,9 +822,8 @@ exports.registerClientAccess = async (
   }
 
   // ============================================
-  // DECREMENTAR INGRESOS
+  // DECREMENTAR INGRESOS (solo si es limitado)
   // ============================================
-  const isUnlimitedService = inscription.servicio_ingresos_ilimitados === null;
   let remainingVisits = 0;
   let latestMultisucursalInscriptions = [];
 
