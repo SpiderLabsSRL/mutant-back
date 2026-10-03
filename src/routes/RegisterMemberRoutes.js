@@ -14,10 +14,10 @@ router.get("/subscriptions/active/:personaId", RegisterMemberController.getActiv
 // Verificar estado de caja
 router.get("/cash-register/status/:cajaId", RegisterMemberController.getCashRegisterStatus);
 
-// ✅ Validar cupón para servicios
+// Validar cupón para servicios
 router.get("/coupons/validate", RegisterMemberController.validateCoupon);
 
-// ✅ Listar cupones disponibles para la sucursal
+// Listar cupones disponibles para la sucursal
 router.get("/coupons/available/:sucursalId", RegisterMemberController.getAvailableCoupons);
 
 // Registrar nueva inscripción

@@ -5,7 +5,8 @@ const { query, pool } = require("../../db");
 // ============================================
 // personas:      0 = activo, 1 = inactivo
 // servicios:     1 = activo, 0 = inactivo, 2 = eliminado
-// inscripciones: 1 = activo, 0 = inactivo, 2 = eliminado
+// inscripciones: 1 = activo, 0 = inactivo, 2 = eliminado  (estado fila)
+// estado_inscripcion (columna nueva): 'activo' | 'inactivo'
 // cupones:       1 = activo
 // empleados:     1 = activo
 const ESTADO = {
@@ -15,6 +16,64 @@ const ESTADO = {
   cupones: 1,
   empleados: 1,
 };
+
+const DIAS_VENTANA_FUTURO = 7;
+const DIAS_VENTANA_PASADO = 7;
+
+// ============================================
+// HELPERS DE FECHA (evitan problemas de zona horaria)
+// ============================================
+/**
+ * Convierte un Date o string YYYY-MM-DD a un string YYYY-MM-DD
+ * sin importar zona horaria.
+ */
+function toYMD(fecha) {
+  if (!fecha) return null;
+  if (typeof fecha === "string") {
+    // Si ya viene como "YYYY-MM-DD" o "YYYY-MM-DDTHH:mm:ss..."
+    return fecha.substring(0, 10);
+  }
+  const d = new Date(fecha);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+/**
+ * Retorna el YMD de hoy en zona America/La_Paz.
+ */
+function hoyYMD() {
+  const now = new Date();
+  const laPaz = new Date(
+    now.toLocaleString("en-US", { timeZone: "America/La_Paz" })
+  );
+  const y = laPaz.getFullYear();
+  const m = String(laPaz.getMonth() + 1).padStart(2, "0");
+  const d = String(laPaz.getDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+
+/**
+ * Diferencia en días entre dos strings YMD (b - a).
+ */
+function diffDiasYMD(aYMD, bYMD) {
+  const a = new Date(`${aYMD}T00:00:00Z`);
+  const b = new Date(`${bYMD}T00:00:00Z`);
+  return Math.round((b - a) / (1000 * 60 * 60 * 24));
+}
+
+/**
+ * Suma días a un YMD y devuelve otro YMD.
+ */
+function addDiasYMD(ymd, dias) {
+  const d = new Date(`${ymd}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + dias);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
 // ============================================
 // SERVICIOS POR SUCURSAL
@@ -89,21 +148,22 @@ exports.searchPeople = async (searchTerm) => {
 };
 
 // ============================================
-// SUSCRIPCIONES ACTIVAS
+// SUSCRIPCIONES ACTIVAS Y FUTURAS
 // ============================================
 exports.getActiveSubscriptions = async (personaId, sucursalId) => {
   const result = await query(
     `
     SELECT i.id, i.servicio_id, i.sucursal_id, i.fecha_inicio, i.fecha_vencimiento, 
-           i.ingresos_disponibles, i.estado, s.multisucursal,
-           ts.nombre AS tipo_servicio
+           i.ingresos_disponibles, i.estado, i.estado_inscripcion,
+           s.multisucursal, ts.nombre AS tipo_servicio
     FROM inscripciones i
     INNER JOIN servicios s ON i.servicio_id = s.id
     LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
     WHERE i.persona_id = $1 
-    AND i.estado = $2
-    AND i.fecha_vencimiento > CURRENT_DATE 
-    AND (i.sucursal_id = $3 OR s.multisucursal = true)
+      AND i.estado = $2
+      AND i.fecha_vencimiento >= CURRENT_DATE
+      AND (i.sucursal_id = $3 OR s.multisucursal = true)
+    ORDER BY i.fecha_inicio ASC
   `,
     [personaId, ESTADO.inscripciones, sucursalId]
   );
@@ -246,6 +306,86 @@ exports.getAvailableCoupons = async (sucursalId) => {
 };
 
 // ============================================
+// HELPER: Analizar conflicto de inscripción por persona + tipo
+// ============================================
+async function analizarConflictoInscripcion(
+  client,
+  personaId,
+  tipoServicio,
+  sucursalId
+) {
+  const result = await client.query(
+    `
+    SELECT i.id, i.fecha_inicio, i.fecha_vencimiento, i.estado_inscripcion,
+           i.servicio_id, s.tipo_servicio_id, ts.nombre AS tipo_servicio
+    FROM inscripciones i
+    INNER JOIN servicios s ON i.servicio_id = s.id
+    LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
+    WHERE i.persona_id = $1
+      AND i.estado = $2
+      AND ts.nombre = $3
+      AND i.fecha_vencimiento >= CURRENT_DATE
+    ORDER BY i.fecha_inicio ASC
+  `,
+    [personaId, ESTADO.inscripciones, tipoServicio]
+  );
+
+  const inscripciones = result.rows;
+
+  if (inscripciones.length === 0) {
+    return { status: "libre" };
+  }
+
+  const hoy = hoyYMD();
+
+  // ¿Hay alguna futura (inactiva y fecha_inicio > hoy)?
+  const futura = inscripciones.find((i) => {
+    const fi = toYMD(i.fecha_inicio);
+    return i.estado_inscripcion === "inactivo" && fi > hoy;
+  });
+
+  if (futura) {
+    return {
+      status: "bloqueado_futuro",
+      futura,
+      tipo: tipoServicio,
+    };
+  }
+
+  // Buscar activa
+  const activa = inscripciones.find((i) => {
+    const fi = toYMD(i.fecha_inicio);
+    const fv = toYMD(i.fecha_vencimiento);
+    return i.estado_inscripcion === "activo" && fi <= hoy && fv >= hoy;
+  });
+
+  if (!activa) {
+    return { status: "libre" };
+  }
+
+  const fv = toYMD(activa.fecha_vencimiento);
+  const diffDias = diffDiasYMD(hoy, fv);
+
+  if (diffDias <= DIAS_VENTANA_FUTURO) {
+    return {
+      status: "futuro_permitido",
+      activa,
+      tipo: tipoServicio,
+      diffDias,
+    };
+  }
+
+  return {
+    status: "reemplazo",
+    activa,
+    tipo: tipoServicio,
+    diffDias,
+  };
+}
+
+exports.analizarConflictoInscripcion = analizarConflictoInscripcion;
+
+// ============================================
 // REGISTRAR MIEMBRO (MULTI-PERSONA)
 // ============================================
 exports.registerMember = async (registrationData) => {
@@ -264,7 +404,6 @@ exports.registerMember = async (registrationData) => {
         p.personaId && Number(p.personaId) > 0 ? Number(p.personaId) : null;
 
       if (!personaId) {
-        // Buscar por CI (solo activos)
         const existing = await client.query(
           `SELECT id FROM personas WHERE ci = $1 AND estado = $2`,
           [p.ci, ESTADO.personas]
@@ -273,7 +412,6 @@ exports.registerMember = async (registrationData) => {
         if (existing.rows.length > 0) {
           personaId = existing.rows[0].id;
         } else {
-          // Crear persona nueva
           const ins = await client.query(
             `INSERT INTO personas (nombres, apellidos, ci, telefono, fecha_nacimiento, estado)
              VALUES ($1, $2, $3, $4, $5, $6)
@@ -303,9 +441,11 @@ exports.registerMember = async (registrationData) => {
         `
         SELECT s.id, s.nombre, s.precio, s.numero_ingresos, s.multisucursal,
                s.tipo_duracion, s.cantidad_duracion, s.cantidad_personas,
+               s.tipo_servicio_id, ts.nombre AS tipo_servicio,
                ss.sucursal_id, ss.disponible
         FROM servicios s
         INNER JOIN servicio_sucursal ss ON s.id = ss.servicio_id
+        LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
         WHERE s.id = $1 AND ss.sucursal_id = $2 AND ss.disponible = true
       `,
         [servicio.servicioId, registrationData.sucursalId]
@@ -324,7 +464,98 @@ exports.registerMember = async (registrationData) => {
     }
 
     // ============================================
-    // 3. Validar cupón (si viene)
+    // 3. Resolver personaIndexes → personaIds
+    // ============================================
+    const resolvePersonaIds = (servicio) => {
+      if (!servicio.personaIndexes || servicio.personaIndexes.length === 0) {
+        return [...personaIds];
+      }
+      return servicio.personaIndexes
+        .map((idx) => personaIds[idx])
+        .filter((id) => id !== undefined && id !== null);
+    };
+
+    // ============================================
+    // 4. Validar reglas y resolver acciones
+    // ============================================
+    const acciones = [];
+
+    for (const servicio of serviciosInfo) {
+      const realPersonaIds = resolvePersonaIds(servicio);
+
+      if (realPersonaIds.length === 0) {
+        console.warn(
+          `⚠️ Servicio ${servicio.servicioId} sin personas asignadas`
+        );
+        continue;
+      }
+
+      const tipoServicio = servicio.tipo_servicio || "general";
+
+      for (const personaId of realPersonaIds) {
+        const conflicto = await analizarConflictoInscripcion(
+          client,
+          personaId,
+          tipoServicio,
+          registrationData.sucursalId
+        );
+
+        if (conflicto.status === "bloqueado_futuro") {
+          throw new Error(
+            `La persona con ID ${personaId} ya tiene una inscripción pendiente en el futuro para el tipo "${tipoServicio}"`
+          );
+        }
+
+        if (conflicto.status === "reemplazo") {
+          acciones.push({
+            servicio,
+            personaId,
+            accion: "reemplazo",
+            reemplazaId: conflicto.activa.id,
+            fechaInicio: servicio.fechaInicio,
+            fechaVencimiento: servicio.fechaVencimiento,
+          });
+          continue;
+        }
+
+        if (conflicto.status === "futuro_permitido") {
+          // La nueva inscripción comienza al día siguiente del vencimiento
+          const finActivaYMD = toYMD(conflicto.activa.fecha_vencimiento);
+          const inicioYMD = addDiasYMD(finActivaYMD, 1);
+
+          // Recalcular fecha de vencimiento a partir del nuevo inicio
+          const duracionDias =
+            servicio.tipo_duracion === "dias"
+              ? Number(servicio.cantidad_duracion)
+              : Number(servicio.cantidad_duracion) * 30;
+
+          const finYMD = addDiasYMD(inicioYMD, duracionDias);
+
+          acciones.push({
+            servicio,
+            personaId,
+            accion: "futuro",
+            reemplazaId: null,
+            fechaInicio: inicioYMD,
+            fechaVencimiento: finYMD,
+          });
+          continue;
+        }
+
+        // libre
+        acciones.push({
+          servicio,
+          personaId,
+          accion: "nueva",
+          reemplazaId: null,
+          fechaInicio: servicio.fechaInicio,
+          fechaVencimiento: servicio.fechaVencimiento,
+        });
+      }
+    }
+
+    // ============================================
+    // 5. Validar cupón
     // ============================================
     let cuponId = null;
     if (registrationData.cupon_codigo) {
@@ -390,7 +621,7 @@ exports.registerMember = async (registrationData) => {
     }
 
     // ============================================
-    // 4. Fecha actual
+    // 6. Fecha actual
     // ============================================
     const fechaActualResult = await client.query(
       `SELECT TIMEZONE('America/La_Paz', NOW()) as fecha_actual`
@@ -398,97 +629,108 @@ exports.registerMember = async (registrationData) => {
     const fechaActual = fechaActualResult.rows[0].fecha_actual;
 
     // ============================================
-    // 5. Resolver personaIndexes → personaIds
-    // ============================================
-    const resolvePersonaIds = (servicio) => {
-      if (
-        !servicio.personaIndexes ||
-        servicio.personaIndexes.length === 0
-      ) {
-        return [...personaIds];
-      }
-      return servicio.personaIndexes
-        .map((idx) => personaIds[idx])
-        .filter((id) => id !== undefined && id !== null);
-    };
-
-    // ============================================
-    // 6. Crear inscripciones
+    // 7. Crear inscripciones (con estado_inscripcion)
     // ============================================
     const inscripcionesMap = {};
+    const hoyYMDStr = hoyYMD();
 
-    for (const servicio of serviciosInfo) {
-      const realPersonaIds = resolvePersonaIds(servicio);
+    for (const accion of acciones) {
+      const {
+        servicio,
+        personaId,
+        accion: tipoAccion,
+        reemplazaId,
+        fechaInicio,
+        fechaVencimiento,
+      } = accion;
 
-      if (realPersonaIds.length === 0) {
-        console.warn(
-          `⚠️ Servicio ${servicio.servicioId} sin personas asignadas`
+      // Si es reemplazo, inactivar la anterior
+      if (tipoAccion === "reemplazo" && reemplazaId) {
+        console.log(
+          `🔄 Reemplazando inscripción anterior id=${reemplazaId} → estado_inscripcion='inactivo'`
         );
-        continue;
+        const upd = await client.query(
+          `UPDATE inscripciones SET estado_inscripcion = 'inactivo' WHERE id = $1 RETURNING id`,
+          [reemplazaId]
+        );
+        console.log(`✅ Inscripción ${reemplazaId} inactivada:`, upd.rows);
       }
 
-      for (const personaId of realPersonaIds) {
-        console.log(
-          `📝 Creando inscripción: servicio=${servicio.servicioId}, persona=${personaId}, sucursal=${registrationData.sucursalId}, inicio=${servicio.fechaInicio}, fin=${servicio.fechaVencimiento}`
-        );
+      // ✅ Determinar estado_inscripcion:
+      // - 'inactivo' si es futuro (comienza al vencer la activa)
+      // - 'inactivo' si la fecha de inicio es posterior a HOY
+      // - 'activo' en cualquier otro caso
+      const fechaInicioYMD = toYMD(fechaInicio);
+      let estadoInscripcion = "activo";
 
-        const ins = await client.query(
+      if (tipoAccion === "futuro") {
+        estadoInscripcion = "inactivo";
+      } else if (fechaInicioYMD > hoyYMDStr) {
+        estadoInscripcion = "inactivo";
+      }
+
+      const ins = await client.query(
+        `
+        INSERT INTO inscripciones
+          (persona_id, servicio_id, sucursal_id, fecha_inicio, fecha_vencimiento,
+           ingresos_disponibles, estado, estado_inscripcion)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        RETURNING id
+      `,
+        [
+          personaId,
+          servicio.servicioId,
+          registrationData.sucursalId,
+          fechaInicio,
+          fechaVencimiento,
+          servicio.numero_ingresos,
+          ESTADO.inscripciones,
+          estadoInscripcion,
+        ]
+      );
+
+      console.log(
+        `📝 Inscripción creada: id=${ins.rows[0].id}, persona=${personaId}, servicio=${servicio.servicioId}, estado_inscripcion=${estadoInscripcion}`
+      );
+
+      inscripcionesMap[`${servicio.servicioId}:${personaId}`] = ins.rows[0].id;
+
+      // Multisucursal: replicar solo si la nueva inscripción es 'activo'
+      if (servicio.multisucursal && estadoInscripcion === "activo") {
+        const otras = await client.query(
           `
-          INSERT INTO inscripciones
-            (persona_id, servicio_id, sucursal_id, fecha_inicio, fecha_vencimiento, ingresos_disponibles, estado)
-          VALUES ($1, $2, $3, $4, $5, $6, $7)
-          RETURNING id
+          SELECT sucursal_id 
+          FROM servicio_sucursal 
+          WHERE servicio_id = $1 AND sucursal_id != $2 AND disponible = true
         `,
-          [
-            personaId,
-            servicio.servicioId,
-            registrationData.sucursalId,
-            servicio.fechaInicio,
-            servicio.fechaVencimiento,
-            servicio.numero_ingresos,
-            ESTADO.inscripciones,
-          ]
+          [servicio.servicioId, registrationData.sucursalId]
         );
 
-        console.log(`✅ Inscripción creada con id=${ins.rows[0].id}`);
-
-        inscripcionesMap[`${servicio.servicioId}:${personaId}`] =
-          ins.rows[0].id;
-
-        if (servicio.multisucursal) {
-          const otras = await client.query(
+        for (const otra of otras.rows) {
+          await client.query(
             `
-            SELECT sucursal_id 
-            FROM servicio_sucursal 
-            WHERE servicio_id = $1 AND sucursal_id != $2 AND disponible = true
+            INSERT INTO inscripciones
+              (persona_id, servicio_id, sucursal_id, fecha_inicio, fecha_vencimiento,
+               ingresos_disponibles, estado, estado_inscripcion)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
           `,
-            [servicio.servicioId, registrationData.sucursalId]
+            [
+              personaId,
+              servicio.servicioId,
+              otra.sucursal_id,
+              fechaInicio,
+              fechaVencimiento,
+              servicio.numero_ingresos,
+              ESTADO.inscripciones,
+              estadoInscripcion,
+            ]
           );
-
-          for (const otra of otras.rows) {
-            await client.query(
-              `
-              INSERT INTO inscripciones
-                (persona_id, servicio_id, sucursal_id, fecha_inicio, fecha_vencimiento, ingresos_disponibles, estado)
-              VALUES ($1, $2, $3, $4, $5, $6, $7)
-            `,
-              [
-                personaId,
-                servicio.servicioId,
-                otra.sucursal_id,
-                servicio.fechaInicio,
-                servicio.fechaVencimiento,
-                servicio.numero_ingresos,
-                ESTADO.inscripciones,
-              ]
-            );
-          }
         }
       }
     }
 
     // ============================================
-    // 7. Detalle de pago
+    // 8. Detalle de pago
     // ============================================
     let detallePago = null;
     if (registrationData.formaPago === "efectivo") {
@@ -504,7 +746,7 @@ exports.registerMember = async (registrationData) => {
     }
 
     // ============================================
-    // 8. Subtotal
+    // 9. Subtotal
     // ============================================
     const subtotal = serviciosInfo.reduce((sum, s) => {
       const n =
@@ -515,7 +757,7 @@ exports.registerMember = async (registrationData) => {
     }, 0);
 
     // ============================================
-    // 9. Crear venta
+    // 10. Crear venta
     // ============================================
     const ventaResult = await client.query(
       `
@@ -544,28 +786,25 @@ exports.registerMember = async (registrationData) => {
     const ventaId = ventaResult.rows[0].id;
 
     // ============================================
-    // 10. Detalles
+    // 11. Detalles
     // ============================================
-    for (const servicio of serviciosInfo) {
-      const realPersonaIds = resolvePersonaIds(servicio);
+    for (const accion of acciones) {
+      const { servicio, personaId } = accion;
+      const inscripcionId =
+        inscripcionesMap[`${servicio.servicioId}:${personaId}`];
+      if (!inscripcionId) continue;
 
-      for (const personaId of realPersonaIds) {
-        const inscripcionId =
-          inscripcionesMap[`${servicio.servicioId}:${personaId}`];
-        if (!inscripcionId) continue;
-
-        await client.query(
-          `
-          INSERT INTO detalle_venta_servicios (venta_servicio_id, inscripcion_id, precio)
-          VALUES ($1, $2, $3)
-        `,
-          [ventaId, inscripcionId, servicio.precio]
-        );
-      }
+      await client.query(
+        `
+        INSERT INTO detalle_venta_servicios (venta_servicio_id, inscripcion_id, precio)
+        VALUES ($1, $2, $3)
+      `,
+        [ventaId, inscripcionId, servicio.precio]
+      );
     }
 
     // ============================================
-    // 11. Pagos pendientes
+    // 12. Pagos pendientes
     // ============================================
     const pagosPendientesIds = [];
     if (registrationData.pagoPlazos && registrationData.montoPendiente > 0) {
@@ -598,7 +837,7 @@ exports.registerMember = async (registrationData) => {
     }
 
     // ============================================
-    // 12. Movimiento de caja (efectivo)
+    // 13. Movimiento de caja (efectivo)
     // ============================================
     const hayEfectivo =
       registrationData.formaPago === "efectivo" ||
@@ -673,7 +912,7 @@ exports.registerMember = async (registrationData) => {
     }
 
     // ============================================
-    // 13. Movimiento de caja QR
+    // 14. Movimiento de caja QR
     // ============================================
     const montoQr =
       registrationData.formaPago === "qr"

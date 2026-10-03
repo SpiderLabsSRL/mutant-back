@@ -32,7 +32,7 @@ exports.searchPeople = async (req, res) => {
 };
 
 // ============================================
-// SUSCRIPCIONES ACTIVAS
+// SUSCRIPCIONES ACTIVAS (incluye futuras)
 // ============================================
 exports.getActiveSubscriptions = async (req, res) => {
   try {
@@ -131,6 +131,13 @@ exports.registerMember = async (req, res) => {
       error.message.includes("cupón")
     ) {
       return res.status(400).json({ message: error.message });
+    }
+
+    if (
+      error.message.includes("inscripción pendiente en el futuro") ||
+      error.message.includes("inscripción activa")
+    ) {
+      return res.status(409).json({ message: error.message });
     }
 
     res.status(500).json({ message: error.message });

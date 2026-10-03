@@ -1,6 +1,9 @@
 const express = require("express");
 const cors = require("cors");
 const { connectDB } = require("./db");
+const {
+  startInscripcionesCron,
+} = require("./src/jobs/updateInscripcionesEstados");
 
 const app = express();
 
@@ -65,12 +68,13 @@ const Planes = require("./src/routes/PlanesRoutes");
 const sidebarPasswordRoutes = require("./src/routes/sidebarPasswordRoutes");
 const cuponesRoutes = require("./src/routes/cuponesRoutes");
 const zumbaRoutes = require("./src/routes/zumbaRoutes");
+
 // ✅ CONFIGURACIÓN CORREGIDA: Usar las rutas SIN duplicar middleware
 app.use("/api/reminders", remindersRoutes);
 app.use("/api/login", loginRoutes);
 app.use("/api/members", membersListRoutes);
 app.use("/api/products", ProductRoutes);
-app.use("/api/employees", EmployeeRoutes); // ✅ Esto carga employeeRoutes.js
+app.use("/api/employees", EmployeeRoutes);
 app.use("/api/cash", cashRoutes);
 app.use("/api/services", servicesRoutes);
 app.use("/api/reports", ReportsRoutes);
@@ -86,6 +90,7 @@ app.use("/api/planes", Planes);
 app.use("/api/password", sidebarPasswordRoutes);
 app.use("/api/cupones", cuponesRoutes);
 app.use("/api/zumba", zumbaRoutes);
+
 // Manejador de errores global
 app.use((err, req, res, next) => {
   console.error(err.stack);
@@ -112,6 +117,10 @@ const startServer = async () => {
     app.listen(PORT, () => {
       console.log(`Servidor corriendo en el puerto ${PORT}`);
     });
+
+    // ✅ Iniciar cron job de actualización de estados de inscripciones
+    // Se ejecuta todos los días a las 01:00 AM (America/La_Paz)
+    startInscripcionesCron();
   } catch (error) {
     console.error("Error al iniciar el servidor:", error);
     process.exit(1);
