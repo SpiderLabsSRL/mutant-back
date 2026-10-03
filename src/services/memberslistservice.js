@@ -15,8 +15,12 @@ function buildWhereConditions({
   const queryParams = [];
   let paramCount = 0;
 
-  // Sucursal según rol
-  if (userRol === "recepcionista" && userSucursalId) {
+  // ✅ Sucursal:
+  //   - admin: puede filtrar por sucursalFilter (o "all" para todas)
+  //   - NO admin: SIEMPRE su propia sucursal (ignora sucursalFilter)
+  const esAdmin = userRol === "admin";
+
+  if (!esAdmin && userSucursalId) {
     paramCount++;
     whereConditions.push(`i.sucursal_id = $${paramCount}`);
     queryParams.push(parseInt(userSucursalId));
@@ -225,9 +229,7 @@ const getMembers = async (
     // ============================================
     // Servicios por miembro (solo las candidatas: 1 por tipo)
     // ============================================
-    const uniqueIds = [
-      ...new Set(membersResult.rows.map((m) => m.id)),
-    ];
+    const uniqueIds = [...new Set(membersResult.rows.map((m) => m.id))];
 
     let allServices = [];
 

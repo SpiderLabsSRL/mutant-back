@@ -1,5 +1,43 @@
 // backend/controllers/salescontrolController.js
 const salesService = require("../services/salescontrolService");
+const { query } = require("../../db");
+
+// ============================================
+// HELPER: Obtener sucursal_id del usuario logueado
+// ============================================
+async function resolveUserSucursalId(req) {
+  if (req.user?.sucursal_id) {
+    return Number(req.user.sucursal_id);
+  }
+
+  const empleadoId = req.user?.idempleado || req.user?.empleado_id;
+  const usuarioId = req.user?.idusuario || req.user?.id;
+
+  try {
+    if (empleadoId) {
+      const r = await query(
+        `SELECT sucursal_id FROM empleados WHERE id = $1 AND estado = 1`,
+        [empleadoId]
+      );
+      if (r.rows.length > 0) return r.rows[0].sucursal_id;
+    }
+
+    if (usuarioId) {
+      const r = await query(
+        `SELECT e.sucursal_id 
+         FROM usuarios u 
+         INNER JOIN empleados e ON u.empleado_id = e.id 
+         WHERE u.id = $1 AND e.estado = 1`,
+        [usuarioId]
+      );
+      if (r.rows.length > 0) return r.rows[0].sucursal_id;
+    }
+  } catch (err) {
+    console.error("Error resolviendo sucursal_id:", err);
+  }
+
+  return null;
+}
 
 // ============================================
 // GET SALES
@@ -47,10 +85,18 @@ const getSales = async (req, res) => {
     };
 
     const pageNum = Math.max(1, parseInt(page) || 1);
-    // ⚠️ Subimos el límite a 5000 porque el frontend pide 1000
     const pageSizeNum = Math.max(1, Math.min(parseInt(pageSize) || 20, 5000));
 
-    const result = await salesService.getSales(filters, pageNum, pageSizeNum);
+    // ✅ Resolver sucursal del usuario (a prueba de balas)
+    const userSucursalId = await resolveUserSucursalId(req);
+
+    const result = await salesService.getSales(
+      filters,
+      pageNum,
+      pageSizeNum,
+      userSucursalId,
+      req.user?.rol
+    );
 
     res.json({
       sales: result.sales,
@@ -109,7 +155,13 @@ const getTotals = async (req, res) => {
       empleadoId: empleadoId || null,
     };
 
-    const totals = await salesService.getTotals(filters);
+    const userSucursalId = await resolveUserSucursalId(req);
+
+    const totals = await salesService.getTotals(
+      filters,
+      userSucursalId,
+      req.user?.rol
+    );
     res.json(totals);
   } catch (error) {
     console.error("❌ Error in getTotals controller:", error);

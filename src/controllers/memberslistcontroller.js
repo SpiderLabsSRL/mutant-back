@@ -1,5 +1,44 @@
 // server/controllers/memberslistcontroller.js
 const membersListService = require("../services/memberslistservice");
+const { query } = require("../../db");
+
+// ============================================
+// HELPER: Obtener sucursal_id del usuario logueado
+// Resuelve desde req.user o, si no está, desde la BD.
+// ============================================
+async function resolveUserSucursalId(req) {
+  if (req.user?.sucursal_id) {
+    return Number(req.user.sucursal_id);
+  }
+
+  const empleadoId = req.user?.idempleado || req.user?.empleado_id;
+  const usuarioId = req.user?.idusuario || req.user?.id;
+
+  try {
+    if (empleadoId) {
+      const r = await query(
+        `SELECT sucursal_id FROM empleados WHERE id = $1 AND estado = 1`,
+        [empleadoId]
+      );
+      if (r.rows.length > 0) return r.rows[0].sucursal_id;
+    }
+
+    if (usuarioId) {
+      const r = await query(
+        `SELECT e.sucursal_id 
+         FROM usuarios u 
+         INNER JOIN empleados e ON u.empleado_id = e.id 
+         WHERE u.id = $1 AND e.estado = 1`,
+        [usuarioId]
+      );
+      if (r.rows.length > 0) return r.rows[0].sucursal_id;
+    }
+  } catch (err) {
+    console.error("Error resolviendo sucursal_id:", err);
+  }
+
+  return null;
+}
 
 const getMembers = async (req, res) => {
   try {
@@ -18,6 +57,14 @@ const getMembers = async (req, res) => {
     const status = statusFilter || "all";
     const sucursal = sucursalFilter || "all";
 
+    const userSucursalId = await resolveUserSucursalId(req);
+
+    console.log("getMembers - Debug:", {
+      userRol: req.user?.rol,
+      userSucursalId,
+      sucursalFilter: sucursal,
+    });
+
     const result = await membersListService.getMembers(
       pageNum,
       limitNum,
@@ -25,7 +72,7 @@ const getMembers = async (req, res) => {
       service,
       status,
       sucursal,
-      req.user?.sucursal_id,
+      userSucursalId,
       req.user?.rol
     );
 
@@ -52,13 +99,12 @@ const getAllMembers = async (req, res) => {
       sucursalFilter = "all",
     } = req.query;
 
-    console.log("Controlador getAllMembers - Parámetros recibidos:", {
-      searchTerm,
-      serviceFilter,
-      statusFilter,
-      sucursalFilter,
-      userSucursalId: req.user?.sucursal_id,
+    const userSucursalId = await resolveUserSucursalId(req);
+
+    console.log("getAllMembers - Debug:", {
       userRol: req.user?.rol,
+      userSucursalId,
+      sucursalFilter,
     });
 
     const members = await membersListService.getAllMembers(
@@ -66,13 +112,9 @@ const getAllMembers = async (req, res) => {
       serviceFilter || "all",
       statusFilter || "all",
       sucursalFilter || "all",
-      req.user?.sucursal_id,
+      userSucursalId,
       req.user?.rol
     );
-
-    console.log("Resultado de getAllMembers:", {
-      membersCount: members.length,
-    });
 
     res.json(members);
   } catch (error) {
@@ -166,10 +208,7 @@ const deleteMember = async (req, res) => {
 
 const getAvailableServices = async (req, res) => {
   try {
-    console.log("Controlador getAvailableServices - Usuario:", req.user);
-
     const services = await membersListService.getAvailableServices();
-
     res.json(services);
   } catch (error) {
     console.error("Error en getAvailableServices controller:", error);
@@ -183,10 +222,7 @@ const getAvailableServices = async (req, res) => {
 
 const getAvailableBranches = async (req, res) => {
   try {
-    console.log("Controlador getAvailableBranches - Usuario:", req.user);
-
     const branches = await membersListService.getAvailableBranches();
-
     res.json(branches);
   } catch (error) {
     console.error("Error en getAvailableBranches controller:", error);
@@ -206,18 +242,10 @@ const testRoute = async (req, res) => {
   });
 };
 
-// ✅ Actualizar fechas: bloquea si la inscripción está inactiva
 const updateInscriptionDates = async (req, res) => {
   try {
     const { id } = req.params;
     const { serviceName, startDate, expirationDate } = req.body;
-
-    console.log("Controlador updateInscriptionDates - Datos:", {
-      id,
-      serviceName,
-      startDate,
-      expirationDate,
-    });
 
     if (!serviceName || !startDate || !expirationDate) {
       return res.status(400).json({
@@ -241,7 +269,6 @@ const updateInscriptionDates = async (req, res) => {
   } catch (error) {
     console.error("Error en updateInscriptionDates controller:", error);
 
-    // ✅ Error específico: no se puede editar un servicio inactivo
     if (error.message.includes("No se pueden editar las fechas")) {
       return res.status(400).json({
         success: false,

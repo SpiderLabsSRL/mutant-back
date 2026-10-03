@@ -90,8 +90,9 @@ const formatDate = (dateString) => {
 
 // ============================================
 // GET CLIENT SUBSCRIPTIONS
-// Agrupa por tipo_servicio + sucursal.
-// Dentro de cada grupo: la activa, o si no hay, la inactiva más reciente.
+// - Si se pasa branchId: solo inscripciones de esa sucursal.
+//   Para multisucursal, se prefiere la inscripción LOCAL de esa sucursal
+//   (si existe), evitando duplicados.
 // ============================================
 exports.getClientSubscriptions = async (personId, branchId = null) => {
   try {
@@ -147,10 +148,26 @@ exports.getClientSubscriptions = async (personId, branchId = null) => {
 
     const statusPriority = { active: 0, pending: 1, expired: 2 };
 
+    // ============================================
+    // Agrupar por tipo_servicio + sucursal,
+    // pero si tenemos branchId, agrupar solo por tipo_servicio
+    // (porque ya filtramos por sucursal y multisucursal replica).
+    // ============================================
+    const targetBranchId =
+      branchId !== null &&
+      branchId !== undefined &&
+      !Number.isNaN(Number(branchId))
+        ? Number(branchId)
+        : null;
+
     const groupedMap = new Map();
 
     result.rows.forEach((row) => {
-      const key = `${row.tipo_servicio}-${row.sucursal_id}`;
+      // Clave: si tenemos branchId → solo tipo_servicio.
+      //        Si no → tipo_servicio + sucursal (comportamiento previo).
+      const key = targetBranchId
+        ? `${row.tipo_servicio}`
+        : `${row.tipo_servicio}-${row.sucursal_id}`;
 
       if (!groupedMap.has(key)) {
         groupedMap.set(key, row);
@@ -158,6 +175,23 @@ exports.getClientSubscriptions = async (personId, branchId = null) => {
       }
 
       const existing = groupedMap.get(key);
+
+      // ✅ Cuando tenemos branchId, preferir la inscripción LOCAL
+      //    (mismo sucursal_id) sobre las réplicas multisucursal.
+      if (targetBranchId) {
+        const existingIsLocal = existing.sucursal_id === targetBranchId;
+        const newIsLocal = row.sucursal_id === targetBranchId;
+
+        if (newIsLocal && !existingIsLocal) {
+          groupedMap.set(key, row);
+          return;
+        }
+        if (!newIsLocal && existingIsLocal) {
+          // Conservar el local
+          return;
+        }
+      }
+
       const existingPriority = statusPriority[existing.computed_status] ?? 3;
       const newPriority = statusPriority[row.computed_status] ?? 3;
 
@@ -222,6 +256,7 @@ exports.getAccessLogs = async (
       TO_CHAR(ra.fecha, 'YYYY-MM-DD HH24:MI') as fecha, 
       ra.persona_id, 
       ra.servicio_id,
+      ra.inscripcion_id,
       ra.detalle, 
       ra.estado, 
       ra.sucursal_id, 
@@ -589,9 +624,9 @@ const checkPagosPendientes = async (personId) => {
 };
 
 // ============================================
-// CHECK: YA INGRESÓ HOY
+// CHECK: YA INGRESÓ HOY (por inscripción)
 // ============================================
-const checkYaIngresóHoy = async (personaId) => {
+const checkYaIngresóHoy = async (inscripcionId) => {
   const result = await query(
     `
     SELECT 
@@ -601,14 +636,14 @@ const checkYaIngresóHoy = async (personaId) => {
       TO_CHAR(ra.fecha, 'HH24:MI') AS hora_ingreso
     FROM registros_acceso ra
     INNER JOIN sucursales s ON ra.sucursal_id = s.id
-    WHERE ra.persona_id = $1
+    WHERE ra.inscripcion_id = $1
       AND ra.tipo_persona = 'cliente'
       AND ra.estado = 'exitoso'
       AND ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
     ORDER BY ra.fecha DESC
     LIMIT 1
     `,
-    [personaId]
+    [inscripcionId]
   );
 
   if (result.rows.length === 0) return null;
@@ -649,6 +684,7 @@ exports.registerClientAccess = async (
   // Helper local: inserta log y devuelve el objeto listo para frontend
   // ============================================
   const insertLogAndReturn = async ({
+    inscripcionId,
     servicioId,
     detalle,
     estado,
@@ -656,11 +692,19 @@ exports.registerClientAccess = async (
     const logInsert = await query(
       `
       INSERT INTO registros_acceso 
-      (persona_id, servicio_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
-      VALUES ($1, $2, $3, $4, $5, $6, TIMEZONE('America/La_Paz', NOW()), 'cliente')
+      (persona_id, servicio_id, inscripcion_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, TIMEZONE('America/La_Paz', NOW()), 'cliente')
       RETURNING id, TO_CHAR(fecha, 'YYYY-MM-DD HH24:MI') as fecha
       `,
-      [personId, servicioId, detalle, estado, branchId, userId]
+      [
+        personId,
+        servicioId,
+        inscripcionId,
+        detalle,
+        estado,
+        branchId,
+        userId,
+      ]
     );
 
     return {
@@ -686,6 +730,7 @@ exports.registerClientAccess = async (
     const detalle = `Acceso denegado - Inscripción no válida para esta sucursal (${nombreServicio})`;
 
     const log = await insertLogAndReturn({
+      inscripcionId: serviceId,
       servicioId: servicioInfo.rows[0] ? serviceId : null,
       detalle,
       estado: "denegado",
@@ -699,6 +744,7 @@ exports.registerClientAccess = async (
   }
 
   const inscription = client.rows[0];
+  const inscripcionId = inscription.id;
 
   const memberName = `${inscription.persona_nombres} ${inscription.persona_apellidos}`;
   const memberCi = inscription.persona_ci;
@@ -713,6 +759,7 @@ exports.registerClientAccess = async (
 
     const detalle = `Acceso denegado - ${motivo}`;
     const log = await insertLogAndReturn({
+      inscripcionId,
       servicioId: inscription.servicio_real_id,
       detalle,
       estado: "denegado",
@@ -727,14 +774,15 @@ exports.registerClientAccess = async (
     };
   }
 
-  // ✅ VALIDACIÓN 2: ya ingresó hoy (cualquier sucursal)
-  const ingresoPrevio = await checkYaIngresóHoy(personId);
+  // ✅ VALIDACIÓN 2: ya ingresó hoy con ESTA INSCRIPCIÓN específica
+  const ingresoPrevio = await checkYaIngresóHoy(inscripcionId);
 
   if (ingresoPrevio) {
-    const motivo = `Ya se ingresó una vez hoy a ${ingresoPrevio.sucursal_nombre}`;
+    const motivo = `Ya se ingresó una vez hoy a ${ingresoPrevio.sucursal_nombre} con esta inscripción`;
     const detalle = `Acceso denegado - ${motivo}`;
 
     const log = await insertLogAndReturn({
+      inscripcionId,
       servicioId: inscription.servicio_real_id,
       detalle,
       estado: "denegado",
@@ -764,6 +812,7 @@ exports.registerClientAccess = async (
     const detalle = `Acceso denegado - ${validacionHorario.reason} (Servicio: ${inscription.servicio_nombre})`;
 
     const log = await insertLogAndReturn({
+      inscripcionId,
       servicioId: inscription.servicio_real_id,
       detalle,
       estado: "denegado",
@@ -843,6 +892,7 @@ exports.registerClientAccess = async (
     : `Acceso exitoso - ${inscription.servicio_nombre} (Visitas restantes: ${remainingVisits})`;
 
   const log = await insertLogAndReturn({
+    inscripcionId,
     servicioId: inscription.servicio_real_id,
     detalle: detailMessage,
     estado: "exitoso",
@@ -914,8 +964,6 @@ const getEmployeeScheduleForToday = async (employeeId) => {
 
 // ============================================
 // HELPER: ESTADO ACTUAL DEL EMPLEADO
-// Devuelve 'in' si el último registro del día es una entrada sin salida.
-// Devuelve 'out' si no hay registros hoy o el último es una salida.
 // ============================================
 const getEmployeeEstadoHoy = async (personaId) => {
   const result = await query(
@@ -969,7 +1017,6 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
-  // ✅ VALIDACIÓN: no puede hacer check-in si ya tiene uno activo hoy sin checkout
   const { estado } = await getEmployeeEstadoHoy(emp.persona_id);
 
   if (estado === "in") {
@@ -978,7 +1025,6 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
     );
   }
 
-  // Empleados de limpieza: sin horario
   if (emp.rol === "limpieza") {
     const currentTimeResult = await query(
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
@@ -1004,7 +1050,6 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
     };
   }
 
-  // Empleados con horario
   const horario = await getEmployeeScheduleForToday(employeeId);
 
   const currentTimeResult = await query(
@@ -1074,7 +1119,6 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
-  // ✅ VALIDACIÓN: no puede hacer check-out sin un check-in previo hoy
   const { estado } = await getEmployeeEstadoHoy(emp.persona_id);
 
   if (estado !== "in") {

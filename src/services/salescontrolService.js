@@ -4,24 +4,26 @@ const { query } = require("../../db");
 // ============================================
 // HELPERS
 // ============================================
-
-/**
- * Regex flexible para extraer efectivo de detalle_pago
- */
 const EFECTIVO_REGEX =
   "(?:efectivo|Efectivo)\\s*[:=]?\\s*(?:Bs\\.?)?\\s*([0-9]+(?:[.,][0-9]+)?)";
-
-/**
- * Regex flexible para extraer QR de detalle_pago
- */
 const QR_REGEX =
   "(?:QR|qr|Q\\.R\\.)\\s*[:=]?\\s*(?:Bs\\.?)?\\s*([0-9]+(?:[.,][0-9]+)?)";
 
-/**
- * ✅ Helper para comparar fechas respetando zona horaria La Paz
- */
 const LA_PAZ_DATE = (alias) =>
   `(${alias}.fecha AT TIME ZONE 'America/La_Paz')::date`;
+
+// ============================================
+// HELPER: aplica filtro de sucursal forzado para no-admin
+// ============================================
+function applyForcedSucursal(filters, userSucursalId, userRol) {
+  const esAdmin = userRol === "admin";
+  const forzado = !esAdmin && userSucursalId ? Number(userSucursalId) : null;
+
+  return {
+    ...filters,
+    sucursal: forzado ? forzado : filters.sucursal, // ← fuerza
+  };
+}
 
 // ============================================
 // HELPER: Construye filtros de fecha
@@ -122,7 +124,6 @@ const buildDateFilters = async (
     params.push(fin_mes_pasado);
     newParamCount++;
   }
-  // "all" → sin filtro de fecha
 
   return newParamCount;
 };
@@ -130,8 +131,21 @@ const buildDateFilters = async (
 // ============================================
 // GET SALES
 // ============================================
-const getSales = async (filters = {}, page = 1, pageSize = 20) => {
+const getSales = async (
+  filters = {},
+  page = 1,
+  pageSize = 20,
+  userSucursalId = null,
+  userRol = null
+) => {
   try {
+    // ✅ Forzar sucursal si no es admin
+    const effectiveFilters = applyForcedSucursal(
+      filters,
+      userSucursalId,
+      userRol
+    );
+
     const todayResult = await query(
       "SELECT (NOW() AT TIME ZONE 'America/La_Paz')::date as hoy_la_paz"
     );
@@ -150,22 +164,20 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
     const baseConditionProductos = "vp.subtotal > 0";
     const baseConditionServicios = "vs.subtotal > 0";
 
-    // Sucursal
-    if (filters.sucursal) {
+    if (effectiveFilters.sucursal) {
       whereConditionsProductos.push(`vp.sucursal_id = $${paramCountProductos}`);
-      paramsProductos.push(filters.sucursal);
+      paramsProductos.push(effectiveFilters.sucursal);
       paramCountProductos++;
 
       whereConditionsServicios.push(`vs.sucursal_id = $${paramCountServicios}`);
-      paramsServicios.push(filters.sucursal);
+      paramsServicios.push(effectiveFilters.sucursal);
       paramCountServicios++;
     }
 
-    // Empleado
-    if (filters.empleadoId) {
+    if (effectiveFilters.empleadoId) {
       const usuarioResult = await query(
         "SELECT empleado_id FROM usuarios WHERE id = $1",
-        [filters.empleadoId]
+        [effectiveFilters.empleadoId]
       );
       if (usuarioResult.rows.length > 0) {
         const empleadoIdReal = usuarioResult.rows[0].empleado_id;
@@ -183,13 +195,12 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       }
     }
 
-    // Fechas
     paramCountProductos = await buildDateFilters(
       whereConditionsProductos,
       paramsProductos,
       paramCountProductos,
       "vp",
-      filters,
+      effectiveFilters,
       hoyLaPaz
     );
 
@@ -198,7 +209,7 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       paramsServicios,
       paramCountServicios,
       "vs",
-      filters,
+      effectiveFilters,
       hoyLaPaz
     );
 
@@ -224,7 +235,6 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       ${whereClauseServicios}
     `;
 
-    // ✅ Query de productos (con items y sin duplicados en detalle)
     let queryStrProductos = `
       SELECT 
         vp.id,
@@ -300,7 +310,6 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
       LIMIT $${paramCountProductos} OFFSET $${paramCountProductos + 1}
     `;
 
-    // ✅ Query de servicios (con items, cliente múltiple y detalle sin duplicados)
     let queryStrServicios = `
       SELECT 
         vs.id,
@@ -468,8 +477,18 @@ const getSales = async (filters = {}, page = 1, pageSize = 20) => {
 // ============================================
 // GET TOTALS
 // ============================================
-const getTotals = async (filters = {}) => {
+const getTotals = async (
+  filters = {},
+  userSucursalId = null,
+  userRol = null
+) => {
   try {
+    const effectiveFilters = applyForcedSucursal(
+      filters,
+      userSucursalId,
+      userRol
+    );
+
     const todayResult = await query(
       "SELECT (NOW() AT TIME ZONE 'America/La_Paz')::date as hoy_la_paz"
     );
@@ -486,20 +505,20 @@ const getTotals = async (filters = {}) => {
     const baseConditionProductos = "vp.subtotal > 0";
     const baseConditionServicios = "vs.subtotal > 0";
 
-    if (filters.sucursal) {
+    if (effectiveFilters.sucursal) {
       whereConditionsProductos.push(`vp.sucursal_id = $${paramCountProductos}`);
-      paramsProductos.push(filters.sucursal);
+      paramsProductos.push(effectiveFilters.sucursal);
       paramCountProductos++;
 
       whereConditionsServicios.push(`vs.sucursal_id = $${paramCountServicios}`);
-      paramsServicios.push(filters.sucursal);
+      paramsServicios.push(effectiveFilters.sucursal);
       paramCountServicios++;
     }
 
-    if (filters.empleadoId) {
+    if (effectiveFilters.empleadoId) {
       const usuarioResult = await query(
         "SELECT empleado_id FROM usuarios WHERE id = $1",
-        [filters.empleadoId]
+        [effectiveFilters.empleadoId]
       );
       if (usuarioResult.rows.length > 0) {
         const empleadoIdReal = usuarioResult.rows[0].empleado_id;
@@ -522,7 +541,7 @@ const getTotals = async (filters = {}) => {
       paramsProductos,
       paramCountProductos,
       "vp",
-      filters,
+      effectiveFilters,
       hoyLaPaz
     );
 
@@ -531,7 +550,7 @@ const getTotals = async (filters = {}) => {
       paramsServicios,
       paramCountServicios,
       "vs",
-      filters,
+      effectiveFilters,
       hoyLaPaz
     );
 
@@ -725,7 +744,6 @@ const getSaleDetails = async (saleId, saleType) => {
         descripcionDescuento: sale.descripcion_descuento,
       };
     } else {
-      // ✅ CORREGIDO: cliente con TODOS los clientes de la venta
       const saleResult = await query(
         `SELECT 
           vs.*,

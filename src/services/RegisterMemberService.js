@@ -3,12 +3,6 @@ const { query, pool } = require("../../db");
 // ============================================
 // CONVENCIÓN DE ESTADOS POR TABLA (verificado en BD)
 // ============================================
-// personas:      0 = activo, 1 = inactivo
-// servicios:     1 = activo, 0 = inactivo, 2 = eliminado
-// inscripciones: 1 = activo, 0 = inactivo, 2 = eliminado  (estado fila)
-// estado_inscripcion (columna nueva): 'activo' | 'inactivo'
-// cupones:       1 = activo
-// empleados:     1 = activo
 const ESTADO = {
   personas: 0,
   servicios: 1,
@@ -21,16 +15,11 @@ const DIAS_VENTANA_FUTURO = 7;
 const DIAS_VENTANA_PASADO = 7;
 
 // ============================================
-// HELPERS DE FECHA (evitan problemas de zona horaria)
+// HELPERS DE FECHA
 // ============================================
-/**
- * Convierte un Date o string YYYY-MM-DD a un string YYYY-MM-DD
- * sin importar zona horaria.
- */
 function toYMD(fecha) {
   if (!fecha) return null;
   if (typeof fecha === "string") {
-    // Si ya viene como "YYYY-MM-DD" o "YYYY-MM-DDTHH:mm:ss..."
     return fecha.substring(0, 10);
   }
   const d = new Date(fecha);
@@ -40,9 +29,6 @@ function toYMD(fecha) {
   return `${y}-${m}-${day}`;
 }
 
-/**
- * Retorna el YMD de hoy en zona America/La_Paz.
- */
 function hoyYMD() {
   const now = new Date();
   const laPaz = new Date(
@@ -54,18 +40,12 @@ function hoyYMD() {
   return `${y}-${m}-${d}`;
 }
 
-/**
- * Diferencia en días entre dos strings YMD (b - a).
- */
 function diffDiasYMD(aYMD, bYMD) {
   const a = new Date(`${aYMD}T00:00:00Z`);
   const b = new Date(`${bYMD}T00:00:00Z`);
   return Math.round((b - a) / (1000 * 60 * 60 * 24));
 }
 
-/**
- * Suma días a un YMD y devuelve otro YMD.
- */
 function addDiasYMD(ymd, dias) {
   const d = new Date(`${ymd}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + dias);
@@ -308,6 +288,8 @@ exports.getAvailableCoupons = async (sucursalId) => {
 // ============================================
 // HELPER: Analizar conflicto de inscripción por persona + tipo
 // ============================================
+// ✅ FIX BUG 1: solo compara dentro de la MISMA sucursal,
+// excepto cuando el servicio es multisucursal (ahí el conflicto es global).
 async function analizarConflictoInscripcion(
   client,
   personaId,
@@ -317,7 +299,8 @@ async function analizarConflictoInscripcion(
   const result = await client.query(
     `
     SELECT i.id, i.fecha_inicio, i.fecha_vencimiento, i.estado_inscripcion,
-           i.servicio_id, s.tipo_servicio_id, ts.nombre AS tipo_servicio
+           i.servicio_id, i.sucursal_id, s.tipo_servicio_id, s.multisucursal,
+           ts.nombre AS tipo_servicio
     FROM inscripciones i
     INNER JOIN servicios s ON i.servicio_id = s.id
     LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
@@ -325,9 +308,13 @@ async function analizarConflictoInscripcion(
       AND i.estado = $2
       AND ts.nombre = $3
       AND i.fecha_vencimiento >= CURRENT_DATE
+      AND (
+        i.sucursal_id = $4
+        OR s.multisucursal = TRUE
+      )
     ORDER BY i.fecha_inicio ASC
   `,
-    [personaId, ESTADO.inscripciones, tipoServicio]
+    [personaId, ESTADO.inscripciones, tipoServicio, sucursalId]
   );
 
   const inscripciones = result.rows;
@@ -338,7 +325,6 @@ async function analizarConflictoInscripcion(
 
   const hoy = hoyYMD();
 
-  // ¿Hay alguna futura (inactiva y fecha_inicio > hoy)?
   const futura = inscripciones.find((i) => {
     const fi = toYMD(i.fecha_inicio);
     return i.estado_inscripcion === "inactivo" && fi > hoy;
@@ -352,7 +338,6 @@ async function analizarConflictoInscripcion(
     };
   }
 
-  // Buscar activa
   const activa = inscripciones.find((i) => {
     const fi = toYMD(i.fecha_inicio);
     const fv = toYMD(i.fecha_vencimiento);
@@ -519,11 +504,9 @@ exports.registerMember = async (registrationData) => {
         }
 
         if (conflicto.status === "futuro_permitido") {
-          // La nueva inscripción comienza al día siguiente del vencimiento
           const finActivaYMD = toYMD(conflicto.activa.fecha_vencimiento);
           const inicioYMD = addDiasYMD(finActivaYMD, 1);
 
-          // Recalcular fecha de vencimiento a partir del nuevo inicio
           const duracionDias =
             servicio.tipo_duracion === "dias"
               ? Number(servicio.cantidad_duracion)
@@ -542,7 +525,6 @@ exports.registerMember = async (registrationData) => {
           continue;
         }
 
-        // libre
         acciones.push({
           servicio,
           personaId,
@@ -629,7 +611,7 @@ exports.registerMember = async (registrationData) => {
     const fechaActual = fechaActualResult.rows[0].fecha_actual;
 
     // ============================================
-    // 7. Crear inscripciones (con estado_inscripcion)
+    // 7. Crear inscripciones
     // ============================================
     const inscripcionesMap = {};
     const hoyYMDStr = hoyYMD();
@@ -644,7 +626,6 @@ exports.registerMember = async (registrationData) => {
         fechaVencimiento,
       } = accion;
 
-      // Si es reemplazo, inactivar la anterior
       if (tipoAccion === "reemplazo" && reemplazaId) {
         console.log(
           `🔄 Reemplazando inscripción anterior id=${reemplazaId} → estado_inscripcion='inactivo'`
@@ -656,10 +637,6 @@ exports.registerMember = async (registrationData) => {
         console.log(`✅ Inscripción ${reemplazaId} inactivada:`, upd.rows);
       }
 
-      // ✅ Determinar estado_inscripcion:
-      // - 'inactivo' si es futuro (comienza al vencer la activa)
-      // - 'inactivo' si la fecha de inicio es posterior a HOY
-      // - 'activo' en cualquier otro caso
       const fechaInicioYMD = toYMD(fechaInicio);
       let estadoInscripcion = "activo";
 
@@ -695,7 +672,6 @@ exports.registerMember = async (registrationData) => {
 
       inscripcionesMap[`${servicio.servicioId}:${personaId}`] = ins.rows[0].id;
 
-      // Multisucursal: replicar solo si la nueva inscripción es 'activo'
       if (servicio.multisucursal && estadoInscripcion === "activo") {
         const otras = await client.query(
           `
@@ -837,124 +813,86 @@ exports.registerMember = async (registrationData) => {
     }
 
     // ============================================
-    // 13. Movimiento de caja (efectivo)
+    // 13. Movimiento de caja (SOLO EFECTIVO)
     // ============================================
-    const hayEfectivo =
-      registrationData.formaPago === "efectivo" ||
-      registrationData.formaPago === "mixto";
-
-    if (hayEfectivo) {
-      const montoEfectivo =
-        registrationData.formaPago === "efectivo"
-          ? registrationData.total
-          : registrationData.montoEfectivo || 0;
-
-      if (montoEfectivo > 0) {
-        const cajaResult = await client.query(
-          `SELECT estado_caja, COALESCE(total, 0) as total_actual 
-           FROM cajas 
-           WHERE id = $1 
-           FOR UPDATE`,
-          [registrationData.cajaId]
-        );
-
-        if (cajaResult.rows.length === 0) {
-          throw new Error("Caja no encontrada");
-        }
-
-        const cajaActual = cajaResult.rows[0];
-
-        if (cajaActual.estado_caja !== "abierta") {
-          throw new Error(
-            "La caja no está abierta para realizar inscripciones"
-          );
-        }
-
-        const montoAnterior = parseFloat(cajaActual.total_actual);
-        const montoActual = montoAnterior + montoEfectivo;
-
-        const usuarioResult = await client.query(
-          `SELECT id as usuario_id FROM usuarios WHERE empleado_id = $1`,
-          [registrationData.empleadoId]
-        );
-
-        if (usuarioResult.rows.length === 0) {
-          throw new Error(
-            `No se encontró un usuario asociado al empleado ${registrationData.empleadoId}`
-          );
-        }
-
-        const usuarioId = usuarioResult.rows[0].usuario_id;
-
-        await client.query(
-          `
-          INSERT INTO movimientos_caja 
-            (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual,
-             venta_servicio_id, fecha)
-          VALUES ($1, $2, $3, 'ingreso', $4, $5, $6, $7, TIMEZONE('America/La_Paz', NOW()))
-        `,
-          [
-            registrationData.cajaId,
-            usuarioId,
-            montoEfectivo,
-            `Venta #${ventaId} - Servicios (Efectivo)`,
-            montoAnterior,
-            montoActual,
-            ventaId,
-          ]
-        );
-
-        await client.query(`UPDATE cajas SET total = $1 WHERE id = $2`, [
-          montoActual,
-          registrationData.cajaId,
-        ]);
-      }
-    }
-
-    // ============================================
-    // 14. Movimiento de caja QR
-    // ============================================
-    const montoQr =
-      registrationData.formaPago === "qr"
-        ? registrationData.total
+    // ✅ FIX BUG 2: solo se registra en caja cuando hay efectivo real.
+    //    - formaPago === 'efectivo' → monto = total
+    //    - formaPago === 'mixto'    → monto = montoEfectivo
+    //    - formaPago === 'qr'       → NO se registra nada
+    //    Sin número de venta en el detalle.
+    const montoEfectivoCaja =
+      registrationData.formaPago === "efectivo"
+        ? Number(registrationData.total)
         : registrationData.formaPago === "mixto"
-        ? registrationData.montoQr || 0
+        ? Number(registrationData.montoEfectivo || 0)
         : 0;
 
-    if (montoQr > 0) {
+    if (montoEfectivoCaja > 0) {
+      const cajaResult = await client.query(
+        `SELECT estado_caja, COALESCE(total, 0) as total_actual 
+         FROM cajas 
+         WHERE id = $1 
+         FOR UPDATE`,
+        [registrationData.cajaId]
+      );
+
+      if (cajaResult.rows.length === 0) {
+        throw new Error("Caja no encontrada");
+      }
+
+      const cajaActual = cajaResult.rows[0];
+
+      if (cajaActual.estado_caja !== "abierta") {
+        throw new Error(
+          "La caja no está abierta para realizar inscripciones"
+        );
+      }
+
+      const montoAnterior = parseFloat(cajaActual.total_actual);
+      const montoActual = montoAnterior + montoEfectivoCaja;
+
       const usuarioResult = await client.query(
         `SELECT id as usuario_id FROM usuarios WHERE empleado_id = $1`,
         [registrationData.empleadoId]
       );
 
-      if (usuarioResult.rows.length > 0) {
-        const usuarioId = usuarioResult.rows[0].usuario_id;
-
-        const totalActual = await client.query(
-          `SELECT COALESCE(total, 0) as total_actual FROM cajas WHERE id = $1`,
-          [registrationData.cajaId]
-        );
-
-        const montoActual = parseFloat(totalActual.rows[0].total_actual);
-
-        await client.query(
-          `
-          INSERT INTO movimientos_caja 
-            (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual,
-             venta_servicio_id, fecha)
-          VALUES ($1, $2, $3, 'ingreso', $4, $5, $5, $6, TIMEZONE('America/La_Paz', NOW()))
-        `,
-          [
-            registrationData.cajaId,
-            usuarioId,
-            montoQr,
-            `Venta #${ventaId} - Servicios (QR - no afecta caja física)`,
-            montoActual,
-            ventaId,
-          ]
+      if (usuarioResult.rows.length === 0) {
+        throw new Error(
+          `No se encontró un usuario asociado al empleado ${registrationData.empleadoId}`
         );
       }
+
+      const usuarioId = usuarioResult.rows[0].usuario_id;
+
+      await client.query(
+        `
+        INSERT INTO movimientos_caja 
+          (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual,
+           venta_servicio_id, fecha)
+        VALUES ($1, $2, $3, 'ingreso', $4, $5, $6, $7, TIMEZONE('America/La_Paz', NOW()))
+      `,
+        [
+          registrationData.cajaId,
+          usuarioId,
+          montoEfectivoCaja,
+          "Ingreso por inscripción de servicios (Efectivo)",
+          montoAnterior,
+          montoActual,
+          ventaId,
+        ]
+      );
+
+      await client.query(`UPDATE cajas SET total = $1 WHERE id = $2`, [
+        montoActual,
+        registrationData.cajaId,
+      ]);
     }
+
+    // ============================================
+    // 14. Movimiento de caja QR — NO se registra
+    // ============================================
+    // ✅ El pago por QR no afecta la caja física, así que no insertamos
+    //    ningún movimiento. Se ignora completamente.
 
     await client.query("COMMIT");
 
