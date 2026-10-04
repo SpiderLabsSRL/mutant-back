@@ -396,7 +396,7 @@ exports.registerMember = async (registrationData) => {
 
         if (existing.rows.length > 0) {
           personaId = existing.rows[0].id;
-        } else {
+        } else { 
           const ins = await client.query(
             `INSERT INTO personas (nombres, apellidos, ci, telefono, fecha_nacimiento, estado)
              VALUES ($1, $2, $3, $4, $5, $6)
@@ -1008,4 +1008,70 @@ exports.updatePagoPendiente = async (pagoId, montoPagado) => {
   } finally {
     client.release();
   }
+};
+// ============================================
+// VERIFICAR SI UNA PERSONA TIENE HUELLA
+// ============================================
+exports.hasFingerprint = async (personaId) => {
+  const result = await query(
+    `SELECT huella_digital IS NOT NULL AS has_fingerprint
+     FROM personas
+     WHERE id = $1 AND estado = $2`,
+    [personaId, ESTADO.personas]
+  );
+
+  if (result.rows.length === 0) {
+    return { hasFingerprint: false, exists: false };
+  }
+
+  return {
+    hasFingerprint: result.rows[0].has_fingerprint === true,
+    exists: true,
+  };
+};
+// ============================================
+// CREAR PERSONA RÁPIDAMENTE (sin inscripción)
+// ============================================
+exports.createPersonQuick = async (personData) => {
+  const { nombres, apellidos, ci, telefono, fechaNacimiento } = personData;
+
+  if (!nombres || !apellidos || !ci) {
+    throw new Error("Nombres, apellidos y CI son obligatorios");
+  }
+
+  // Verificar si ya existe por CI
+  const existing = await query(
+    `SELECT id, nombres, apellidos, ci, telefono, fecha_nacimiento
+     FROM personas
+     WHERE ci = $1 AND estado = $2`,
+    [ci, ESTADO.personas]
+  );
+
+  if (existing.rows.length > 0) {
+    // Ya existe → devolver la existente (no creamos duplicado)
+    return {
+      alreadyExists: true,
+      persona: existing.rows[0],
+    };
+  }
+
+  // Crear nueva persona
+  const result = await query(
+    `INSERT INTO personas (nombres, apellidos, ci, telefono, fecha_nacimiento, estado)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING id, nombres, apellidos, ci, telefono, fecha_nacimiento`,
+    [
+      nombres,
+      apellidos,
+      ci,
+      telefono || null,
+      fechaNacimiento || null,
+      ESTADO.personas,
+    ]
+  );
+
+  return {
+    alreadyExists: false,
+    persona: result.rows[0],
+  };
 };

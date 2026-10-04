@@ -109,7 +109,7 @@ exports.getAvailableCoupons = async (req, res) => {
 };
 
 // ============================================
-// REGISTRAR MIEMBRO
+// REGISTRAR MIEMBRO 
 // ============================================
 exports.registerMember = async (req, res) => {
   try {
@@ -177,5 +177,30 @@ exports.updatePagoPendiente = async (req, res) => {
   } catch (error) {
     console.error("Error in updatePagoPendiente:", error);
     res.status(500).json({ message: error.message });
+  }
+};
+// ============================================
+// VERIFICAR SI UNA PERSONA TIENE HUELLA
+// ============================================
+exports.hasFingerprint = async (req, res) => {
+  try {
+    const { personaId } = req.params;
+    const result = await RegisterMemberService.hasFingerprint(personaId);
+    res.json(result);
+  } catch (error) {
+    console.error("Error in hasFingerprint:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+// ============================================
+// CREAR PERSONA RÁPIDAMENTE
+// ============================================
+exports.createPersonQuick = async (req, res) => {
+  try {
+    const result = await RegisterMemberService.createPersonQuick(req.body);
+    res.json(result);
+  } catch (error) {
+    console.error("Error in createPersonQuick:", error);
+    res.status(400).json({ message: error.message });
   }
 };

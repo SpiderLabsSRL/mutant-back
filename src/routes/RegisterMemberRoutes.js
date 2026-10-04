@@ -28,5 +28,10 @@ router.get("/pagos-pendientes/:personaId", RegisterMemberController.getPagosPend
 
 // Actualizar pago pendiente
 router.put("/pagos-pendientes/:pagoId", RegisterMemberController.updatePagoPendiente);
+// Verificar si una persona tiene huella registrada
+router.get("/people/:personaId/has-fingerprint", RegisterMemberController.hasFingerprint);
+// Crear persona rápidamente (sin inscripción)
+router.post("/people", RegisterMemberController.createPersonQuick);
 
-module.exports = router;
+
+module.exports = router; 
