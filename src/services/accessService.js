@@ -9,6 +9,23 @@ const getDiaSemanaBD = (date) => {
 };
 
 // ============================================
+// CONFIG: ROLES QUE NO REQUIEREN HORARIO
+// ============================================
+const ROLES_SIN_HORARIO = new Set(["admin"]);
+
+const rolRequiereHorario = (rol) => !ROLES_SIN_HORARIO.has(rol);
+
+const NOMBRES_DIAS = {
+  1: "Lunes",
+  2: "Martes",
+  3: "Miércoles",
+  4: "Jueves",
+  5: "Viernes",
+  6: "Sábado",
+  7: "Domingo",
+};
+
+// ============================================
 // VALIDAR HORARIO DEL SERVICIO
 // ============================================
 const validarHorarioServicio = async (servicioId, fechaActual) => {
@@ -483,6 +500,14 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
           'rol', e.rol,
           'sucursal_id', e.sucursal_id,
           'estado', e.estado,
+          'trabaja_hoy', CASE
+            WHEN e.rol = 'admin' THEN true
+            ELSE EXISTS (
+              SELECT 1 FROM horarios_empleado he
+              WHERE he.empleado_id = e.id
+                AND he.dia_semana = EXTRACT(ISODOW FROM TIMEZONE('America/La_Paz', NOW()))::int
+            )
+          END,
           'ultimo_registro_entrada', (
             SELECT MAX(ra.fecha) 
             FROM registros_acceso ra 
@@ -667,9 +692,6 @@ exports.registerClientAccess = async (
     [personId, serviceId, branchId]
   );
 
-  // ============================================
-  // Helper local: inserta log y devuelve el objeto listo para frontend
-  // ============================================
   const insertLogAndReturn = async ({
     inscripcionId,
     servicioId,
@@ -736,7 +758,6 @@ exports.registerClientAccess = async (
   const memberName = `${inscription.persona_nombres} ${inscription.persona_apellidos}`;
   const memberCi = inscription.persona_ci;
 
-  // ✅ ¿El servicio es ilimitado?
   const isUnlimitedService = inscription.servicio_ingresos_ilimitados === null;
 
   // ✅ VALIDACIÓN 1: estado activo
@@ -764,9 +785,7 @@ exports.registerClientAccess = async (
     };
   }
 
-  // ✅ VALIDACIÓN 2: ya ingresó hoy con ESTA INSCRIPCIÓN específica
-  //    ⚠️ SOLO aplica a servicios LIMITADOS.
-  //    Los servicios ilimitados pueden ingresar varias veces al día.
+  // ✅ VALIDACIÓN 2: ya ingresó hoy (solo limitados)
   if (!isUnlimitedService) {
     const ingresoPrevio = await checkYaIngresóHoy(inscripcionId);
 
@@ -916,21 +935,25 @@ exports.registerClientAccess = async (
 };
 
 // ============================================
-// HELPER: EMPLOYEE SCHEDULE
+// HELPER: EMPLOYEE SCHEDULE (según rol y día)
+//   - null                                    → admin (no aplica)
+//   - { hora_ingreso, hora_salida }           → tiene horario hoy
+//   - { noTrabajaHoy: true, diaSemanaActual, rol } → no tiene horario hoy
 // ============================================
 const getEmployeeScheduleForToday = async (employeeId) => {
   const employeeResult = await query(
-    `SELECT rol FROM empleados WHERE id = $1`,
+    `SELECT rol FROM empleados WHERE id = $1 AND estado = 1`,
     [employeeId]
   );
 
   if (employeeResult.rows.length === 0) {
-    throw new Error("Empleado no encontrado");
+    throw new Error("Empleado no encontrado o inactivo");
   }
 
   const rol = employeeResult.rows[0].rol;
 
-  if (rol === "limpieza") {
+  // admin: no valida horario
+  if (!rolRequiereHorario(rol)) {
     return null;
   }
 
@@ -940,8 +963,8 @@ const getEmployeeScheduleForToday = async (employeeId) => {
   const diaSemanaActual = dayResult.rows[0].dia;
 
   const horarioResult = await query(
-    `SELECT hora_ingreso, hora_salida 
-     FROM horarios_empleado 
+    `SELECT hora_ingreso, hora_salida
+     FROM horarios_empleado
      WHERE empleado_id = $1 AND dia_semana = $2`,
     [employeeId, diaSemanaActual]
   );
@@ -950,13 +973,15 @@ const getEmployeeScheduleForToday = async (employeeId) => {
     return horarioResult.rows[0];
   }
 
-  throw new Error(
-    `El empleado no tiene horario asignado para hoy (día ${diaSemanaActual})`
-  );
+  return {
+    noTrabajaHoy: true,
+    diaSemanaActual,
+    rol,
+  };
 };
 
 // ============================================
-// HELPER: ESTADO ACTUAL DEL EMPLEADO
+// HELPER: ESTADO ACTUAL DEL EMPLEADO (por persona)
 // ============================================
 const getEmployeeEstadoHoy = async (personaId) => {
   const result = await query(
@@ -990,25 +1015,56 @@ const getEmployeeEstadoHoy = async (personaId) => {
 };
 
 // ============================================
+// HELPER: registra log de acceso denegado de empleado
+// ============================================
+const registrarAccesoDenegadoEmpleado = async ({
+  personaId,
+  branchId,
+  userId,
+  motivo,
+  rol,
+}) => {
+  const detalle = `Acceso denegado - ${motivo} (rol: ${rol})`;
+
+  await query(
+    `
+    INSERT INTO registros_acceso
+    (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
+    VALUES ($1, $2, $3, $4, $5, TIMEZONE('America/La_Paz', NOW()), 'empleado')
+    `,
+    [personaId, detalle, "denegado", branchId, userId]
+  );
+
+  return detalle;
+};
+
+// ============================================
 // REGISTER EMPLOYEE CHECK-IN
 // ============================================
 exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   const employee = await query(
     `
-    SELECT e.*, p.nombres, p.apellidos, p.ci
+    SELECT e.*, p.nombres, p.apellidos, p.ci, p.estado AS persona_estado
     FROM empleados e
     INNER JOIN personas p ON e.persona_id = p.id
     WHERE e.id = $1
-    AND p.estado = 0
-  `,
+    `,
     [employeeId]
   );
 
   if (employee.rows.length === 0) {
-    throw new Error("Empleado no encontrado o eliminado");
+    throw new Error("Empleado no encontrado");
   }
 
   const emp = employee.rows[0];
+
+  if (emp.persona_estado !== 0) {
+    throw new Error("Empleado eliminado o inactivo");
+  }
+
+  if (emp.estado !== 1) {
+    throw new Error("El empleado está inactivo en el sistema");
+  }
 
   const { estado } = await getEmployeeEstadoHoy(emp.persona_id);
 
@@ -1018,12 +1074,17 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
     );
   }
 
-  if (emp.rol === "limpieza") {
+  const rol = emp.rol;
+  const requiereHorario = rolRequiereHorario(rol);
+
+  // ============================================
+  // ADMIN → sin validación de horario
+  // ============================================
+  if (!requiereHorario) {
     const currentTimeResult = await query(
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
     );
     const horaActual = currentTimeResult.rows[0].hora_actual;
-
     const detail = `Entrada: ${horaActual}`;
 
     await query(
@@ -1031,7 +1092,7 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
       INSERT INTO registros_acceso 
       (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
       VALUES ($1, $2, $3, $4, $5, TIMEZONE('America/La_Paz', NOW()), 'empleado')
-    `,
+      `,
       [emp.persona_id, detail, "exitoso", branchId, userId]
     );
 
@@ -1040,23 +1101,59 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
       message: detail,
       isLate: false,
       minutes: 0,
+      rol,
     };
   }
 
+  // ============================================
+  // OTROS ROLES → validan horario del día
+  // ============================================
   const horario = await getEmployeeScheduleForToday(employeeId);
 
+  // ❌ No tiene horario para hoy → RECHAZO
+  if (horario && horario.noTrabajaHoy) {
+    const motivo = `Hoy no trabaja (${NOMBRES_DIAS[horario.diaSemanaActual]})`;
+
+    const detalle = await registrarAccesoDenegadoEmpleado({
+      personaId: emp.persona_id,
+      branchId,
+      userId,
+      motivo,
+      rol,
+    });
+
+    return {
+      success: false,
+      message: motivo,
+      isLate: false,
+      minutes: 0,
+      rol,
+      denied: true,
+      log: {
+        id: null,
+        timestamp: new Date().toISOString(),
+        memberName: `${emp.nombres} ${emp.apellidos}`.trim(),
+        memberType: "employee",
+        detail: detalle,
+        status: "denied",
+        ci: emp.ci,
+      },
+    };
+  }
+
+  // ✅ Tiene horario → validar tardanza
   const currentTimeResult = await query(
     `SELECT TIMEZONE('America/La_Paz', NOW()) as hora_actual_bolivia`
   );
-
-  const horaActualBolivia = currentTimeResult.rows[0].hora_actual_bolivia;
+  const horaActualBolivia = new Date(
+    currentTimeResult.rows[0].hora_actual_bolivia
+  );
 
   const [shiftHours, shiftMinutes, shiftSeconds] = horario.hora_ingreso
     .split(":")
     .map(Number);
 
-  const hoy = new Date(horaActualBolivia);
-  const horaIngresoHoy = new Date(hoy);
+  const horaIngresoHoy = new Date(horaActualBolivia);
   horaIngresoHoy.setHours(shiftHours, shiftMinutes, shiftSeconds || 0, 0);
 
   const diffMs = horaActualBolivia - horaIngresoHoy;
@@ -1069,9 +1166,9 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   if (diffMinutes > 0) {
     isLate = true;
     minutes = diffMinutes;
-    detail = `Entrada: ${diffMinutes} minuto${diffMinutes !== 1 ? "s" : ""} tarde`;
+    detail = `Entrada: ${diffMinutes} minuto${diffMinutes !== 1 ? "s" : ""} tarde (rol: ${rol})`;
   } else {
-    detail = `Entrada: A tiempo`;
+    detail = `Entrada: A tiempo (rol: ${rol})`;
   }
 
   await query(
@@ -1079,7 +1176,7 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
     INSERT INTO registros_acceso 
     (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
     VALUES ($1, $2, $3, $4, $5, TIMEZONE('America/La_Paz', NOW()), 'empleado')
-  `,
+    `,
     [emp.persona_id, detail, "exitoso", branchId, userId]
   );
 
@@ -1088,6 +1185,7 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
     message: detail,
     isLate,
     minutes,
+    rol,
   };
 };
 
@@ -1097,20 +1195,27 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
 exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   const employee = await query(
     `
-    SELECT e.*, p.nombres, p.apellidos, p.ci
+    SELECT e.*, p.nombres, p.apellidos, p.ci, p.estado AS persona_estado
     FROM empleados e
     INNER JOIN personas p ON e.persona_id = p.id
     WHERE e.id = $1
-    AND p.estado = 0
-  `,
+    `,
     [employeeId]
   );
 
   if (employee.rows.length === 0) {
-    throw new Error("Empleado no encontrado o eliminado");
+    throw new Error("Empleado no encontrado");
   }
 
   const emp = employee.rows[0];
+
+  if (emp.persona_estado !== 0) {
+    throw new Error("Empleado eliminado o inactivo");
+  }
+
+  if (emp.estado !== 1) {
+    throw new Error("El empleado está inactivo en el sistema");
+  }
 
   const { estado } = await getEmployeeEstadoHoy(emp.persona_id);
 
@@ -1120,12 +1225,17 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     );
   }
 
-  if (emp.rol === "limpieza") {
+  const rol = emp.rol;
+  const requiereHorario = rolRequiereHorario(rol);
+
+  // ============================================
+  // ADMIN → sin validación de horario
+  // ============================================
+  if (!requiereHorario) {
     const currentTimeResult = await query(
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
     );
     const horaActual = currentTimeResult.rows[0].hora_actual;
-
     const detail = `Salida: ${horaActual}`;
 
     await query(
@@ -1133,7 +1243,7 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
       INSERT INTO registros_acceso 
       (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
       VALUES ($1, $2, $3, $4, $5, TIMEZONE('America/La_Paz', NOW()), 'empleado')
-    `,
+      `,
       [emp.persona_id, detail, "exitoso", branchId, userId]
     );
 
@@ -1142,23 +1252,59 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
       message: detail,
       isEarly: false,
       minutes: 0,
+      rol,
     };
   }
 
+  // ============================================
+  // OTROS ROLES → validan horario del día
+  // ============================================
   const horario = await getEmployeeScheduleForToday(employeeId);
 
+  // ❌ No tiene horario para hoy → RECHAZO
+  if (horario && horario.noTrabajaHoy) {
+    const motivo = `Hoy no trabaja (${NOMBRES_DIAS[horario.diaSemanaActual]})`;
+
+    const detalle = await registrarAccesoDenegadoEmpleado({
+      personaId: emp.persona_id,
+      branchId,
+      userId,
+      motivo,
+      rol,
+    });
+
+    return {
+      success: false,
+      message: motivo,
+      isEarly: false,
+      minutes: 0,
+      rol,
+      denied: true,
+      log: {
+        id: null,
+        timestamp: new Date().toISOString(),
+        memberName: `${emp.nombres} ${emp.apellidos}`.trim(),
+        memberType: "employee",
+        detail: detalle,
+        status: "denied",
+        ci: emp.ci,
+      },
+    };
+  }
+
+  // ✅ Tiene horario → validar salida anticipada
   const currentTimeResult = await query(
     `SELECT TIMEZONE('America/La_Paz', NOW()) as hora_actual_bolivia`
   );
-
-  const horaActualBolivia = currentTimeResult.rows[0].hora_actual_bolivia;
+  const horaActualBolivia = new Date(
+    currentTimeResult.rows[0].hora_actual_bolivia
+  );
 
   const [shiftHours, shiftMinutes, shiftSeconds] = horario.hora_salida
     .split(":")
     .map(Number);
 
-  const hoy = new Date(horaActualBolivia);
-  const horaSalidaHoy = new Date(hoy);
+  const horaSalidaHoy = new Date(horaActualBolivia);
   horaSalidaHoy.setHours(shiftHours, shiftMinutes, shiftSeconds || 0, 0);
 
   const diffMs = horaSalidaHoy - horaActualBolivia;
@@ -1171,9 +1317,9 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   if (diffMinutes > 0) {
     isEarly = true;
     minutes = diffMinutes;
-    detail = `Salida: ${diffMinutes} minuto${diffMinutes !== 1 ? "s" : ""} antes`;
+    detail = `Salida: ${diffMinutes} minuto${diffMinutes !== 1 ? "s" : ""} antes (rol: ${rol})`;
   } else {
-    detail = "Salida: A tiempo";
+    detail = `Salida: A tiempo (rol: ${rol})`;
   }
 
   await query(
@@ -1181,7 +1327,7 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     INSERT INTO registros_acceso 
     (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
     VALUES ($1, $2, $3, $4, $5, TIMEZONE('America/La_Paz', NOW()), 'empleado')
-  `,
+    `,
     [emp.persona_id, detail, "exitoso", branchId, userId]
   );
 
@@ -1190,11 +1336,12 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     message: detail,
     isEarly,
     minutes,
+    rol,
   };
 };
 
 // ============================================
-// REGISTER ACCESS DENIED
+// REGISTER ACCESS DENIED (cliente sin inscripción)
 // ============================================
 exports.registerAccessDeniedNoActiveSubscription = async (
   personId,
