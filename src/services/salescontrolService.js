@@ -13,15 +13,24 @@ const QR_REGEX =
 const LA_PAZ_DATE = (alias) => `(${alias}.fecha)::date`;
 
 // ============================================
-// HELPER: aplica filtro de sucursal forzado para no-admin
+// HELPER: Normaliza el rol
+// ============================================
+function normalizeRol(rol) {
+  return (rol || "").toString().toLowerCase().trim();
+}
+
+// ============================================
+// HELPER: aplica filtro de sucursal forzado para no-admin/superadmin
 // ============================================
 function applyForcedSucursal(filters, userSucursalId, userRol) {
-  const esAdmin = userRol === "admin";
-  const forzado = !esAdmin && userSucursalId ? Number(userSucursalId) : null;
+  const rolNorm = normalizeRol(userRol);
+  const esAdminGlobal = rolNorm === "admin" || rolNorm === "superadmin";
+  const forzado =
+    !esAdminGlobal && userSucursalId ? Number(userSucursalId) : null;
 
   return {
     ...filters,
-    sucursal: forzado ? forzado : filters.sucursal, // ← fuerza
+    sucursal: forzado ? forzado : filters.sucursal,
   };
 }
 
@@ -129,6 +138,47 @@ const buildDateFilters = async (
 };
 
 // ============================================
+// HELPER: aplica filtro de empleado/usuario
+// ============================================
+async function applyEmpleadoFilter(
+  whereConditions,
+  params,
+  paramCount,
+  columnExpr,
+  empleadoIdFilter
+) {
+  if (!empleadoIdFilter) return paramCount;
+
+  // El valor que llega es un `usuario_id` (columna id de `usuarios`)
+  const usuarioResult = await query(
+    "SELECT empleado_id FROM usuarios WHERE id = $1",
+    [empleadoIdFilter]
+  );
+
+  if (usuarioResult.rows.length === 0) {
+    console.warn(
+      `⚠️ applyEmpleadoFilter: no existe usuario con id=${empleadoIdFilter}. Filtro NO aplicado.`
+    );
+    return paramCount;
+  }
+
+  const empleadoIdReal = usuarioResult.rows[0].empleado_id;
+  if (!empleadoIdReal) {
+    console.warn(
+      `⚠️ applyEmpleadoFilter: usuario ${empleadoIdFilter} sin empleado_id. Filtro NO aplicado.`
+    );
+    return paramCount;
+  }
+
+  whereConditions.push(`${columnExpr} = $${paramCount}`);
+  params.push(empleadoIdReal);
+  console.log(
+    `✅ Filtro empleado aplicado: ${columnExpr} = ${empleadoIdReal} (usuario ${empleadoIdFilter})`
+  );
+  return paramCount + 1;
+}
+
+// ============================================
 // GET SALES
 // ============================================
 const getSales = async (
@@ -139,15 +189,17 @@ const getSales = async (
   userRol = null
 ) => {
   try {
-    // ✅ Forzar sucursal si no es admin
     const effectiveFilters = applyForcedSucursal(
       filters,
       userSucursalId,
       userRol
     );
 
-    // ✅ FIX: Calcular "hoy" en hora Bolivia para que el filtro "today" funcione
-    // (NO modifica la hora de las ventas, solo calcula qué día es hoy en Bolivia)
+    console.log(
+      "🔍 getSales filters efectivos:",
+      JSON.stringify(effectiveFilters, null, 2)
+    );
+
     const todayResult = await query(
       "SELECT (NOW() AT TIME ZONE 'America/La_Paz')::date as hoy_la_paz"
     );
@@ -176,25 +228,22 @@ const getSales = async (
       paramCountServicios++;
     }
 
+    // ✅ Filtro de empleado (por usuario_id)
     if (effectiveFilters.empleadoId) {
-      const usuarioResult = await query(
-        "SELECT empleado_id FROM usuarios WHERE id = $1",
-        [effectiveFilters.empleadoId]
+      paramCountProductos = await applyEmpleadoFilter(
+        whereConditionsProductos,
+        paramsProductos,
+        paramCountProductos,
+        "vp.empleado_id",
+        effectiveFilters.empleadoId
       );
-      if (usuarioResult.rows.length > 0) {
-        const empleadoIdReal = usuarioResult.rows[0].empleado_id;
-        whereConditionsProductos.push(
-          `vp.empleado_id = $${paramCountProductos}`
-        );
-        paramsProductos.push(empleadoIdReal);
-        paramCountProductos++;
-
-        whereConditionsServicios.push(
-          `vs.empleado_id = $${paramCountServicios}`
-        );
-        paramsServicios.push(empleadoIdReal);
-        paramCountServicios++;
-      }
+      paramCountServicios = await applyEmpleadoFilter(
+        whereConditionsServicios,
+        paramsServicios,
+        paramCountServicios,
+        "vs.empleado_id",
+        effectiveFilters.empleadoId
+      );
     }
 
     paramCountProductos = await buildDateFilters(
@@ -224,6 +273,11 @@ const getSales = async (
       whereConditionsServicios.length > 0
         ? `WHERE ${baseConditionServicios} AND ${whereConditionsServicios.join(" AND ")}`
         : `WHERE ${baseConditionServicios}`;
+
+    console.log("📝 whereClauseProductos:", whereClauseProductos);
+    console.log("📝 paramsProductos:", paramsProductos);
+    console.log("📝 whereClauseServicios:", whereClauseServicios);
+    console.log("📝 paramsServicios:", paramsServicios);
 
     const countQueryProductos = `
       SELECT COUNT(DISTINCT vp.id) as total_count 
@@ -491,7 +545,11 @@ const getTotals = async (
       userRol
     );
 
-    // ✅ FIX: Calcular "hoy" en hora Bolivia para que el filtro "today" funcione
+    console.log(
+      "🔍 getTotals filters efectivos:",
+      JSON.stringify(effectiveFilters, null, 2)
+    );
+
     const todayResult = await query(
       "SELECT (NOW() AT TIME ZONE 'America/La_Paz')::date as hoy_la_paz"
     );
@@ -518,25 +576,22 @@ const getTotals = async (
       paramCountServicios++;
     }
 
+    // ✅ Filtro de empleado (por usuario_id)
     if (effectiveFilters.empleadoId) {
-      const usuarioResult = await query(
-        "SELECT empleado_id FROM usuarios WHERE id = $1",
-        [effectiveFilters.empleadoId]
+      paramCountProductos = await applyEmpleadoFilter(
+        whereConditionsProductos,
+        paramsProductos,
+        paramCountProductos,
+        "vp.empleado_id",
+        effectiveFilters.empleadoId
       );
-      if (usuarioResult.rows.length > 0) {
-        const empleadoIdReal = usuarioResult.rows[0].empleado_id;
-        whereConditionsProductos.push(
-          `vp.empleado_id = $${paramCountProductos}`
-        );
-        paramsProductos.push(empleadoIdReal);
-        paramCountProductos++;
-
-        whereConditionsServicios.push(
-          `vs.empleado_id = $${paramCountServicios}`
-        );
-        paramsServicios.push(empleadoIdReal);
-        paramCountServicios++;
-      }
+      paramCountServicios = await applyEmpleadoFilter(
+        whereConditionsServicios,
+        paramsServicios,
+        paramCountServicios,
+        "vs.empleado_id",
+        effectiveFilters.empleadoId
+      );
     }
 
     paramCountProductos = await buildDateFilters(
