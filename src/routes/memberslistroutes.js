@@ -14,7 +14,7 @@ router.get("/branches/available", authorize(['admin', 'recepcionista']), members
 
 router.put("/:id", authorize(['admin','recepcionista']), membersListController.editMember);
 
-// ✅ NUEVA RUTA para actualizar fechas de un servicio
+// ✅ Actualizar fechas de un servicio (admin y recepcionista)
 router.put("/:id/service-dates", authorize(['admin','recepcionista']), membersListController.updateInscriptionDates);
 
 router.delete("/:id", authorize(['admin','recepcionista']), membersListController.deleteMember);

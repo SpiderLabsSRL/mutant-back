@@ -1,4 +1,45 @@
 const productsService = require("../services/productsService");
+const { query } = require("../../db");
+
+// ============================================
+// HELPER: Resolver el usuario de la BD a partir de req.user
+// ============================================
+async function resolveUsuarioId(req) {
+  // 1) Si el token ya trae idusuario o id directo
+  if (req.user?.idusuario) return req.user.idusuario;
+  if (req.user?.id && !req.user?.idempleado && !req.user?.empleado_id) {
+    return req.user.id;
+  }
+
+  // 2) Si trae idempleado / empleado_id, buscar el usuario asociado
+  const empleadoId = req.user?.idempleado || req.user?.empleado_id;
+  if (empleadoId) {
+    try {
+      const r = await query(
+        `SELECT id FROM usuarios WHERE empleado_id = $1 AND estado = 1 LIMIT 1`,
+        [empleadoId]
+      );
+      if (r.rows.length > 0) return r.rows[0].id;
+    } catch (err) {
+      console.error("Error resolviendo usuario desde empleado:", err);
+    }
+  }
+
+  // 3) Fallback: si req.user tiene username, buscar por username
+  if (req.user?.username) {
+    try {
+      const r = await query(
+        `SELECT id FROM usuarios WHERE username = $1 AND estado = 1 LIMIT 1`,
+        [req.user.username]
+      );
+      if (r.rows.length > 0) return r.rows[0].id;
+    } catch (err) {
+      console.error("Error resolviendo usuario desde username:", err);
+    }
+  }
+
+  return null;
+}
 
 const getProducts = async (req, res) => {
   try {
@@ -40,7 +81,6 @@ const createProduct = async (req, res) => {
       landing,
     } = req.body;
 
-    // Validaciones básicas
     if (!nombre || !precio_venta) {
       return res.status(400).json({ error: "Nombre y precio_venta son obligatorios" });
     }
@@ -66,7 +106,7 @@ const createProduct = async (req, res) => {
       precio_compra,
       codigo,
       stock_minimo_por_sucursal,
-      imagen, // base64 string
+      imagen,
       landing: landing || false,
     });
 
@@ -184,6 +224,7 @@ const getProductStock = async (req, res) => {
   }
 };
 
+// ✅ addStock ahora resuelve el usuario y lo pasa al servicio
 const addStock = async (req, res) => {
   try {
     const { id } = req.params;
@@ -197,8 +238,27 @@ const addStock = async (req, res) => {
       return res.status(400).json({ error: "cantidad debe ser mayor a 0" });
     }
 
-    await productsService.addStock(id, sucursal_id, cantidad);
-    res.status(200).json({ message: "Stock agregado correctamente" });
+    // ✅ Resolver usuario autenticado desde req.user
+    const usuarioId = await resolveUsuarioId(req);
+
+    if (!usuarioId) {
+      return res.status(401).json({
+        error:
+          "No se pudo identificar al usuario autenticado. Vuelve a iniciar sesión.",
+      });
+    }
+
+    const result = await productsService.addStock(
+      id,
+      sucursal_id,
+      cantidad,
+      usuarioId
+    );
+
+    res.status(200).json({
+      message: "Stock agregado correctamente",
+      ...result,
+    });
   } catch (error) {
     console.error("Error en addStock:", error);
     res.status(500).json({ error: error.message });

@@ -15,9 +15,6 @@ function buildWhereConditions({
   const queryParams = [];
   let paramCount = 0;
 
-  // ✅ Sucursal:
-  //   - admin: puede filtrar por sucursalFilter (o "all" para todas)
-  //   - NO admin: SIEMPRE su propia sucursal (ignora sucursalFilter)
   const esAdmin = userRol === "admin";
 
   if (!esAdmin && userSucursalId) {
@@ -30,15 +27,12 @@ function buildWhereConditions({
     queryParams.push(parseInt(sucursalFilter));
   }
 
-  // Excluir empleados
   whereConditions.push(
     `p.id NOT IN (SELECT persona_id FROM empleados WHERE estado = 1)`
   );
 
-  // Solo personas activas
   whereConditions.push(`p.estado = 0`);
 
-  // Búsqueda robusta
   if (searchTerm && searchTerm.trim() !== "") {
     paramCount++;
     const normalizedSearch = searchTerm.trim().replace(/\s+/g, " ");
@@ -76,7 +70,6 @@ function buildWhereConditions({
     queryParams.push(`%${normalizedSearch}%`);
   }
 
-  // Filtro por servicio (nombre del servicio)
   if (serviceFilter && serviceFilter !== "all") {
     paramCount++;
     whereConditions.push(`s.nombre = $${paramCount}`);
@@ -117,10 +110,6 @@ const getMembers = async (
         ? `WHERE ${whereConditions.join(" AND ")}`
         : "";
 
-    // ============================================
-    // Query principal: agrupa por tipo_servicio + sucursal
-    // Elige la activa, o si no hay, la inactiva más reciente.
-    // ============================================
     const membersQuery = `
       WITH inscripciones_calculadas AS (
         SELECT 
@@ -226,9 +215,6 @@ const getMembers = async (
 
     const totalCount = parseInt(countResult.rows[0]?.total_count || 0);
 
-    // ============================================
-    // Servicios por miembro (solo las candidatas: 1 por tipo)
-    // ============================================
     const uniqueIds = [...new Set(membersResult.rows.map((m) => m.id))];
 
     let allServices = [];
@@ -456,7 +442,6 @@ const getAllMembers = async (
 
       const member = membersMap.get(key);
 
-      // Ya viene 1 por tipo desde el SQL, pero por seguridad evito duplicar mismo nombre
       const servicioExistente = member.services.find(
         (service) => service.name === row.servicio_nombre
       );
@@ -480,7 +465,6 @@ const getAllMembers = async (
     );
   }
 };
-
 // ============================================
 // EDIT MEMBER
 // ============================================
@@ -499,6 +483,7 @@ const editMember = async (id, nombres, apellidos, ci, phone) => {
       throw error;
     }
 
+    // ✅ Ya NO se actualiza fecha_nacimiento
     const updateQuery = `
       UPDATE personas 
       SET nombres = $1, apellidos = $2, ci = $3, telefono = $4
@@ -530,24 +515,43 @@ const editMember = async (id, nombres, apellidos, ci, phone) => {
   }
 };
 
-// ============================================
 // UPDATE INSCRIPTION DATES
-// Bloquea la edición si estado_inscripcion !== 'activo'
+// ✅ Admin y recepcionista pueden editar siempre
+// ✅ Registra el movimiento en movimientos_fechas_inscripcion
 // ============================================
 const updateInscriptionDates = async (
   personaId,
   serviceName,
   startDate,
-  expirationDate
+  expirationDate,
+  userContext = {}
 ) => {
   try {
+    const { usuarioId, sucursalId } = userContext;
+
+    if (!usuarioId) {
+      throw new Error(
+        "No se pudo identificar al usuario que realiza el cambio"
+      );
+    }
+
     console.log("updateInscriptionDates - Buscando inscripción:", {
       personaId,
       serviceName,
+      usuarioId,
+      sucursalId,
     });
 
+    // 1) Buscar la inscripción (activa o no)
     const findQuery = `
-      SELECT i.id, i.fecha_inicio, i.fecha_vencimiento, i.estado_inscripcion
+      SELECT 
+        i.id, 
+        i.persona_id,
+        i.servicio_id,
+        i.sucursal_id,
+        TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') AS fecha_inicio,
+        TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD') AS fecha_vencimiento,
+        i.estado_inscripcion
       FROM inscripciones i
       INNER JOIN servicios s ON i.servicio_id = s.id
       WHERE i.persona_id = $1 AND s.nombre = $2 AND i.estado = 1
@@ -565,21 +569,20 @@ const updateInscriptionDates = async (
 
     const inscripcion = findResult.rows[0];
 
-    // ✅ No se puede editar fechas de una inscripción inactiva
-    if (inscripcion.estado_inscripcion !== "activo") {
-      const error = new Error(
-        "No se pueden editar las fechas de un servicio inactivo"
-      );
-      error.code = "INSCRIPTION_INACTIVE";
-      throw error;
-    }
+    // ✅ Ya NO se bloquea por estado_inscripcion
 
+    const fechaInicioAnterior = inscripcion.fecha_inicio;
+    const fechaVencimientoAnterior = inscripcion.fecha_vencimiento;
+
+    // 2) Actualizar fechas
     const updateQuery = `
       UPDATE inscripciones
       SET fecha_inicio = $1::date, fecha_vencimiento = $2::date
       WHERE id = $3
-      RETURNING id, TO_CHAR(fecha_inicio, 'YYYY-MM-DD') as fecha_inicio, 
-                TO_CHAR(fecha_vencimiento, 'YYYY-MM-DD') as fecha_vencimiento
+      RETURNING 
+        id, 
+        TO_CHAR(fecha_inicio, 'YYYY-MM-DD') AS fecha_inicio, 
+        TO_CHAR(fecha_vencimiento, 'YYYY-MM-DD') AS fecha_vencimiento
     `;
 
     const result = await query(updateQuery, [
@@ -588,8 +591,60 @@ const updateInscriptionDates = async (
       inscripcion.id,
     ]);
 
-    console.log("Inscripción actualizada:", result.rows[0]);
-    return result.rows[0];
+    const updated = result.rows[0];
+
+    console.log("Inscripción actualizada:", updated);
+
+    // 3) Registrar movimiento (auditoría)
+    const sucursalMovimiento =
+      inscripcion.sucursal_id || (sucursalId ? Number(sucursalId) : null);
+
+    if (sucursalMovimiento) {
+      const descripcion = [
+        `Cambio de fechas del servicio "${serviceName}"`,
+        `Inicio: ${fechaInicioAnterior || "—"} → ${updated.fecha_inicio}`,
+        `Vencimiento: ${fechaVencimientoAnterior || "—"} → ${updated.fecha_vencimiento}`,
+      ].join(" | ");
+
+      const insertMovQuery = `
+        INSERT INTO movimientos_fechas_inscripcion (
+          inscripcion_id,
+          persona_id,
+          servicio_id,
+          sucursal_id,
+          usuario_id,
+          fecha_inicio_anterior,
+          fecha_inicio_nueva,
+          fecha_vencimiento_anterior,
+          fecha_vencimiento_nueva,
+          descripcion
+        ) VALUES (
+          $1, $2, $3, $4, $5,
+          $6::date, $7::date, $8::date, $9::date,
+          $10
+        )
+        RETURNING id
+      `;
+
+      await query(insertMovQuery, [
+        inscripcion.id,
+        inscripcion.persona_id,
+        inscripcion.servicio_id,
+        sucursalMovimiento,
+        usuarioId,
+        fechaInicioAnterior,
+        updated.fecha_inicio,
+        fechaVencimientoAnterior,
+        updated.fecha_vencimiento,
+        descripcion,
+      ]);
+    } else {
+      console.warn(
+        "⚠️ No se pudo registrar el movimiento: falta sucursal_id"
+      );
+    }
+
+    return updated;
   } catch (error) {
     console.error("Error en updateInscriptionDates service:", error);
     throw new Error(

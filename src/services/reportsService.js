@@ -1620,6 +1620,91 @@ const actualizarSueldoEmpleado = async (empleadoId, sueldoBase, comision) => {
     throw error;
   }
 };
+// ============================================
+// MOVIMIENTOS DE FECHAS DE INSCRIPCIÓN
+// ============================================
+const obtenerMovimientosFechasInscripcion = async (
+  fechaInicio,
+  fechaFin,
+  servicioId = null,
+  sucursalId = null
+) => {
+  try {
+    const fechaInicioStr = formatDateToSQL(new Date(fechaInicio + "T00:00:00Z"));
+    const fechaFinStr = formatDateToSQL(new Date(fechaFin + "T23:59:59Z"));
+
+    let whereClause = "WHERE mf.fecha BETWEEN $1 AND $2";
+    const params = [fechaInicioStr, fechaFinStr];
+    let paramCount = 2;
+
+    if (servicioId && servicioId !== "all") {
+      paramCount++;
+      whereClause += ` AND mf.servicio_id = $${paramCount}`;
+      params.push(servicioId);
+    }
+
+    if (sucursalId && sucursalId !== "all") {
+      paramCount++;
+      whereClause += ` AND mf.sucursal_id = $${paramCount}`;
+      params.push(sucursalId);
+    }
+
+    const sql = `
+      SELECT 
+        mf.id::text as id,
+        mf.fecha,
+        mf.usuario_id::text as "usuarioId",
+        COALESCE(CONCAT(pu.nombres, ' ', pu.apellidos), 'Sistema') as "usuarioNombre",
+        mf.persona_id::text as "personaId",
+        COALESCE(CONCAT(pp.nombres, ' ', pp.apellidos), '—') as "personaNombre",
+        mf.servicio_id::text as "servicioId",
+        COALESCE(s.nombre, '—') as "servicioNombre",
+        mf.sucursal_id::text as "sucursalId",
+        COALESCE(su.nombre, '—') as "sucursalNombre",
+        TO_CHAR(mf.fecha_inicio_anterior, 'YYYY-MM-DD') as "fechaInicioAnterior",
+        TO_CHAR(mf.fecha_inicio_nueva, 'YYYY-MM-DD') as "fechaInicioNueva",
+        TO_CHAR(mf.fecha_vencimiento_anterior, 'YYYY-MM-DD') as "fechaVencimientoAnterior",
+        TO_CHAR(mf.fecha_vencimiento_nueva, 'YYYY-MM-DD') as "fechaVencimientoNueva",
+        COALESCE(mf.descripcion, '') as descripcion
+      FROM movimientos_fechas_inscripcion mf
+      LEFT JOIN usuarios u ON mf.usuario_id = u.id
+      LEFT JOIN empleados e ON u.empleado_id = e.id
+      LEFT JOIN personas pu ON e.persona_id = pu.id
+      LEFT JOIN personas pp ON mf.persona_id = pp.id
+      LEFT JOIN servicios s ON mf.servicio_id = s.id
+      LEFT JOIN sucursales su ON mf.sucursal_id = su.id
+      ${whereClause}
+      ORDER BY mf.fecha DESC
+      LIMIT 200
+    `;
+
+    console.log("🔍 QUERY movimientos_fechas_inscripcion:", sql);
+    console.log("🔍 PARAMS:", params);
+
+    const result = await query(sql, params);
+
+    return result.rows.map((row) => ({
+      id: row.id,
+      fecha: row.fecha,
+      usuarioId: row.usuarioId,
+      usuarioNombre: row.usuarioNombre,
+      personaId: row.personaId,
+      personaNombre: row.personaNombre,
+      servicioId: row.servicioId,
+      servicioNombre: row.servicioNombre,
+      sucursalId: row.sucursalId,
+      sucursalNombre: row.sucursalNombre,
+      fechaInicioAnterior: row.fechaInicioAnterior,
+      fechaInicioNueva: row.fechaInicioNueva,
+      fechaVencimientoAnterior: row.fechaVencimientoAnterior,
+      fechaVencimientoNueva: row.fechaVencimientoNueva,
+      descripcion: row.descripcion,
+    }));
+  } catch (error) {
+    console.error("❌ Error obteniendo movimientos de fechas inscripción:", error);
+    throw error;
+  }
+};
 
 // ============================================
 // EXPORTS
@@ -1637,6 +1722,7 @@ module.exports = {
   obtenerDesgloseProductos,
   obtenerDesgloseServicios,
   obtenerMovimientosStock,
+  obtenerMovimientosFechasInscripcion,
   obtenerInscripcionesAgrupadas,
   obtenerProductosDisponibles,
   obtenerServiciosDisponibles,

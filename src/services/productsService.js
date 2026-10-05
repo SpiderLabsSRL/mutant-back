@@ -352,31 +352,92 @@ const getProductStock = async (id, sucursalId) => {
 };
 
 // ============================================
-// ADD STOCK
+// ADD STOCK (con registro de movimiento)
 // ============================================
-const addStock = async (productId, sucursalId, cantidad) => {
-  const checkResult = await query(
-    `SELECT stock FROM producto_sucursal 
-     WHERE producto_id = $1 AND sucursal_id = $2`,
-    [productId, sucursalId]
-  );
+const addStock = async (productId, sucursalId, cantidad, usuarioId) => {
+  const client = await pool.connect();
 
-  if (checkResult.rows.length === 0) {
-    throw new Error("Producto no encontrado en la sucursal especificada");
+  try {
+    await client.query("BEGIN");
+
+    // 1) Bloqueamos la fila para evitar race conditions
+    const checkResult = await client.query(
+      `SELECT stock FROM producto_sucursal 
+       WHERE producto_id = $1 AND sucursal_id = $2
+       FOR UPDATE`,
+      [productId, sucursalId]
+    );
+
+    if (checkResult.rows.length === 0) {
+      throw new Error("Producto no encontrado en la sucursal especificada");
+    }
+
+    const currentStock = checkResult.rows[0].stock;
+
+    if (currentStock === null) {
+      throw new Error(
+        "No se puede agregar stock a un producto configurado como 'sin stock'"
+      );
+    }
+
+    const cantidadNum = parseInt(cantidad);
+    if (isNaN(cantidadNum) || cantidadNum <= 0) {
+      throw new Error("La cantidad debe ser mayor a 0");
+    }
+
+    if (!usuarioId) {
+      throw new Error(
+        "No se pudo identificar al usuario que realiza el movimiento de stock"
+      );
+    }
+
+    const stockAnterior = parseInt(currentStock) || 0;
+    const stockNuevo = stockAnterior + cantidadNum;
+
+    // 2) Actualizar stock
+    await client.query(
+      `UPDATE producto_sucursal 
+       SET stock = $1 
+       WHERE producto_id = $2 AND sucursal_id = $3`,
+      [stockNuevo, productId, sucursalId]
+    );
+
+    // 3) Registrar movimiento (auditoría)
+    await client.query(
+      `INSERT INTO movimientos_stock (
+        producto_id,
+        sucursal_id,
+        usuario_id,
+        cantidad_anterior,
+        cantidad_nueva,
+        cantidad_modificada,
+        descripcion
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        productId,
+        sucursalId,
+        usuarioId,
+        stockAnterior,
+        stockNuevo,
+        cantidadNum,
+        `Adición de stock: +${cantidadNum} unidades (${stockAnterior} → ${stockNuevo})`,
+      ]
+    );
+
+    await client.query("COMMIT");
+
+    return {
+      success: true,
+      stockAnterior,
+      stockNuevo,
+      cantidadAgregada: cantidadNum,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
-
-  const currentStock = checkResult.rows[0].stock;
-
-  if (currentStock === null) {
-    throw new Error("No se puede agregar stock a un producto configurado como 'sin stock'");
-  }
-
-  await query(
-    `UPDATE producto_sucursal 
-     SET stock = stock + $1 
-     WHERE producto_id = $2 AND sucursal_id = $3`,
-    [cantidad, productId, sucursalId]
-  );
 };
 
 // ============================================

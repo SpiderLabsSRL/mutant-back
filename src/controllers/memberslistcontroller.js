@@ -2,10 +2,6 @@
 const membersListService = require("../services/memberslistservice");
 const { query } = require("../../db");
 
-// ============================================
-// HELPER: Obtener sucursal_id del usuario logueado
-// Resuelve desde req.user o, si no está, desde la BD.
-// ============================================
 async function resolveUserSucursalId(req) {
   if (req.user?.sucursal_id) {
     return Number(req.user.sucursal_id);
@@ -59,12 +55,6 @@ const getMembers = async (req, res) => {
 
     const userSucursalId = await resolveUserSucursalId(req);
 
-    console.log("getMembers - Debug:", {
-      userRol: req.user?.rol,
-      userSucursalId,
-      sucursalFilter: sucursal,
-    });
-
     const result = await membersListService.getMembers(
       pageNum,
       limitNum,
@@ -101,12 +91,6 @@ const getAllMembers = async (req, res) => {
 
     const userSucursalId = await resolveUserSucursalId(req);
 
-    console.log("getAllMembers - Debug:", {
-      userRol: req.user?.rol,
-      userSucursalId,
-      sucursalFilter,
-    });
-
     const members = await membersListService.getAllMembers(
       searchTerm || "",
       serviceFilter || "all",
@@ -127,6 +111,7 @@ const getAllMembers = async (req, res) => {
   }
 };
 
+// ✅ editMember: ya no recibe ni actualiza birthDate
 const editMember = async (req, res) => {
   try {
     const { id } = req.params;
@@ -183,11 +168,6 @@ const editMember = async (req, res) => {
 const deleteMember = async (req, res) => {
   try {
     const { id } = req.params;
-
-    console.log("Controlador deleteMember - ID recibido:", {
-      id,
-      userRol: req.user?.rol,
-    });
 
     const result = await membersListService.deleteMember(id);
 
@@ -254,11 +234,22 @@ const updateInscriptionDates = async (req, res) => {
       });
     }
 
+    const usuarioId = req.user?.idusuario || req.user?.id;
+    const sucursalId = await resolveUserSucursalId(req);
+
+    if (!usuarioId) {
+      return res.status(401).json({
+        success: false,
+        message: "No se pudo identificar al usuario autenticado",
+      });
+    }
+
     const result = await membersListService.updateInscriptionDates(
       id,
       serviceName,
       startDate,
-      expirationDate
+      expirationDate,
+      { usuarioId, sucursalId }
     );
 
     res.json({
@@ -268,13 +259,6 @@ const updateInscriptionDates = async (req, res) => {
     });
   } catch (error) {
     console.error("Error en updateInscriptionDates controller:", error);
-
-    if (error.message.includes("No se pueden editar las fechas")) {
-      return res.status(400).json({
-        success: false,
-        message: error.message,
-      });
-    }
 
     res.status(500).json({
       success: false,

@@ -373,7 +373,29 @@ const getReportesZumba = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+// ============================================
+// MOVIMIENTOS DE FECHAS DE INSCRIPCIÓN
+// ============================================
+const getMovimientosFechasInscripcion = async (req, res) => {
+  try {
+    const { fechaInicio, fechaFin, servicioId, sucursalId } = req.query;
 
+    if (!fechaInicio || !fechaFin) {
+      return res.status(400).json({ error: "fechaInicio y fechaFin son obligatorios" });
+    }
+
+    const movimientos = await reportsService.obtenerMovimientosFechasInscripcion(
+      fechaInicio,
+      fechaFin,
+      servicioId === "all" ? null : servicioId,
+      sucursalId === "all" ? null : sucursalId
+    );
+    res.json(movimientos);
+  } catch (error) {
+    console.error("Error en getMovimientosFechasInscripcion:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
 module.exports = {
   getReportes,
   getSucursales,
@@ -387,6 +409,7 @@ module.exports = {
   getDesgloseProductos,
   getDesgloseServicios,
   getMovimientosStock,
+  getMovimientosFechasInscripcion, 
   getInscripcionesAgrupadas,
   getProductosDisponibles,
   getServiciosDisponibles,

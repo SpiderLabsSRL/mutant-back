@@ -52,4 +52,8 @@ router.get("/atrasos-empleados", reportsController.getAtrasosEmpleados);
 router.get("/pagos-informativos", reportsController.getPagosInformativos);
 router.patch("/empleados/:id/sueldo", reportsController.actualizarSueldoEmpleado);
 router.get("/zumba", reportsController.getReportesZumba);
-module.exports = router;
+// ============================================
+// MOVIMIENTOS DE FECHAS DE INSCRIPCIÓN
+// ============================================
+router.get("/movimientos-fechas-inscripcion", reportsController.getMovimientosFechasInscripcion);
+module.exports = router; 
