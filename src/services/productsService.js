@@ -31,7 +31,7 @@ const dataUrlToBuffer = (dataUrl) => {
 };
 
 // ============================================
-// GET ALL PRODUCTS
+// GET ALL PRODUCTS (con stock incluido - 1 sola query)
 // ============================================
 const getAllProducts = async (sucursalId) => {
   let sql = `
@@ -44,8 +44,19 @@ const getAllProducts = async (sucursalId) => {
       p.codigo,
       p.imagen,
       p.landing,
-      p.estado
+      p.estado,
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'sucursal_id', ps.sucursal_id,
+            'stock', ps.stock,
+            'stock_minimo', ps.stock_minimo
+          )
+        ) FILTER (WHERE ps.sucursal_id IS NOT NULL),
+        '[]'
+      ) AS stock_info
     FROM productos p
+    LEFT JOIN producto_sucursal ps ON ps.producto_id = p.id
     WHERE p.estado IN (0, 1)
   `;
 
@@ -62,18 +73,19 @@ const getAllProducts = async (sucursalId) => {
     params.push(sucursalId);
   }
 
-  sql += ` ORDER BY p.nombre`;
+  sql += ` GROUP BY p.id ORDER BY p.nombre`;
 
   const result = await query(sql, params);
 
   return result.rows.map((row) => ({
     ...row,
     imagen: bufferToDataUrl(row.imagen),
+    stock_info: row.stock_info || [],
   }));
 };
 
 // ============================================
-// GET PRODUCT BY ID
+// GET PRODUCT BY ID (con stock incluido)
 // ============================================
 const getProductById = async (id) => {
   const result = await query(
@@ -86,9 +98,21 @@ const getProductById = async (id) => {
       p.codigo,
       p.imagen,
       p.landing,
-      p.estado
+      p.estado,
+      COALESCE(
+        json_agg(
+          json_build_object(
+            'sucursal_id', ps.sucursal_id,
+            'stock', ps.stock,
+            'stock_minimo', ps.stock_minimo
+          )
+        ) FILTER (WHERE ps.sucursal_id IS NOT NULL),
+        '[]'
+      ) AS stock_info
     FROM productos p
-    WHERE p.id = $1 AND p.estado IN (0, 1)`,
+    LEFT JOIN producto_sucursal ps ON ps.producto_id = p.id
+    WHERE p.id = $1 AND p.estado IN (0, 1)
+    GROUP BY p.id`,
     [id]
   );
 
@@ -98,6 +122,7 @@ const getProductById = async (id) => {
   return {
     ...row,
     imagen: bufferToDataUrl(row.imagen),
+    stock_info: row.stock_info || [],
   };
 };
 
@@ -283,7 +308,7 @@ const toggleProductStatus = async (id) => {
     `UPDATE productos 
      SET estado = CASE WHEN estado = 1 THEN 0 ELSE 1 END 
      WHERE id = $1 
-     RETURNING id, nombre, descripcion, precio_venta, precio_compra, codigo, imagen, landing, estado`,
+     RETURNING id`,
     [id]
   );
 
@@ -291,11 +316,7 @@ const toggleProductStatus = async (id) => {
     throw new Error("Producto no encontrado");
   }
 
-  const row = result.rows[0];
-  return {
-    ...row,
-    imagen: bufferToDataUrl(row.imagen),
-  };
+  return await getProductById(id);
 };
 
 // ============================================
@@ -306,7 +327,7 @@ const toggleProductLanding = async (id) => {
     `UPDATE productos 
      SET landing = NOT landing 
      WHERE id = $1 
-     RETURNING id, nombre, descripcion, precio_venta, precio_compra, codigo, imagen, landing, estado`,
+     RETURNING id`,
     [id]
   );
 
@@ -314,11 +335,7 @@ const toggleProductLanding = async (id) => {
     throw new Error("Producto no encontrado");
   }
 
-  const row = result.rows[0];
-  return {
-    ...row,
-    imagen: bufferToDataUrl(row.imagen),
-  };
+  return await getProductById(id);
 };
 
 // ============================================
@@ -360,7 +377,6 @@ const addStock = async (productId, sucursalId, cantidad, usuarioId) => {
   try {
     await client.query("BEGIN");
 
-    // 1) Bloqueamos la fila para evitar race conditions
     const checkResult = await client.query(
       `SELECT stock FROM producto_sucursal 
        WHERE producto_id = $1 AND sucursal_id = $2
@@ -394,7 +410,6 @@ const addStock = async (productId, sucursalId, cantidad, usuarioId) => {
     const stockAnterior = parseInt(currentStock) || 0;
     const stockNuevo = stockAnterior + cantidadNum;
 
-    // 2) Actualizar stock
     await client.query(
       `UPDATE producto_sucursal 
        SET stock = $1 
@@ -402,7 +417,6 @@ const addStock = async (productId, sucursalId, cantidad, usuarioId) => {
       [stockNuevo, productId, sucursalId]
     );
 
-    // 3) Registrar movimiento (auditoría)
     await client.query(
       `INSERT INTO movimientos_stock (
         producto_id,
