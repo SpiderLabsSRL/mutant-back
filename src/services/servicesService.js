@@ -25,6 +25,18 @@ const DAY_MAP_REVERSE = {
   7: "sunday",
 };
 
+// ✅ HELPER: normaliza el valor de "personas requeridas"
+// - switch apagado → 1 (default, para no romper lógica previa)
+// - switch encendido → respeta el valor (incluido 0)
+const normalizeRequiredPeople = (requiredPeopleEnabled, requiredPeople) => {
+  if (!requiredPeopleEnabled) return 1;
+  if (requiredPeople === "" || requiredPeople === null || requiredPeople === undefined) {
+    return 0;
+  }
+  const parsed = Number(requiredPeople);
+  return isNaN(parsed) ? 0 : parsed;
+};
+
 // ============================================
 // GET ALL SERVICES
 // ============================================
@@ -60,7 +72,10 @@ const getAllServices = async () => {
         ARRAY_AGG(DISTINCT hs.dia_semana) FILTER (WHERE hs.dia_semana IS NOT NULL),
         ARRAY[]::int[]
       ) AS "specificDaysRaw",
-      (s.cantidad_personas IS NOT NULL AND s.cantidad_personas > 0) AS "requiredPeopleEnabled"
+      -- ✅ CAMBIO: requiredPeopleEnabled = true siempre que el servicio tenga
+      -- requerido personas explícitamente (incluye 0). Si quieres que 0 se vea
+      -- como "switch encendido con valor 0", esta es la condición correcta.
+      (s.cantidad_personas IS NOT NULL) AS "requiredPeopleEnabled"
     FROM servicios s
     LEFT JOIN servicio_sucursal ss ON s.id = ss.servicio_id
     LEFT JOIN horarios_servicio hs ON s.id = hs.servicio_id
@@ -78,7 +93,9 @@ const getAllServices = async () => {
     const { specificDaysRaw, ...rest } = row;
     return {
       ...rest,
-      specificDays: (specificDaysRaw || []).map((d) => DAY_MAP_REVERSE[d]).filter(Boolean),
+      specificDays: (specificDaysRaw || [])
+        .map((d) => DAY_MAP_REVERSE[d])
+        .filter(Boolean),
     };
   });
 };
@@ -144,6 +161,12 @@ const createService = async (serviceData) => {
   try {
     await client.query("BEGIN");
 
+    // ✅ CAMBIO: normaliza requiredPeople (0 válido cuando switch encendido)
+    const requiredPeopleValue = normalizeRequiredPeople(
+      requiredPeopleEnabled,
+      requiredPeople
+    );
+
     // Insertar servicio
     const serviceResult = await client.query(
       `INSERT INTO servicios 
@@ -164,7 +187,7 @@ const createService = async (serviceData) => {
         tipoDuracion,
         cantidadDuracion,
         serviceType || null,
-        requiredPeopleEnabled ? (Number(requiredPeople) || 0) : 0,
+        requiredPeopleValue,
       ]
     );
 
@@ -197,9 +220,7 @@ const createService = async (serviceData) => {
           }
         }
       } else {
-        // Sin días específicos: crear un horario genérico para todos los días (1-7)
-        // Pero mejor crear uno solo con día 1 como referencia y que el front lo maneje
-        // Opción: crear para los 7 días
+        // Sin días específicos: crear para los 7 días
         for (let dia = 1; dia <= 7; dia++) {
           await client.query(
             `INSERT INTO horarios_servicio (servicio_id, dia_semana, hora_inicio, hora_fin)
@@ -214,7 +235,9 @@ const createService = async (serviceData) => {
 
     const newService = serviceResult.rows[0];
     newService.sucursales = sucursales;
-    newService.sucursalesMultisucursal = multisucursal ? sucursalesMultisucursal : [];
+    newService.sucursalesMultisucursal = multisucursal
+      ? sucursalesMultisucursal
+      : [];
     newService.hasTimeRange = hasTimeRange || false;
     newService.startTime = hasTimeRange ? startTime : undefined;
     newService.endTime = hasTimeRange ? endTime : undefined;
@@ -260,6 +283,12 @@ const updateService = async (id, serviceData) => {
   try {
     await client.query("BEGIN");
 
+    // ✅ CAMBIO: normaliza requiredPeople (0 válido cuando switch encendido)
+    const requiredPeopleValue = normalizeRequiredPeople(
+      requiredPeopleEnabled,
+      requiredPeople
+    );
+
     // Actualizar servicio
     const serviceResult = await client.query(
       `UPDATE servicios 
@@ -281,7 +310,7 @@ const updateService = async (id, serviceData) => {
         tipoDuracion,
         cantidadDuracion,
         serviceType || null,
-        requiredPeopleEnabled ? (Number(requiredPeople) || 0) : 0,
+        requiredPeopleValue,
         id,
       ]
     );
@@ -327,7 +356,10 @@ const updateService = async (id, serviceData) => {
     // ACTUALIZAR HORARIOS
     // ============================================
     // Eliminar horarios existentes
-    await client.query(`DELETE FROM horarios_servicio WHERE servicio_id = $1`, [id]);
+    await client.query(
+      `DELETE FROM horarios_servicio WHERE servicio_id = $1`,
+      [id]
+    );
 
     // Insertar nuevos horarios si aplica
     if (hasTimeRange && startTime && endTime) {
@@ -357,7 +389,9 @@ const updateService = async (id, serviceData) => {
 
     const updatedService = serviceResult.rows[0];
     updatedService.sucursales = sucursales;
-    updatedService.sucursalesMultisucursal = multisucursal ? sucursalesMultisucursal : [];
+    updatedService.sucursalesMultisucursal = multisucursal
+      ? sucursalesMultisucursal
+      : [];
     updatedService.hasTimeRange = hasTimeRange || false;
     updatedService.startTime = hasTimeRange ? startTime : undefined;
     updatedService.endTime = hasTimeRange ? endTime : undefined;
@@ -424,7 +458,9 @@ const toggleServiceStatus = async (id) => {
 
   const service = result.rows[0];
   service.sucursales = sucursalesResult.rows.map((row) => row.sucursal_id);
-  service.sucursalesMultisucursal = multisucursalResult.rows.map((row) => row.sucursal_id);
+  service.sucursalesMultisucursal = multisucursalResult.rows.map(
+    (row) => row.sucursal_id
+  );
 
   if (horariosResult.rows.length > 0) {
     service.hasTimeRange = true;
@@ -440,7 +476,9 @@ const toggleServiceStatus = async (id) => {
     service.specificDays = [];
   }
 
-  service.requiredPeopleEnabled = (service.requiredPeople || 0) > 0;
+  // ✅ CAMBIO: requiredPeopleEnabled = true si hay un valor guardado (incluye 0)
+  service.requiredPeopleEnabled =
+    service.requiredPeople !== null && service.requiredPeople !== undefined;
 
   return service;
 };

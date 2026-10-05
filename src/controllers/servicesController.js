@@ -83,10 +83,18 @@ const createService = async (req, res) => {
       requiredPeople,
     } = req.body;
 
-    if (!name || !price || !sucursales || sucursales.length === 0 || !tipoDuracion || !cantidadDuracion) {
+    if (
+      !name ||
+      !price ||
+      !sucursales ||
+      sucursales.length === 0 ||
+      !tipoDuracion ||
+      !cantidadDuracion
+    ) {
       return res.status(400).json({
         success: false,
-        message: "Todos los campos son obligatorios, incluyendo al menos una sucursal, tipo de duración y cantidad",
+        message:
+          "Todos los campos son obligatorios, incluyendo al menos una sucursal, tipo de duración y cantidad",
       });
     }
 
@@ -97,7 +105,7 @@ const createService = async (req, res) => {
       });
     }
 
-    if (!['dias', 'meses'].includes(tipoDuracion)) {
+    if (!["dias", "meses"].includes(tipoDuracion)) {
       return res.status(400).json({
         success: false,
         message: "El tipo de duración debe ser 'dias' o 'meses'",
@@ -111,10 +119,14 @@ const createService = async (req, res) => {
       });
     }
 
-    if (multisucursal && (!sucursalesMultisucursal || sucursalesMultisucursal.length < 2)) {
+    if (
+      multisucursal &&
+      (!sucursalesMultisucursal || sucursalesMultisucursal.length < 2)
+    ) {
       return res.status(400).json({
         success: false,
-        message: "Para servicios multisucursal debe seleccionar al menos 2 sucursales",
+        message:
+          "Para servicios multisucursal debe seleccionar al menos 2 sucursales",
       });
     }
 
@@ -125,7 +137,19 @@ const createService = async (req, res) => {
       if (invalidSucursales.length > 0) {
         return res.status(400).json({
           success: false,
-          message: "Las sucursales multisucursal deben estar entre las sucursales disponibles",
+          message:
+            "Las sucursales multisucursal deben estar entre las sucursales disponibles",
+        });
+      }
+    }
+
+    // ✅ CAMBIO: validar requiredPeople >= 0 (0 es válido)
+    if (requiredPeopleEnabled) {
+      const rp = Number(requiredPeople);
+      if (isNaN(rp) || rp < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "La cantidad de personas debe ser mayor o igual a 0",
         });
       }
     }
@@ -183,10 +207,18 @@ const updateService = async (req, res) => {
       requiredPeople,
     } = req.body;
 
-    if (!name || !price || !sucursales || sucursales.length === 0 || !tipoDuracion || !cantidadDuracion) {
+    if (
+      !name ||
+      !price ||
+      !sucursales ||
+      sucursales.length === 0 ||
+      !tipoDuracion ||
+      !cantidadDuracion
+    ) {
       return res.status(400).json({
         success: false,
-        message: "Todos los campos son obligatorios, incluyendo al menos una sucursal, tipo de duración y cantidad",
+        message:
+          "Todos los campos son obligatorios, incluyendo al menos una sucursal, tipo de duración y cantidad",
       });
     }
 
@@ -197,7 +229,7 @@ const updateService = async (req, res) => {
       });
     }
 
-    if (!['dias', 'meses'].includes(tipoDuracion)) {
+    if (!["dias", "meses"].includes(tipoDuracion)) {
       return res.status(400).json({
         success: false,
         message: "El tipo de duración debe ser 'dias' o 'meses'",
@@ -211,10 +243,14 @@ const updateService = async (req, res) => {
       });
     }
 
-    if (multisucursal && (!sucursalesMultisucursal || sucursalesMultisucursal.length < 2)) {
+    if (
+      multisucursal &&
+      (!sucursalesMultisucursal || sucursalesMultisucursal.length < 2)
+    ) {
       return res.status(400).json({
         success: false,
-        message: "Para servicios multisucursal debe seleccionar al menos 2 sucursales",
+        message:
+          "Para servicios multisucursal debe seleccionar al menos 2 sucursales",
       });
     }
 
@@ -225,7 +261,19 @@ const updateService = async (req, res) => {
       if (invalidSucursales.length > 0) {
         return res.status(400).json({
           success: false,
-          message: "Las sucursales multisucursal deben estar entre las sucursales disponibles",
+          message:
+            "Las sucursales multisucursal deben estar entre las sucursales disponibles",
+        });
+      }
+    }
+
+    // ✅ CAMBIO: validar requiredPeople >= 0 (0 es válido)
+    if (requiredPeopleEnabled) {
+      const rp = Number(requiredPeople);
+      if (isNaN(rp) || rp < 0) {
+        return res.status(400).json({
+          success: false,
+          message: "La cantidad de personas debe ser mayor o igual a 0",
         });
       }
     }

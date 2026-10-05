@@ -396,7 +396,7 @@ exports.registerMember = async (registrationData) => {
 
         if (existing.rows.length > 0) {
           personaId = existing.rows[0].id;
-        } else { 
+        } else {
           const ins = await client.query(
             `INSERT INTO personas (nombres, apellidos, ci, telefono, fecha_nacimiento, estado)
              VALUES ($1, $2, $3, $4, $5, $6)
@@ -468,9 +468,28 @@ exports.registerMember = async (registrationData) => {
     for (const servicio of serviciosInfo) {
       const realPersonaIds = resolvePersonaIds(servicio);
 
+      // ✅ CAMBIO: si el servicio NO requiere personas y no hay ninguna
+      //    persona asociada, permitimos registrarlo con persona_id = NULL.
+      const sinPersona =
+        servicio.sinPersona === true ||
+        (Number(servicio.cantidad_personas) === 0 &&
+          realPersonaIds.length === 0);
+
       if (realPersonaIds.length === 0) {
+        if (sinPersona) {
+          // Inscripción "sin persona" → una sola fila con persona_id NULL
+          acciones.push({
+            servicio,
+            personaId: null,
+            accion: "nueva",
+            reemplazaId: null,
+            fechaInicio: servicio.fechaInicio,
+            fechaVencimiento: servicio.fechaVencimiento,
+          });
+          continue;
+        }
         console.warn(
-          `⚠️ Servicio ${servicio.servicioId} sin personas asignadas`
+          `⚠️ Servicio ${servicio.servicioId} sin personas asignadas y no marcado como sinPersona. Se omite.`
         );
         continue;
       }
@@ -646,6 +665,7 @@ exports.registerMember = async (registrationData) => {
         estadoInscripcion = "inactivo";
       }
 
+      // ✅ CAMBIO: personaId puede ser null (servicios sin persona)
       const ins = await client.query(
         `
         INSERT INTO inscripciones
@@ -655,7 +675,7 @@ exports.registerMember = async (registrationData) => {
         RETURNING id
       `,
         [
-          personaId,
+          personaId, // ← puede ser null
           servicio.servicioId,
           registrationData.sucursalId,
           fechaInicio,
@@ -670,9 +690,20 @@ exports.registerMember = async (registrationData) => {
         `📝 Inscripción creada: id=${ins.rows[0].id}, persona=${personaId}, servicio=${servicio.servicioId}, estado_inscripcion=${estadoInscripcion}`
       );
 
-      inscripcionesMap[`${servicio.servicioId}:${personaId}`] = ins.rows[0].id;
+      // ✅ CAMBIO: solo guardamos en el map si hay personaId
+      if (personaId !== null) {
+        inscripcionesMap[`${servicio.servicioId}:${personaId}`] =
+          ins.rows[0].id;
+      } else {
+        // Para servicios sin persona, guardamos con clave especial
+        inscripcionesMap[`${servicio.servicioId}:NULL`] = ins.rows[0].id;
+      }
 
-      if (servicio.multisucursal && estadoInscripcion === "activo") {
+      if (
+        servicio.multisucursal &&
+        estadoInscripcion === "activo" &&
+        personaId !== null
+      ) {
         const otras = await client.query(
           `
           SELECT sucursal_id 
@@ -725,16 +756,29 @@ exports.registerMember = async (registrationData) => {
     // 9. Subtotal
     // ============================================
     const subtotal = serviciosInfo.reduce((sum, s) => {
-      const n =
-        s.personaIndexes && s.personaIndexes.length > 0
-          ? s.personaIndexes.length
-          : personaIds.length;
+      // ✅ CAMBIO: si no requiere personas, cuenta como 1 (o como el nº de
+      //    personas seleccionadas, según lo que ya envía el frontend en
+      //    personaIndexes).
+      let n;
+      if (s.personaIndexes && s.personaIndexes.length > 0) {
+        n = s.personaIndexes.length;
+      } else if (
+        s.sinPersona === true ||
+        Number(s.cantidad_personas) === 0
+      ) {
+        n = 1;
+      } else {
+        n = personaIds.length || 1;
+      }
       return sum + Number(s.precio) * n;
     }, 0);
 
     // ============================================
     // 10. Crear venta
     // ============================================
+    // ✅ CAMBIO: persona_id puede ser null si no hay personas
+    const ventaPersonaId = personaIds.length > 0 ? personaIds[0] : null;
+
     const ventaResult = await client.query(
       `
       INSERT INTO ventas_servicios (
@@ -745,7 +789,7 @@ exports.registerMember = async (registrationData) => {
       RETURNING id
     `,
       [
-        personaIds[0],
+        ventaPersonaId,
         registrationData.empleadoId,
         subtotal,
         registrationData.descuento,
@@ -766,8 +810,11 @@ exports.registerMember = async (registrationData) => {
     // ============================================
     for (const accion of acciones) {
       const { servicio, personaId } = accion;
-      const inscripcionId =
-        inscripcionesMap[`${servicio.servicioId}:${personaId}`];
+      const key =
+        personaId !== null
+          ? `${servicio.servicioId}:${personaId}`
+          : `${servicio.servicioId}:NULL`;
+      const inscripcionId = inscripcionesMap[key];
       if (!inscripcionId) continue;
 
       await client.query(
@@ -783,7 +830,11 @@ exports.registerMember = async (registrationData) => {
     // 12. Pagos pendientes
     // ============================================
     const pagosPendientesIds = [];
-    if (registrationData.pagoPlazos && registrationData.montoPendiente > 0) {
+    if (
+      registrationData.pagoPlazos &&
+      registrationData.montoPendiente > 0 &&
+      personaIds.length > 0
+    ) {
       const n = personaIds.length;
       const pendientePorPersona = registrationData.montoPendiente / n;
       const entregadoPorPersona = registrationData.montoEntregado / n;
@@ -815,11 +866,6 @@ exports.registerMember = async (registrationData) => {
     // ============================================
     // 13. Movimiento de caja (SOLO EFECTIVO)
     // ============================================
-    // ✅ FIX BUG 2: solo se registra en caja cuando hay efectivo real.
-    //    - formaPago === 'efectivo' → monto = total
-    //    - formaPago === 'mixto'    → monto = montoEfectivo
-    //    - formaPago === 'qr'       → NO se registra nada
-    //    Sin número de venta en el detalle.
     const montoEfectivoCaja =
       registrationData.formaPago === "efectivo"
         ? Number(registrationData.total)
@@ -891,8 +937,6 @@ exports.registerMember = async (registrationData) => {
     // ============================================
     // 14. Movimiento de caja QR — NO se registra
     // ============================================
-    // ✅ El pago por QR no afecta la caja física, así que no insertamos
-    //    ningún movimiento. Se ignora completamente.
 
     await client.query("COMMIT");
 
@@ -1009,6 +1053,7 @@ exports.updatePagoPendiente = async (pagoId, montoPagado) => {
     client.release();
   }
 };
+
 // ============================================
 // VERIFICAR SI UNA PERSONA TIENE HUELLA
 // ============================================
@@ -1029,6 +1074,7 @@ exports.hasFingerprint = async (personaId) => {
     exists: true,
   };
 };
+
 // ============================================
 // CREAR PERSONA RÁPIDAMENTE (sin inscripción)
 // ============================================
