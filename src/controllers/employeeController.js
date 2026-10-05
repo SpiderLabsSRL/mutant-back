@@ -1,6 +1,82 @@
 const employeeService = require("../services/employeeService");
 
 // ============================================
+// HELPER: Serializa errores de Postgres a mensajes legibles
+// ============================================
+function buildErrorResponse(error) {
+  console.error("❌ Error en employeeController:", {
+    message: error.message,
+    code: error.code,
+    detail: error.detail,
+    where: error.where,
+    table: error.table,
+    constraint: error.constraint,
+    column: error.column,
+  });
+
+  if (error.code === "23503") {
+    // Foreign key violation
+    return {
+      status: 400,
+      message: `No se puede modificar el empleado porque tiene registros asociados (${error.table || "otra tabla"}). Intenta solo desactivarlo en lugar de cambiar su rol.`,
+    };
+  }
+
+  if (error.code === "23505") {
+    // Unique violation
+    if (error.constraint === "personas_ci_key") {
+      return { status: 400, message: "ci_unique" };
+    }
+    if (error.constraint === "usuarios_username_key") {
+      return { status: 400, message: "username_unique" };
+    }
+    // Fallback genérico de duplicado
+    if (error.message?.includes("personas_ci_key")) {
+      return { status: 400, message: "ci_unique" };
+    }
+    if (error.message?.includes("usuarios_username_key")) {
+      return { status: 400, message: "username_unique" };
+    }
+    return {
+      status: 400,
+      message: `Valor duplicado: ${error.detail || error.message || "revisa los datos"}`,
+    };
+  }
+
+  if (error.code === "42703") {
+    // Column does not exist
+    return {
+      status: 500,
+      message: `Error de esquema: la columna "${error.column || "?"}" no existe en la tabla "${error.table || "?"}".`,
+    };
+  }
+
+  if (error.code === "23502") {
+    // Not null violation
+    return {
+      status: 400,
+      message: `Falta un campo obligatorio: ${error.column || "desconocido"}`,
+    };
+  }
+
+  if (error.code === "22P02") {
+    // Invalid text representation (ej: mandar string donde va integer)
+    return {
+      status: 400,
+      message: `Formato de dato inválido en algún campo: ${error.message}`,
+    };
+  }
+
+  // Fallback: siempre devolvemos algo
+  const fallbackMessage =
+    error.message && error.message.trim().length > 0
+      ? error.message
+      : "Error desconocido en el servidor. Revisa los logs.";
+
+  return { status: 400, message: fallbackMessage };
+}
+
+// ============================================
 // SUCURSALES
 // ============================================
 exports.getBranches = async (req, res) => {
@@ -94,21 +170,8 @@ exports.createEmployee = async (req, res) => {
     const newEmployee = await employeeService.createEmployee(employeeData);
     res.status(201).json(newEmployee);
   } catch (error) {
-    console.error("Error en createEmployee:", error);
-    if (
-      error.message.includes(
-        'duplicate key value violates unique constraint "personas_ci_key"'
-      )
-    ) {
-      return res.status(400).json({ message: "ci_unique" });
-    } else if (
-      error.message.includes(
-        'duplicate key value violates unique constraint "usuarios_username_key"'
-      )
-    ) {
-      return res.status(400).json({ message: "username_unique" });
-    }
-    res.status(400).json({ message: error.message });
+    const { status, message } = buildErrorResponse(error);
+    res.status(status).json({ message });
   }
 };
 
@@ -161,21 +224,8 @@ exports.updateEmployee = async (req, res) => {
     );
     res.json(updatedEmployee);
   } catch (error) {
-    console.error("Error en updateEmployee:", error);
-    if (
-      error.message.includes(
-        'duplicate key value violates unique constraint "personas_ci_key"'
-      )
-    ) {
-      return res.status(400).json({ message: "ci_unique" });
-    } else if (
-      error.message.includes(
-        'duplicate key value violates unique constraint "usuarios_username_key"'
-      )
-    ) {
-      return res.status(400).json({ message: "username_unique" });
-    }
-    res.status(400).json({ message: error.message });
+    const { status, message } = buildErrorResponse(error);
+    res.status(status).json({ message });
   }
 };
 
@@ -185,8 +235,8 @@ exports.deleteEmployee = async (req, res) => {
     await employeeService.deleteEmployee(id);
     res.status(204).send();
   } catch (error) {
-    console.error("Error en deleteEmployee:", error);
-    res.status(400).json({ message: error.message });
+    const { status, message } = buildErrorResponse(error);
+    res.status(status).json({ message });
   }
 };
 
@@ -196,8 +246,8 @@ exports.toggleEmployeeStatus = async (req, res) => {
     const updatedEmployee = await employeeService.toggleEmployeeStatus(id);
     res.json(updatedEmployee);
   } catch (error) {
-    console.error("Error en toggleEmployeeStatus:", error);
-    res.status(400).json({ message: error.message });
+    const { status, message } = buildErrorResponse(error);
+    res.status(status).json({ message });
   }
 };
 
@@ -207,7 +257,7 @@ exports.registerFingerprint = async (req, res) => {
     await employeeService.registerFingerprint(id);
     res.status(200).json({ message: "Huella registrada exitosamente" });
   } catch (error) {
-    console.error("Error en registerFingerprint:", error);
-    res.status(400).json({ message: error.message });
+    const { status, message } = buildErrorResponse(error);
+    res.status(status).json({ message });
   }
 };
