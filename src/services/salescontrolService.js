@@ -9,8 +9,8 @@ const EFECTIVO_REGEX =
 const QR_REGEX =
   "(?:QR|qr|Q\\.R\\.)\\s*[:=]?\\s*(?:Bs\\.?)?\\s*([0-9]+(?:[.,][0-9]+)?)";
 
-const LA_PAZ_DATE = (alias) =>
-  `(${alias}.fecha AT TIME ZONE 'America/La_Paz')::date`;
+// ✅ La fecha ya está en hora Bolivia, solo extraemos la parte de fecha (sin conversión)
+const LA_PAZ_DATE = (alias) => `(${alias}.fecha)::date`;
 
 // ============================================
 // HELPER: aplica filtro de sucursal forzado para no-admin
@@ -146,6 +146,8 @@ const getSales = async (
       userRol
     );
 
+    // ✅ FIX: Calcular "hoy" en hora Bolivia para que el filtro "today" funcione
+    // (NO modifica la hora de las ventas, solo calcula qué día es hoy en Bolivia)
     const todayResult = await query(
       "SELECT (NOW() AT TIME ZONE 'America/La_Paz')::date as hoy_la_paz"
     );
@@ -238,7 +240,7 @@ const getSales = async (
     let queryStrProductos = `
       SELECT 
         vp.id,
-        TO_CHAR(vp.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+        TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha,
         NULL as cliente,
         CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado,
         s.nombre as sucursal,
@@ -313,7 +315,7 @@ const getSales = async (
     let queryStrServicios = `
       SELECT 
         vs.id,
-        TO_CHAR(vs.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+        TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha,
         (
           SELECT STRING_AGG(DISTINCT CONCAT(p_cli2.nombres, ' ', p_cli2.apellidos), ', ')
           FROM detalle_venta_servicios dvs2
@@ -489,6 +491,7 @@ const getTotals = async (
       userRol
     );
 
+    // ✅ FIX: Calcular "hoy" en hora Bolivia para que el filtro "today" funcione
     const todayResult = await query(
       "SELECT (NOW() AT TIME ZONE 'America/La_Paz')::date as hoy_la_paz"
     );
@@ -705,7 +708,7 @@ const getSaleDetails = async (saleId, saleType) => {
       const saleResult = await query(
         `SELECT 
           vp.*,
-          TO_CHAR(vp.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
+          TO_CHAR(vp.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
           CONCAT(p_emp.nombres, ' ', p_emp.apellidos) as empleado_nombre,
           s.nombre as sucursal_nombre,
           u.username as usuario_creador
@@ -747,7 +750,7 @@ const getSaleDetails = async (saleId, saleType) => {
       const saleResult = await query(
         `SELECT 
           vs.*,
-          TO_CHAR(vs.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
+          TO_CHAR(vs.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha_formateada,
           (
             SELECT STRING_AGG(DISTINCT CONCAT(p_cli2.nombres, ' ', p_cli2.apellidos), ', ')
             FROM detalle_venta_servicios dvs2
