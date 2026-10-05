@@ -148,8 +148,8 @@ exports.createEmployee = async (employeeData) => {
     if (username && password && ["admin", "recepcionista"].includes(cargo)) {
       const hashedPassword = await bcrypt.hash(password, 10);
       await client.query(
-        `INSERT INTO usuarios (username, password_hash, empleado_id) 
-         VALUES ($1, $2, $3)`,
+        `INSERT INTO usuarios (username, password_hash, empleado_id, estado) 
+         VALUES ($1, $2, $3, 1)`,
         [username, hashedPassword, empleadoId]
       );
     }
@@ -283,25 +283,34 @@ exports.updateEmployee = async (id, employeeData) => {
         if (password) {
           const hashedPassword = await bcrypt.hash(password, 10);
           await client.query(
-            "UPDATE usuarios SET username = $1, password_hash = $2 WHERE empleado_id = $3",
+            `UPDATE usuarios 
+             SET username = $1, password_hash = $2, estado = 1 
+             WHERE empleado_id = $3`,
             [username, hashedPassword, id]
           );
         } else {
           await client.query(
-            "UPDATE usuarios SET username = $1 WHERE empleado_id = $2",
+            `UPDATE usuarios 
+             SET username = $1, estado = 1 
+             WHERE empleado_id = $2`,
             [username, id]
           );
         }
       } else if (username && password) {
         const hashedPassword = await bcrypt.hash(password, 10);
         await client.query(
-          `INSERT INTO usuarios (username, password_hash, empleado_id) 
-           VALUES ($1, $2, $3)`,
+          `INSERT INTO usuarios (username, password_hash, empleado_id, estado) 
+           VALUES ($1, $2, $3, 1)`,
           [username, hashedPassword, id]
         );
       }
     } else {
-      await client.query("DELETE FROM usuarios WHERE empleado_id = $1", [id]);
+      // ✅ SOFT DELETE: solo desactivamos el usuario, no lo borramos.
+      //    Esto evita violar FKs en registros_acceso, movimientos_caja, etc.
+      await client.query(
+        "UPDATE usuarios SET estado = 0 WHERE empleado_id = $1",
+        [id]
+      );
     }
 
     await client.query("COMMIT");
@@ -320,13 +329,39 @@ exports.updateEmployee = async (id, employeeData) => {
 // DELETE EMPLOYEE (soft delete)
 // ============================================
 exports.deleteEmployee = async (id) => {
-  const result = await query(
-    "UPDATE empleados SET estado = 2 WHERE id = $1 RETURNING id",
-    [id]
-  );
+  const client = await pool.connect();
 
-  if (result.rows.length === 0) {
-    throw new Error("Empleado no encontrado");
+  try {
+    await client.query("BEGIN");
+
+    // Soft delete del empleado
+    const result = await client.query(
+      "UPDATE empleados SET estado = 2 WHERE id = $1 RETURNING id",
+      [id]
+    );
+
+    if (result.rows.length === 0) {
+      throw new Error("Empleado no encontrado");
+    }
+
+    // Desactivar también el usuario asociado (si existe)
+    await client.query(
+      "UPDATE usuarios SET estado = 0 WHERE empleado_id = $1",
+      [id]
+    );
+
+    // Desactivar asignación de caja (si existe)
+    await client.query(
+      "UPDATE empleado_caja SET estado = 0 WHERE empleado_id = $1",
+      [id]
+    );
+
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
   }
 };
 
