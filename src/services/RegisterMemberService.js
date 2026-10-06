@@ -17,11 +17,43 @@ const DIAS_VENTANA_PASADO = 7;
 // ============================================
 // HELPERS DE FECHA
 // ============================================
+
+/**
+ * ✅ FIX ZONA HORARIA
+ * Convierte cualquier fecha a "YYYY-MM-DD" respetando la zona horaria
+ * de Bolivia (America/La_Paz) cuando la entrada es un timestamp.
+ *
+ * Casos:
+ *  - "2025-10-05"            → "2025-10-05" (fecha pura, se respeta)
+ *  - "2025-10-05T00:55:00Z"  → se convierte a Bolivia → "2025-10-05" (o 04)
+ *  - Date object             → se usa tal cual en UTC
+ */
 function toYMD(fecha) {
   if (!fecha) return null;
+
   if (typeof fecha === "string") {
+    // ¿Tiene componente de hora/zona? (termina en Z o tiene +/-HH:MM)
+    const tieneZona = /Z$|[+-]\d{2}:?\d{2}$/.test(fecha);
+    const tieneHora = fecha.includes("T");
+
+    if (tieneZona && tieneHora) {
+      // Timestamp UTC → convertir a hora Bolivia antes de extraer fecha
+      const d = new Date(fecha);
+      const laPaz = new Date(
+        d.toLocaleString("en-US", { timeZone: "America/La_Paz" })
+      );
+      const y = laPaz.getFullYear();
+      const m = String(laPaz.getMonth() + 1).padStart(2, "0");
+      const day = String(laPaz.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    }
+
+    // Fecha pura ("YYYY-MM-DD" o "YYYY-MM-DDTHH:mm:ss" sin zona)
+    // → tomar los primeros 10 caracteres, sin reinterpretar
     return fecha.substring(0, 10);
   }
+
+  // Date object → usar sus componentes UTC (viene de un Date ya construido)
   const d = new Date(fecha);
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
@@ -288,8 +320,6 @@ exports.getAvailableCoupons = async (sucursalId) => {
 // ============================================
 // HELPER: Analizar conflicto de inscripción por persona + tipo
 // ============================================
-// ✅ FIX BUG 1: solo compara dentro de la MISMA sucursal,
-// excepto cuando el servicio es multisucursal (ahí el conflicto es global).
 async function analizarConflictoInscripcion(
   client,
   personaId,
@@ -397,6 +427,11 @@ exports.registerMember = async (registrationData) => {
         if (existing.rows.length > 0) {
           personaId = existing.rows[0].id;
         } else {
+          // ✅ FIX: fecha de nacimiento como YMD puro (no timestamp)
+          const fechaNac = p.fechaNacimiento
+            ? toYMD(p.fechaNacimiento)
+            : null;
+
           const ins = await client.query(
             `INSERT INTO personas (nombres, apellidos, ci, telefono, fecha_nacimiento, estado)
              VALUES ($1, $2, $3, $4, $5, $6)
@@ -406,7 +441,7 @@ exports.registerMember = async (registrationData) => {
               p.apellidos,
               p.ci,
               p.telefono || null,
-              p.fechaNacimiento || null,
+              fechaNac,
               ESTADO.personas,
             ]
           );
@@ -468,8 +503,6 @@ exports.registerMember = async (registrationData) => {
     for (const servicio of serviciosInfo) {
       const realPersonaIds = resolvePersonaIds(servicio);
 
-      // ✅ CAMBIO: si el servicio NO requiere personas y no hay ninguna
-      //    persona asociada, permitimos registrarlo con persona_id = NULL.
       const sinPersona =
         servicio.sinPersona === true ||
         (Number(servicio.cantidad_personas) === 0 &&
@@ -477,14 +510,14 @@ exports.registerMember = async (registrationData) => {
 
       if (realPersonaIds.length === 0) {
         if (sinPersona) {
-          // Inscripción "sin persona" → una sola fila con persona_id NULL
           acciones.push({
             servicio,
             personaId: null,
             accion: "nueva",
             reemplazaId: null,
-            fechaInicio: servicio.fechaInicio,
-            fechaVencimiento: servicio.fechaVencimiento,
+            // ✅ FIX: normalizar a YMD antes de guardar
+            fechaInicio: toYMD(servicio.fechaInicio),
+            fechaVencimiento: toYMD(servicio.fechaVencimiento),
           });
           continue;
         }
@@ -516,8 +549,9 @@ exports.registerMember = async (registrationData) => {
             personaId,
             accion: "reemplazo",
             reemplazaId: conflicto.activa.id,
-            fechaInicio: servicio.fechaInicio,
-            fechaVencimiento: servicio.fechaVencimiento,
+            // ✅ FIX: normalizar a YMD
+            fechaInicio: toYMD(servicio.fechaInicio),
+            fechaVencimiento: toYMD(servicio.fechaVencimiento),
           });
           continue;
         }
@@ -549,8 +583,9 @@ exports.registerMember = async (registrationData) => {
           personaId,
           accion: "nueva",
           reemplazaId: null,
-          fechaInicio: servicio.fechaInicio,
-          fechaVencimiento: servicio.fechaVencimiento,
+          // ✅ FIX: normalizar a YMD
+          fechaInicio: toYMD(servicio.fechaInicio),
+          fechaVencimiento: toYMD(servicio.fechaVencimiento),
         });
       }
     }
@@ -622,7 +657,7 @@ exports.registerMember = async (registrationData) => {
     }
 
     // ============================================
-    // 6. Fecha actual
+    // 6. Fecha actual (La Paz)
     // ============================================
     const fechaActualResult = await client.query(
       `SELECT TIMEZONE('America/La_Paz', NOW()) as fecha_actual`
@@ -656,6 +691,7 @@ exports.registerMember = async (registrationData) => {
         console.log(`✅ Inscripción ${reemplazaId} inactivada:`, upd.rows);
       }
 
+      // ✅ FIX: fechaInicio / fechaVencimiento ya vienen como "YYYY-MM-DD"
       const fechaInicioYMD = toYMD(fechaInicio);
       let estadoInscripcion = "activo";
 
@@ -665,7 +701,6 @@ exports.registerMember = async (registrationData) => {
         estadoInscripcion = "inactivo";
       }
 
-      // ✅ CAMBIO: personaId puede ser null (servicios sin persona)
       const ins = await client.query(
         `
         INSERT INTO inscripciones
@@ -675,11 +710,11 @@ exports.registerMember = async (registrationData) => {
         RETURNING id
       `,
         [
-          personaId, // ← puede ser null
+          personaId,
           servicio.servicioId,
           registrationData.sucursalId,
-          fechaInicio,
-          fechaVencimiento,
+          fechaInicio,        // "YYYY-MM-DD"
+          fechaVencimiento,   // "YYYY-MM-DD"
           servicio.numero_ingresos,
           ESTADO.inscripciones,
           estadoInscripcion,
@@ -687,15 +722,13 @@ exports.registerMember = async (registrationData) => {
       );
 
       console.log(
-        `📝 Inscripción creada: id=${ins.rows[0].id}, persona=${personaId}, servicio=${servicio.servicioId}, estado_inscripcion=${estadoInscripcion}`
+        `📝 Inscripción creada: id=${ins.rows[0].id}, persona=${personaId}, servicio=${servicio.servicioId}, estado_inscripcion=${estadoInscripcion}, inicio=${fechaInicio}, fin=${fechaVencimiento}`
       );
 
-      // ✅ CAMBIO: solo guardamos en el map si hay personaId
       if (personaId !== null) {
         inscripcionesMap[`${servicio.servicioId}:${personaId}`] =
           ins.rows[0].id;
       } else {
-        // Para servicios sin persona, guardamos con clave especial
         inscripcionesMap[`${servicio.servicioId}:NULL`] = ins.rows[0].id;
       }
 
@@ -756,9 +789,6 @@ exports.registerMember = async (registrationData) => {
     // 9. Subtotal
     // ============================================
     const subtotal = serviciosInfo.reduce((sum, s) => {
-      // ✅ CAMBIO: si no requiere personas, cuenta como 1 (o como el nº de
-      //    personas seleccionadas, según lo que ya envía el frontend en
-      //    personaIndexes).
       let n;
       if (s.personaIndexes && s.personaIndexes.length > 0) {
         n = s.personaIndexes.length;
@@ -776,7 +806,6 @@ exports.registerMember = async (registrationData) => {
     // ============================================
     // 10. Crear venta
     // ============================================
-    // ✅ CAMBIO: persona_id puede ser null si no hay personas
     const ventaPersonaId = personaIds.length > 0 ? personaIds[0] : null;
 
     const ventaResult = await client.query(
@@ -934,10 +963,6 @@ exports.registerMember = async (registrationData) => {
       ]);
     }
 
-    // ============================================
-    // 14. Movimiento de caja QR — NO se registra
-    // ============================================
-
     await client.query("COMMIT");
 
     return {
@@ -1085,7 +1110,6 @@ exports.createPersonQuick = async (personData) => {
     throw new Error("Nombres, apellidos y CI son obligatorios");
   }
 
-  // Verificar si ya existe por CI
   const existing = await query(
     `SELECT id, nombres, apellidos, ci, telefono, fecha_nacimiento
      FROM personas
@@ -1094,26 +1118,20 @@ exports.createPersonQuick = async (personData) => {
   );
 
   if (existing.rows.length > 0) {
-    // Ya existe → devolver la existente (no creamos duplicado)
     return {
       alreadyExists: true,
       persona: existing.rows[0],
     };
   }
 
-  // Crear nueva persona
+  // ✅ FIX: normalizar fecha de nacimiento a YMD puro
+  const fechaNac = fechaNacimiento ? toYMD(fechaNacimiento) : null;
+
   const result = await query(
     `INSERT INTO personas (nombres, apellidos, ci, telefono, fecha_nacimiento, estado)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING id, nombres, apellidos, ci, telefono, fecha_nacimiento`,
-    [
-      nombres,
-      apellidos,
-      ci,
-      telefono || null,
-      fechaNacimiento || null,
-      ESTADO.personas,
-    ]
+    [nombres, apellidos, ci, telefono || null, fechaNac, ESTADO.personas]
   );
 
   return {
