@@ -22,22 +22,15 @@ const DIAS_VENTANA_PASADO = 7;
  * ✅ FIX ZONA HORARIA
  * Convierte cualquier fecha a "YYYY-MM-DD" respetando la zona horaria
  * de Bolivia (America/La_Paz) cuando la entrada es un timestamp.
- *
- * Casos:
- *  - "2025-10-05"            → "2025-10-05" (fecha pura, se respeta)
- *  - "2025-10-05T00:55:00Z"  → se convierte a Bolivia → "2025-10-05" (o 04)
- *  - Date object             → se usa tal cual en UTC
  */
 function toYMD(fecha) {
   if (!fecha) return null;
 
   if (typeof fecha === "string") {
-    // ¿Tiene componente de hora/zona? (termina en Z o tiene +/-HH:MM)
     const tieneZona = /Z$|[+-]\d{2}:?\d{2}$/.test(fecha);
     const tieneHora = fecha.includes("T");
 
     if (tieneZona && tieneHora) {
-      // Timestamp UTC → convertir a hora Bolivia antes de extraer fecha
       const d = new Date(fecha);
       const laPaz = new Date(
         d.toLocaleString("en-US", { timeZone: "America/La_Paz" })
@@ -48,12 +41,9 @@ function toYMD(fecha) {
       return `${y}-${m}-${day}`;
     }
 
-    // Fecha pura ("YYYY-MM-DD" o "YYYY-MM-DDTHH:mm:ss" sin zona)
-    // → tomar los primeros 10 caracteres, sin reinterpretar
     return fecha.substring(0, 10);
   }
 
-  // Date object → usar sus componentes UTC (viene de un Date ya construido)
   const d = new Date(fecha);
   const y = d.getUTCFullYear();
   const m = String(d.getUTCMonth() + 1).padStart(2, "0");
@@ -427,7 +417,6 @@ exports.registerMember = async (registrationData) => {
         if (existing.rows.length > 0) {
           personaId = existing.rows[0].id;
         } else {
-          // ✅ FIX: fecha de nacimiento como YMD puro (no timestamp)
           const fechaNac = p.fechaNacimiento
             ? toYMD(p.fechaNacimiento)
             : null;
@@ -515,7 +504,6 @@ exports.registerMember = async (registrationData) => {
             personaId: null,
             accion: "nueva",
             reemplazaId: null,
-            // ✅ FIX: normalizar a YMD antes de guardar
             fechaInicio: toYMD(servicio.fechaInicio),
             fechaVencimiento: toYMD(servicio.fechaVencimiento),
           });
@@ -549,7 +537,6 @@ exports.registerMember = async (registrationData) => {
             personaId,
             accion: "reemplazo",
             reemplazaId: conflicto.activa.id,
-            // ✅ FIX: normalizar a YMD
             fechaInicio: toYMD(servicio.fechaInicio),
             fechaVencimiento: toYMD(servicio.fechaVencimiento),
           });
@@ -583,7 +570,6 @@ exports.registerMember = async (registrationData) => {
           personaId,
           accion: "nueva",
           reemplazaId: null,
-          // ✅ FIX: normalizar a YMD
           fechaInicio: toYMD(servicio.fechaInicio),
           fechaVencimiento: toYMD(servicio.fechaVencimiento),
         });
@@ -691,7 +677,6 @@ exports.registerMember = async (registrationData) => {
         console.log(`✅ Inscripción ${reemplazaId} inactivada:`, upd.rows);
       }
 
-      // ✅ FIX: fechaInicio / fechaVencimiento ya vienen como "YYYY-MM-DD"
       const fechaInicioYMD = toYMD(fechaInicio);
       let estadoInscripcion = "activo";
 
@@ -713,8 +698,8 @@ exports.registerMember = async (registrationData) => {
           personaId,
           servicio.servicioId,
           registrationData.sucursalId,
-          fechaInicio,        // "YYYY-MM-DD"
-          fechaVencimiento,   // "YYYY-MM-DD"
+          fechaInicio,
+          fechaVencimiento,
           servicio.numero_ingresos,
           ESTADO.inscripciones,
           estadoInscripcion,
@@ -788,19 +773,11 @@ exports.registerMember = async (registrationData) => {
     // ============================================
     // 9. Subtotal
     // ============================================
+    // ✅ FIX: el precio del servicio es por SERVICIO (ya incluye a todas
+    //    las personas que requiera). NO se multiplica por la cantidad de
+    //    personas asignadas.
     const subtotal = serviciosInfo.reduce((sum, s) => {
-      let n;
-      if (s.personaIndexes && s.personaIndexes.length > 0) {
-        n = s.personaIndexes.length;
-      } else if (
-        s.sinPersona === true ||
-        Number(s.cantidad_personas) === 0
-      ) {
-        n = 1;
-      } else {
-        n = personaIds.length || 1;
-      }
-      return sum + Number(s.precio) * n;
+      return sum + Number(s.precio);
     }, 0);
 
     // ============================================
@@ -837,6 +814,15 @@ exports.registerMember = async (registrationData) => {
     // ============================================
     // 11. Detalles
     // ============================================
+    // ✅ FIX: como el precio del servicio es un total grupal, dividimos
+    //    el precio entre las inscripciones generadas para ese servicio
+    //    para que la suma de los detalles coincida con el subtotal.
+    const countByServicio = {};
+    for (const accion of acciones) {
+      const sid = accion.servicio.servicioId;
+      countByServicio[sid] = (countByServicio[sid] || 0) + 1;
+    }
+
     for (const accion of acciones) {
       const { servicio, personaId } = accion;
       const key =
@@ -846,12 +832,15 @@ exports.registerMember = async (registrationData) => {
       const inscripcionId = inscripcionesMap[key];
       if (!inscripcionId) continue;
 
+      const totalAccionesServicio = countByServicio[servicio.servicioId] || 1;
+      const precioPorDetalle = Number(servicio.precio) / totalAccionesServicio;
+
       await client.query(
         `
         INSERT INTO detalle_venta_servicios (venta_servicio_id, inscripcion_id, precio)
         VALUES ($1, $2, $3)
       `,
-        [ventaId, inscripcionId, servicio.precio]
+        [ventaId, inscripcionId, precioPorDetalle]
       );
     }
 
@@ -864,32 +853,27 @@ exports.registerMember = async (registrationData) => {
       registrationData.montoPendiente > 0 &&
       personaIds.length > 0
     ) {
-      const n = personaIds.length;
-      const pendientePorPersona = registrationData.montoPendiente / n;
-      const entregadoPorPersona = registrationData.montoEntregado / n;
-      const totalPorPersona = registrationData.total / n;
-
-      for (const personaId of personaIds) {
-        const pp = await client.query(
-          `
-          INSERT INTO pagos_pendientes (
-            persona_id, venta_servicio_id, monto_total, monto_pagado, monto_pendiente,
-            fecha_inscripcion, fecha_ultima_actualizacion, estado
-          )
-          VALUES ($1, $2, $3, $4, $5, $6, $6, 'pendiente')
-          RETURNING id
-        `,
-          [
-            personaId,
-            ventaId,
-            totalPorPersona,
-            entregadoPorPersona,
-            pendientePorPersona,
-            fechaActual,
-          ]
-        );
-        pagosPendientesIds.push(pp.rows[0].id);
-      }
+      // ✅ FIX: el total del pago pendiente se asigna al cliente principal
+      //    (no se divide entre personas, porque el precio ya es del grupo).
+      const pp = await client.query(
+        `
+        INSERT INTO pagos_pendientes (
+          persona_id, venta_servicio_id, monto_total, monto_pagado, monto_pendiente,
+          fecha_inscripcion, fecha_ultima_actualizacion, estado
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $6, 'pendiente')
+        RETURNING id
+      `,
+        [
+          personaIds[0],
+          ventaId,
+          registrationData.total,
+          registrationData.montoEntregado,
+          registrationData.montoPendiente,
+          fechaActual,
+        ]
+      );
+      pagosPendientesIds.push(pp.rows[0].id);
     }
 
     // ============================================
@@ -1124,7 +1108,6 @@ exports.createPersonQuick = async (personData) => {
     };
   }
 
-  // ✅ FIX: normalizar fecha de nacimiento a YMD puro
   const fechaNac = fechaNacimiento ? toYMD(fechaNacimiento) : null;
 
   const result = await query(
