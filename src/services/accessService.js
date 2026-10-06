@@ -112,14 +112,17 @@ exports.getClientSubscriptions = async (personId, branchId = null) => {
   try {
     const params = [personId];
 
+    // ✅ FIX: usar ::text en columnas DATE para que viajen como string
+    // "YYYY-MM-DD" puro, sin que el driver de pg las convierta a Date UTC
+    // y el frontend las desfase un día.
     let sql = `
       SELECT 
         i.id AS id,
         i.servicio_id,
         i.sucursal_id,
         s.nombre AS service_name,
-        TO_CHAR(i.fecha_inicio, 'YYYY-MM-DD') AS fecha_inicio,
-        TO_CHAR(i.fecha_vencimiento, 'YYYY-MM-DD') AS fecha_vencimiento,
+        i.fecha_inicio::text AS fecha_inicio,
+        i.fecha_vencimiento::text AS fecha_vencimiento,
         i.ingresos_disponibles,
         i.estado,
         i.estado_inscripcion,
@@ -393,6 +396,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       branchFilterIn = `AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)`;
     }
 
+    // ✅ FIX: fecha_inicio y fecha_vencimiento con ::text para no desfasar
     let clientSql = `
       WITH inscripciones_calculadas AS (
         SELECT 
@@ -400,8 +404,8 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
           i.persona_id,
           i.servicio_id,
           i.ingresos_disponibles,
-          i.fecha_inicio,
-          i.fecha_vencimiento,
+          i.fecha_inicio::text as fecha_inicio,
+          i.fecha_vencimiento::text as fecha_vencimiento,
           i.estado,
           i.estado_inscripcion,
           i.sucursal_id,
@@ -761,10 +765,12 @@ exports.registerClientAccess = async (
   const isUnlimitedService = inscription.servicio_ingresos_ilimitados === null;
 
   // ✅ VALIDACIÓN 1: estado activo
+  // ✅ FIX: comparar fechas como strings YMD usando la fecha de Bolivia
   if (inscription.estado_inscripcion !== "activo") {
     const motivo =
       inscription.fecha_vencimiento &&
-      new Date(inscription.fecha_vencimiento) < new Date()
+      inscription.fecha_vencimiento.toISOString().slice(0, 10) <
+        new Date().toISOString().slice(0, 10)
         ? `Servicio ${inscription.servicio_nombre} vencido`
         : `Servicio ${inscription.servicio_nombre} sin ingresos disponibles o inactivo`;
 
@@ -936,9 +942,6 @@ exports.registerClientAccess = async (
 
 // ============================================
 // HELPER: EMPLOYEE SCHEDULE (según rol y día)
-//   - null                                    → admin (no aplica)
-//   - { hora_ingreso, hora_salida }           → tiene horario hoy
-//   - { noTrabajaHoy: true, diaSemanaActual, rol } → no tiene horario hoy
 // ============================================
 const getEmployeeScheduleForToday = async (employeeId) => {
   const employeeResult = await query(
@@ -952,7 +955,6 @@ const getEmployeeScheduleForToday = async (employeeId) => {
 
   const rol = employeeResult.rows[0].rol;
 
-  // admin: no valida horario
   if (!rolRequiereHorario(rol)) {
     return null;
   }
@@ -1077,9 +1079,6 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   const rol = emp.rol;
   const requiereHorario = rolRequiereHorario(rol);
 
-  // ============================================
-  // ADMIN → sin validación de horario
-  // ============================================
   if (!requiereHorario) {
     const currentTimeResult = await query(
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
@@ -1105,12 +1104,8 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
     };
   }
 
-  // ============================================
-  // OTROS ROLES → validan horario del día
-  // ============================================
   const horario = await getEmployeeScheduleForToday(employeeId);
 
-  // ❌ No tiene horario para hoy → RECHAZO
   if (horario && horario.noTrabajaHoy) {
     const motivo = `Hoy no trabaja (${NOMBRES_DIAS[horario.diaSemanaActual]})`;
 
@@ -1141,7 +1136,6 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
     };
   }
 
-  // ✅ Tiene horario → validar tardanza
   const currentTimeResult = await query(
     `SELECT TIMEZONE('America/La_Paz', NOW()) as hora_actual_bolivia`
   );
@@ -1228,9 +1222,6 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   const rol = emp.rol;
   const requiereHorario = rolRequiereHorario(rol);
 
-  // ============================================
-  // ADMIN → sin validación de horario
-  // ============================================
   if (!requiereHorario) {
     const currentTimeResult = await query(
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
@@ -1256,12 +1247,8 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     };
   }
 
-  // ============================================
-  // OTROS ROLES → validan horario del día
-  // ============================================
   const horario = await getEmployeeScheduleForToday(employeeId);
 
-  // ❌ No tiene horario para hoy → RECHAZO
   if (horario && horario.noTrabajaHoy) {
     const motivo = `Hoy no trabaja (${NOMBRES_DIAS[horario.diaSemanaActual]})`;
 
@@ -1292,7 +1279,6 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     };
   }
 
-  // ✅ Tiene horario → validar salida anticipada
   const currentTimeResult = await query(
     `SELECT TIMEZONE('America/La_Paz', NOW()) as hora_actual_bolivia`
   );
