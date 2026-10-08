@@ -112,9 +112,6 @@ exports.getClientSubscriptions = async (personId, branchId = null) => {
   try {
     const params = [personId];
 
-    // ✅ FIX: usar ::text en columnas DATE para que viajen como string
-    // "YYYY-MM-DD" puro, sin que el driver de pg las convierta a Date UTC
-    // y el frontend las desfase un día.
     let sql = `
       SELECT 
         i.id AS id,
@@ -396,7 +393,6 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       branchFilterIn = `AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)`;
     }
 
-    // ✅ FIX: fecha_inicio y fecha_vencimiento con ::text para no desfasar
     let clientSql = `
       WITH inscripciones_calculadas AS (
         SELECT 
@@ -490,6 +486,7 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       branchCond = `AND (e.sucursal_id = $2 OR e.rol = 'limpieza')`;
     }
 
+    // estado_actual SOLO considera registros de HOY (coherente con check-out)
     let employeeSql = `
       SELECT 
         p.id as idpersona,
@@ -533,16 +530,20 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
               SELECT 1 FROM registros_acceso ra 
               WHERE ra.persona_id = p.id 
               AND ra.tipo_persona = 'empleado' 
-              AND ra.detalle LIKE '%Entrada%'
+              AND ra.estado = 'exitoso'
+              AND ra.detalle LIKE 'Entrada%'
+              AND ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
               ${filtrarPorSucursal ? "AND ra.sucursal_id = $2" : ""}
-              AND ra.fecha > COALESCE((
-                SELECT MAX(ra2.fecha) 
-                FROM registros_acceso ra2 
-                WHERE ra2.persona_id = p.id 
-                AND ra2.tipo_persona = 'empleado' 
-                AND ra2.detalle LIKE '%Salida%'
-                ${filtrarPorSucursal ? "AND ra2.sucursal_id = $2" : ""}
-              ), '1900-01-01')
+              AND NOT EXISTS (
+                SELECT 1 FROM registros_acceso ra2
+                WHERE ra2.persona_id = p.id
+                  AND ra2.tipo_persona = 'empleado'
+                  AND ra2.estado = 'exitoso'
+                  AND ra2.detalle LIKE 'Salida%'
+                  AND ra2.fecha > ra.fecha
+                  AND ra2.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
+                  ${filtrarPorSucursal ? "AND ra2.sucursal_id = $2" : ""}
+              )
             ) THEN 'in' 
             ELSE 'out' 
           END
@@ -764,8 +765,6 @@ exports.registerClientAccess = async (
 
   const isUnlimitedService = inscription.servicio_ingresos_ilimitados === null;
 
-  // ✅ VALIDACIÓN 1: estado activo
-  // ✅ FIX: comparar fechas como strings YMD usando la fecha de Bolivia
   if (inscription.estado_inscripcion !== "activo") {
     const motivo =
       inscription.fecha_vencimiento &&
@@ -791,7 +790,6 @@ exports.registerClientAccess = async (
     };
   }
 
-  // ✅ VALIDACIÓN 2: ya ingresó hoy (solo limitados)
   if (!isUnlimitedService) {
     const ingresoPrevio = await checkYaIngresóHoy(inscripcionId);
 
@@ -816,7 +814,6 @@ exports.registerClientAccess = async (
     }
   }
 
-  // ✅ VALIDACIÓN 3: horario del servicio
   const fechaActualResult = await query(
     `SELECT TIMEZONE('America/La_Paz', NOW()) as ahora`
   );
@@ -846,9 +843,6 @@ exports.registerClientAccess = async (
     };
   }
 
-  // ============================================
-  // DECREMENTAR INGRESOS (solo si es limitado)
-  // ============================================
   let remainingVisits = 0;
   let latestMultisucursalInscriptions = [];
 
@@ -983,7 +977,7 @@ const getEmployeeScheduleForToday = async (employeeId) => {
 };
 
 // ============================================
-// HELPER: ESTADO ACTUAL DEL EMPLEADO (por persona)
+// HELPER: ESTADO ACTUAL DEL EMPLEADO (por persona) - HOY
 // ============================================
 const getEmployeeEstadoHoy = async (personaId) => {
   const result = await query(
@@ -1014,6 +1008,101 @@ const getEmployeeEstadoHoy = async (personaId) => {
     estado: esEntrada ? "in" : "out",
     ultimoDetalle: ultimo.detalle,
   };
+};
+
+// ============================================
+// HELPER: BUSCAR ENTRADA HUÉRFANA DE DÍAS ANTERIORES
+// ============================================
+const getEntradaHuerfanaAnterior = async (personaId, employeeId) => {
+  const result = await query(
+    `
+    SELECT 
+      ra.id,
+      ra.fecha::date::text as fecha_dia,
+      ra.detalle,
+      ra.sucursal_id,
+      ra.usuario_registro_id
+    FROM registros_acceso ra
+    WHERE ra.persona_id = $1
+      AND ra.tipo_persona = 'empleado'
+      AND ra.estado = 'exitoso'
+      AND ra.detalle LIKE 'Entrada%'
+      AND ra.fecha::date < TIMEZONE('America/La_Paz', NOW())::date
+      AND NOT EXISTS (
+        SELECT 1 FROM registros_acceso ra2
+        WHERE ra2.persona_id = ra.persona_id
+          AND ra2.tipo_persona = 'empleado'
+          AND ra2.estado = 'exitoso'
+          AND ra2.detalle LIKE 'Salida%'
+          AND ra2.fecha > ra.fecha
+          AND ra2.fecha::date <= TIMEZONE('America/La_Paz', NOW())::date
+      )
+    ORDER BY ra.fecha DESC
+    LIMIT 1
+    `,
+    [personaId]
+  );
+
+  if (result.rows.length === 0) return null;
+
+  const entrada = result.rows[0];
+
+  const diaSemana = await query(
+    `SELECT EXTRACT(ISODOW FROM $1::date)::int as dia`,
+    [entrada.fecha_dia]
+  );
+  const diaNum = diaSemana.rows[0].dia;
+
+  const teniaHorario = await query(
+    `SELECT 1 FROM horarios_empleado 
+     WHERE empleado_id = $1 AND dia_semana = $2
+     LIMIT 1`,
+    [employeeId, diaNum]
+  );
+
+  return {
+    ...entrada,
+    diaSemana: diaNum,
+    nombreDia: NOMBRES_DIAS[diaNum],
+    eraDiaLaboral: teniaHorario.rows.length > 0,
+  };
+};
+
+// ============================================
+// HELPER: CERRAR ENTRADA HUÉRFANA COMO "SIN MARCAR"
+// ============================================
+const cerrarEntradaHuerfana = async ({
+  personaId,
+  branchId,
+  userId,
+  entrada,
+}) => {
+  const detalle = `Salida: Sin Marcar (${entrada.nombreDia} - olvidó registrar salida)`;
+
+  await query(
+    `
+    INSERT INTO registros_acceso 
+    (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
+    VALUES (
+      $1, 
+      $2, 
+      'exitoso', 
+      $3, 
+      $4, 
+      (($5::date) + TIMEZONE('America/La_Paz', NOW())::time),
+      'empleado'
+    )
+    `,
+    [
+      personaId,
+      detalle,
+      branchId || entrada.sucursal_id,
+      userId || entrada.usuario_registro_id,
+      entrada.fecha_dia,
+    ]
+  );
+
+  return detalle;
 };
 
 // ============================================
@@ -1079,11 +1168,32 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   const rol = emp.rol;
   const requiereHorario = rolRequiereHorario(rol);
 
+  // Si hay entrada huérfana de días anteriores, cerrarla ANTES de registrar la entrada de hoy
+  let entradaHuerfanaCerrada = null;
+
+  if (requiereHorario) {
+    const entradaHuerfana = await getEntradaHuerfanaAnterior(
+      emp.persona_id,
+      employeeId
+    );
+
+    if (entradaHuerfana && entradaHuerfana.eraDiaLaboral) {
+      await cerrarEntradaHuerfana({
+        personaId: emp.persona_id,
+        branchId,
+        userId,
+        entrada: entradaHuerfana,
+      });
+      entradaHuerfanaCerrada = entradaHuerfana;
+    }
+  }
+
   if (!requiereHorario) {
     const currentTimeResult = await query(
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
     );
     const horaActual = currentTimeResult.rows[0].hora_actual;
+    // 🔧 Sin (rol: ...)
     const detail = `Entrada: ${horaActual}`;
 
     await query(
@@ -1097,7 +1207,9 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
 
     return {
       success: true,
-      message: detail,
+      message: entradaHuerfanaCerrada
+        ? `Se cerró la entrada del ${entradaHuerfanaCerrada.nombreDia} como "Sin Marcar". ${detail}`
+        : detail,
       isLate: false,
       minutes: 0,
       rol,
@@ -1160,9 +1272,11 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   if (diffMinutes > 0) {
     isLate = true;
     minutes = diffMinutes;
-    detail = `Entrada: ${diffMinutes} minuto${diffMinutes !== 1 ? "s" : ""} tarde (rol: ${rol})`;
+    // 🔧 Sin (rol: ...)
+    detail = `Entrada: ${diffMinutes} minuto${diffMinutes !== 1 ? "s" : ""} tarde`;
   } else {
-    detail = `Entrada: A tiempo (rol: ${rol})`;
+    // 🔧 Sin (rol: ...)
+    detail = `Entrada: A tiempo`;
   }
 
   await query(
@@ -1176,7 +1290,9 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
 
   return {
     success: true,
-    message: detail,
+    message: entradaHuerfanaCerrada
+      ? `Se cerró la entrada del ${entradaHuerfanaCerrada.nombreDia} como "Sin Marcar". ${detail}`
+      : detail,
     isLate,
     minutes,
     rol,
@@ -1211,6 +1327,9 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     throw new Error("El empleado está inactivo en el sistema");
   }
 
+  const rol = emp.rol;
+  const requiereHorario = rolRequiereHorario(rol);
+
   const { estado } = await getEmployeeEstadoHoy(emp.persona_id);
 
   if (estado !== "in") {
@@ -1219,14 +1338,12 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     );
   }
 
-  const rol = emp.rol;
-  const requiereHorario = rolRequiereHorario(rol);
-
   if (!requiereHorario) {
     const currentTimeResult = await query(
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
     );
     const horaActual = currentTimeResult.rows[0].hora_actual;
+    // 🔧 Sin (rol: ...)
     const detail = `Salida: ${horaActual}`;
 
     await query(
@@ -1303,9 +1420,11 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   if (diffMinutes > 0) {
     isEarly = true;
     minutes = diffMinutes;
-    detail = `Salida: ${diffMinutes} minuto${diffMinutes !== 1 ? "s" : ""} antes (rol: ${rol})`;
+    // 🔧 Sin (rol: ...)
+    detail = `Salida: ${diffMinutes} minuto${diffMinutes !== 1 ? "s" : ""} antes`;
   } else {
-    detail = `Salida: A tiempo (rol: ${rol})`;
+    // 🔧 Sin (rol: ...)
+    detail = `Salida: A tiempo`;
   }
 
   await query(

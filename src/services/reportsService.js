@@ -203,7 +203,7 @@ const obtenerResumen = async (fechaInicio, fechaFin, sucursalId) => {
     const atrasosQuery = `
       SELECT 
         COALESCE(SUM(
-          CASE WHEN ra.detalle LIKE '%tarde%' 
+          CASE WHEN ra.detalle LIKE '%tarde%' OR ra.detalle LIKE '%antes%'
           THEN CAST(
             COALESCE(NULLIF(regexp_replace(ra.detalle, '\\D', '', 'g'), ''), '0'
           ) AS INTEGER)
@@ -301,7 +301,7 @@ const calcularTendencias = async (fechaInicio, fechaFin, sucursalId, datosActual
     const atrasosQueryAnterior = `
       SELECT 
         COALESCE(SUM(
-          CASE WHEN ra.detalle LIKE '%tarde%' 
+          CASE WHEN ra.detalle LIKE '%tarde%' OR ra.detalle LIKE '%antes%'
           THEN CAST(
             COALESCE(NULLIF(regexp_replace(ra.detalle, '\\D', '', 'g'), ''), '0'
           ) AS INTEGER)
@@ -477,14 +477,14 @@ const obtenerAtrasosTrabajadores = async (fechaInicio, fechaFin, sucursalId) => 
       SELECT 
         CONCAT(p.nombres, ' ', p.apellidos) as trabajador,
         COALESCE(SUM(
-          CASE WHEN ra.detalle LIKE '%tarde%' 
+          CASE WHEN ra.detalle LIKE '%tarde%' OR ra.detalle LIKE '%antes%'
           THEN CAST(
             COALESCE(NULLIF(regexp_replace(ra.detalle, '\\D', '', 'g'), ''), '0'
           ) AS INTEGER)
           ELSE 0 END
         ), 0) as minutos_acumulados,
         COUNT(DISTINCT 
-          CASE WHEN ra.detalle LIKE '%tarde%' 
+          CASE WHEN ra.detalle LIKE '%tarde%' OR ra.detalle LIKE '%antes%'
           THEN DATE(ra.fecha) 
           ELSE NULL END
         ) as dias_atraso
@@ -1127,7 +1127,6 @@ const obtenerMovimientosStock = async (fechaInicio, fechaFin, sucursalId = null)
       params.push(sucursalId);
     }
 
-    // 🔍 LOG: ver la query exacta
     const sql = `
       SELECT 
         ms.id::text as id,
@@ -1150,9 +1149,6 @@ const obtenerMovimientosStock = async (fechaInicio, fechaFin, sucursalId = null)
       ORDER BY ms.fecha DESC
       LIMIT 200
     `;
-
-    console.log("🔍 QUERY movimientos_stock:", sql);
-    console.log("🔍 PARAMS:", params);
 
     const result = await query(sql, params);
 
@@ -1324,7 +1320,12 @@ const obtenerEmpleadosReporte = async (sucursalId = null) => {
 };
 
 // ============================================
-// ATRASOS: Agrupados por empleado (sin motivo)
+// ATRASOS: Detalle individual por registro
+// SOLO trae:
+//   - Entradas con "tarde"
+//   - Salidas con "antes"
+//   - Salidas "Sin Marcar"
+// (Excluye "A tiempo" y horas normales)
 // ============================================
 const obtenerAtrasosEmpleados = async (mes, sucursalId = null) => {
   try {
@@ -1335,11 +1336,17 @@ const obtenerAtrasosEmpleados = async (mes, sucursalId = null) => {
       ultimoDia
     ).padStart(2, "0")} 23:59:59`;
 
+    // 🔧 FIX: solo traer registros que sean ATRASOS reales o "Sin Marcar".
+    // Excluye "A tiempo", entradas/salidas a hora correcta, etc.
     let whereClause = `
       WHERE ra.fecha BETWEEN $1 AND $2
       AND ra.tipo_persona = 'empleado'
       AND ra.estado = 'exitoso'
-      AND ra.detalle LIKE '%tarde%'
+      AND (
+        ra.detalle LIKE '%tarde%'
+        OR ra.detalle LIKE '%antes%'
+        OR ra.detalle LIKE '%Sin Marcar%'
+      )
     `;
     const params = [fechaInicio, fechaFin];
     let paramCount = 2;
@@ -1357,6 +1364,7 @@ const obtenerAtrasosEmpleados = async (mes, sucursalId = null) => {
         CONCAT(p.nombres, ' ', p.apellidos) as "empleadoNombre",
         COALESCE(s.nombre, 'Sin sucursal') as "sucursalNombre",
         ra.fecha,
+        ra.detalle,
         CAST(
           COALESCE(
             NULLIF(regexp_replace(ra.detalle, '\\D', '', 'g'), ''),
@@ -1389,14 +1397,31 @@ const obtenerAtrasosEmpleados = async (mes, sucursalId = null) => {
         };
       }
 
-      const minutos = parseInt(row.minutos) || 0;
+      const detalle = row.detalle || "";
+
+      // Clasificar el tipo
+      let tipo = "Entrada";
+      if (detalle.startsWith("Salida")) {
+        tipo = detalle.includes("Sin Marcar") ? "Sin Marcar" : "Salida";
+      } else if (detalle.startsWith("Entrada")) {
+        tipo = "Entrada";
+      }
+
+      const esSinMarcar = detalle.includes("Sin Marcar");
+      const minutos = esSinMarcar ? 0 : parseInt(row.minutos) || 0;
+
       const item = agrupado[key];
 
-      item.totalMinutos += minutos;
-      item.totalDias += 1;
+      if (!esSinMarcar) {
+        item.totalMinutos += minutos;
+        item.totalDias += 1;
+      }
+
       item.detalles.push({
         fecha: row.fecha,
         minutos,
+        tipo,
+        detalle,
       });
     });
 
@@ -1514,7 +1539,6 @@ const obtenerReportesZumba = async (mes, instructorId = null) => {
 // ============================================
 const obtenerPagosInformativos = async (mes, sucursalId = null) => {
   try {
-    // 1. Empleados activos/inactivos
     let whereClause = "WHERE e.estado IN (0, 1)";
     const params = [];
     let paramCount = 0;
@@ -1541,14 +1565,12 @@ const obtenerPagosInformativos = async (mes, sucursalId = null) => {
       params
     );
 
-    // 2. Totales de zumba
     const zumbaTotales = await obtenerReportesZumbaAgrupados(mes);
     const zumbaMap = {};
     zumbaTotales.forEach((z) => {
       zumbaMap[z.instructorId] = z;
     });
 
-    // 3. Combinar
     return empleadosResult.rows.map((emp) => {
       const esZumba = emp.rol === "zumba";
 
@@ -1620,6 +1642,7 @@ const actualizarSueldoEmpleado = async (empleadoId, sueldoBase, comision) => {
     throw error;
   }
 };
+
 // ============================================
 // MOVIMIENTOS DE FECHAS DE INSCRIPCIÓN
 // ============================================
@@ -1677,9 +1700,6 @@ const obtenerMovimientosFechasInscripcion = async (
       ORDER BY mf.fecha DESC
       LIMIT 200
     `;
-
-    console.log("🔍 QUERY movimientos_fechas_inscripcion:", sql);
-    console.log("🔍 PARAMS:", params);
 
     const result = await query(sql, params);
 

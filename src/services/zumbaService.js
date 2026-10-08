@@ -7,7 +7,7 @@ exports.getInstructors = async (branchId = null) => {
   const conditions = [
     `e.rol = 'zumba'`,
     `e.estado = 1`, // empleados activos
-    `p.estado = 1`, // personas activas ← CAMBIO CLAVE
+    `p.estado = 0`, // personas activas (0 = activo en este esquema)
   ];
 
   const params = [];
@@ -168,7 +168,7 @@ exports.saveReport = async ({
       INNER JOIN personas p ON e.persona_id = p.id
       WHERE e.id = $1
         AND e.estado = 1
-        AND p.estado = 1
+        AND p.estado = 0
         AND e.rol = 'zumba'
       `,
       [instructorId]
