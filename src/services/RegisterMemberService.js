@@ -18,11 +18,6 @@ const DIAS_VENTANA_PASADO = 7;
 // HELPERS DE FECHA
 // ============================================
 
-/**
- * ✅ FIX ZONA HORARIA
- * Convierte cualquier fecha a "YYYY-MM-DD" respetando la zona horaria
- * de Bolivia (America/La_Paz) cuando la entrada es un timestamp.
- */
 function toYMD(fecha) {
   if (!fecha) return null;
 
@@ -767,15 +762,12 @@ exports.registerMember = async (registrationData) => {
     }
 
     if (registrationData.pagoPlazos) {
-      detallePago += ` | Pago en plazos - Entregado: ${registrationData.montoEntregado}, Pendiente: ${registrationData.montoPendiente}`;
+      detallePago += ` | Pago en plazos - Total: ${registrationData.total}, Entregado: ${registrationData.montoEntregado}, Pendiente: ${registrationData.montoPendiente}`;
     }
 
     // ============================================
     // 9. Subtotal
     // ============================================
-    // ✅ FIX: el precio del servicio es por SERVICIO (ya incluye a todas
-    //    las personas que requiera). NO se multiplica por la cantidad de
-    //    personas asignadas.
     const subtotal = serviciosInfo.reduce((sum, s) => {
       return sum + Number(s.precio);
     }, 0);
@@ -784,6 +776,12 @@ exports.registerMember = async (registrationData) => {
     // 10. Crear venta
     // ============================================
     const ventaPersonaId = personaIds.length > 0 ? personaIds[0] : null;
+
+    // ✅ FIX: Cuando es pago en plazos, el "total" de la venta
+    //    refleja SOLO lo cobrado (montoEntregado).
+    const totalVenta = registrationData.pagoPlazos
+      ? Number(registrationData.montoEntregado || 0)
+      : Number(registrationData.total);
 
     const ventaResult = await client.query(
       `
@@ -800,7 +798,7 @@ exports.registerMember = async (registrationData) => {
         subtotal,
         registrationData.descuento,
         registrationData.descripcionDescuento,
-        registrationData.total,
+        totalVenta,
         registrationData.formaPago,
         detallePago,
         registrationData.sucursalId,
@@ -814,9 +812,6 @@ exports.registerMember = async (registrationData) => {
     // ============================================
     // 11. Detalles
     // ============================================
-    // ✅ FIX: como el precio del servicio es un total grupal, dividimos
-    //    el precio entre las inscripciones generadas para ese servicio
-    //    para que la suma de los detalles coincida con el subtotal.
     const countByServicio = {};
     for (const accion of acciones) {
       const sid = accion.servicio.servicioId;
@@ -847,14 +842,20 @@ exports.registerMember = async (registrationData) => {
     // ============================================
     // 12. Pagos pendientes
     // ============================================
+    // ✅ FIX: El pago pendiente registra el PLAN COMPLETO:
+    //    monto_total = 150 (precio del servicio)
+    //    monto_pagado = 100 (lo ya entregado)
+    //    monto_pendiente = 50 (lo que falta)
     const pagosPendientesIds = [];
     if (
       registrationData.pagoPlazos &&
       registrationData.montoPendiente > 0 &&
       personaIds.length > 0
     ) {
-      // ✅ FIX: el total del pago pendiente se asigna al cliente principal
-      //    (no se divide entre personas, porque el precio ya es del grupo).
+      const montoTotalReal = Number(registrationData.total);              // 150
+      const montoPagadoReal = Number(registrationData.montoEntregado || 0); // 100
+      const montoPendienteReal = Number(registrationData.montoPendiente); // 50
+
       const pp = await client.query(
         `
         INSERT INTO pagos_pendientes (
@@ -867,9 +868,9 @@ exports.registerMember = async (registrationData) => {
         [
           personaIds[0],
           ventaId,
-          registrationData.total,
-          registrationData.montoEntregado,
-          registrationData.montoPendiente,
+          montoTotalReal,      // ✅ 150
+          montoPagadoReal,     // ✅ 100
+          montoPendienteReal,  // ✅ 50
           fechaActual,
         ]
       );
@@ -879,12 +880,24 @@ exports.registerMember = async (registrationData) => {
     // ============================================
     // 13. Movimiento de caja (SOLO EFECTIVO)
     // ============================================
-    const montoEfectivoCaja =
-      registrationData.formaPago === "efectivo"
-        ? Number(registrationData.total)
-        : registrationData.formaPago === "mixto"
-        ? Number(registrationData.montoEfectivo || 0)
-        : 0;
+    let montoBaseCaja;
+
+    if (registrationData.pagoPlazos) {
+      montoBaseCaja = Number(registrationData.montoEntregado || 0);
+    } else {
+      montoBaseCaja = Number(registrationData.total);
+    }
+
+    let montoEfectivoCaja = 0;
+    if (registrationData.formaPago === "efectivo") {
+      montoEfectivoCaja = montoBaseCaja;
+    } else if (registrationData.formaPago === "mixto") {
+      const proporcionEfectivo =
+        Number(registrationData.montoEfectivo || 0) /
+        (Number(registrationData.montoEfectivo || 0) +
+          Number(registrationData.montoQr || 0) || 1);
+      montoEfectivoCaja = montoBaseCaja * proporcionEfectivo;
+    }
 
     if (montoEfectivoCaja > 0) {
       const cajaResult = await client.query(
@@ -923,6 +936,10 @@ exports.registerMember = async (registrationData) => {
 
       const usuarioId = usuarioResult.rows[0].usuario_id;
 
+      const descripcionMovimiento = registrationData.pagoPlazos
+        ? `Ingreso por inscripción (Pago en plazos - Entregado: Bs. ${registrationData.montoEntregado}, Pendiente: Bs. ${registrationData.montoPendiente})`
+        : "Ingreso por inscripción de servicios (Efectivo)";
+
       await client.query(
         `
         INSERT INTO movimientos_caja 
@@ -934,7 +951,7 @@ exports.registerMember = async (registrationData) => {
           registrationData.cajaId,
           usuarioId,
           montoEfectivoCaja,
-          "Ingreso por inscripción de servicios (Efectivo)",
+          descripcionMovimiento,
           montoAnterior,
           montoActual,
           ventaId,
@@ -954,7 +971,7 @@ exports.registerMember = async (registrationData) => {
       ventaId: ventaId,
       pagoPendienteIds: pagosPendientesIds,
       message: registrationData.pagoPlazos
-        ? "Inscripción registrada correctamente con pago en plazos"
+        ? `Inscripción registrada correctamente. Cobrado: Bs. ${registrationData.montoEntregado}, Pendiente: Bs. ${registrationData.montoPendiente}`
         : "Inscripción registrada correctamente",
     };
   } catch (error) {

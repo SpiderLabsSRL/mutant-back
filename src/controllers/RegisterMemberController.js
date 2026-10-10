@@ -179,6 +179,7 @@ exports.updatePagoPendiente = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
 // ============================================
 // VERIFICAR SI UNA PERSONA TIENE HUELLA
 // ============================================
@@ -192,6 +193,7 @@ exports.hasFingerprint = async (req, res) => {
     res.status(500).json({ message: error.message });
   }
 };
+
 // ============================================
 // CREAR PERSONA RÁPIDAMENTE
 // ============================================
