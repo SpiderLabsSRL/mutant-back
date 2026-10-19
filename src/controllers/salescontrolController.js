@@ -3,13 +3,12 @@ const salesService = require("../services/salescontrolService");
 const { query } = require("../../db");
 
 // ============================================
-// HELPER: Obtener sucursal_id del usuario logueado
+// HELPERS
 // ============================================
 async function resolveUserSucursalId(req) {
   if (req.user?.idsucursal) {
     return Number(req.user.idsucursal);
   }
-
   const empleadoId = req.user?.idempleado || req.user?.empleado_id;
   const usuarioId = req.user?.idusuario || req.user?.id;
 
@@ -21,7 +20,6 @@ async function resolveUserSucursalId(req) {
       );
       if (r.rows.length > 0) return r.rows[0].sucursal_id;
     }
-
     if (usuarioId) {
       const r = await query(
         `SELECT e.sucursal_id 
@@ -35,16 +33,11 @@ async function resolveUserSucursalId(req) {
   } catch (err) {
     console.error("Error resolviendo sucursal_id:", err);
   }
-
   return null;
 }
 
-// ============================================
-// HELPER: Obtener empleado_id real
-// ============================================
 async function resolveUserEmpleadoId(req) {
   const usuarioId = req.user?.idusuario || req.user?.id;
-
   if (!usuarioId) return null;
 
   try {
@@ -52,11 +45,9 @@ async function resolveUserEmpleadoId(req) {
       `SELECT empleado_id FROM usuarios WHERE id = $1 LIMIT 1`,
       [usuarioId]
     );
-
     if (r.rows.length > 0 && r.rows[0].empleado_id) {
       return Number(r.rows[0].empleado_id);
     }
-
     const personaId = req.user?.idpersona || req.user?.persona_id;
     if (personaId) {
       const r2 = await query(
@@ -67,7 +58,6 @@ async function resolveUserEmpleadoId(req) {
       );
       if (r2.rows.length > 0) return Number(r2.rows[0].id);
     }
-
     return null;
   } catch (err) {
     console.error("❌ Error en resolveUserEmpleadoId:", err);
@@ -75,9 +65,6 @@ async function resolveUserEmpleadoId(req) {
   }
 }
 
-// ============================================
-// HELPER: Obtener el idusuario "efectivo"
-// ============================================
 async function resolveUsuarioIdForzado(req) {
   const usuarioId = req.user?.idusuario || req.user?.id;
   if (usuarioId) return Number(usuarioId);
@@ -94,13 +81,9 @@ async function resolveUsuarioIdForzado(req) {
       console.error("Error resolviendo usuario por empleado:", err);
     }
   }
-
   return null;
 }
 
-// ============================================
-// HELPER: Normaliza el rol
-// ============================================
 function normalizeRol(rol) {
   return (rol || "").toString().toLowerCase().trim();
 }
@@ -148,14 +131,12 @@ const getSales = async (req, res) => {
 
     if (userRol === "recepcionista") {
       const usuarioIdForzado = await resolveUsuarioIdForzado(req);
-
       if (!usuarioIdForzado) {
         return res.json({
           sales: [],
           pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 },
         });
       }
-
       empleadoIdEfectivo = usuarioIdForzado.toString();
     }
 
@@ -231,7 +212,6 @@ const getTotals = async (req, res) => {
 
     if (userRol === "recepcionista") {
       const usuarioIdForzado = await resolveUsuarioIdForzado(req);
-
       if (!usuarioIdForzado) {
         return res.json({
           totalGeneral: 0,
@@ -245,7 +225,6 @@ const getTotals = async (req, res) => {
           qrServicios: 0,
         });
       }
-
       empleadoIdEfectivo = usuarioIdForzado.toString();
     }
 
@@ -325,38 +304,30 @@ const anularVenta = async (req, res) => {
     const { id } = req.params;
     const { type } = req.query;
 
-    // 🔎 LOG DE DEBUG (podés quitar esto después)
     console.log("🔎 ===== ANULAR VENTA =====");
     console.log("🔎 req.user:", req.user);
     console.log("🔎 id:", id, "| type:", type);
 
-    if (!id) {
-      return res.status(400).json({ error: "ID de venta requerido" });
-    }
+    if (!id) return res.status(400).json({ error: "ID de venta requerido" });
 
     if (type !== "producto" && type !== "servicio") {
-      return res.status(400).json({
-        error: "Tipo de venta inválido. Debe ser 'producto' o 'servicio'",
-      });
+      return res
+        .status(400)
+        .json({ error: "Tipo de venta inválido. Debe ser 'producto' o 'servicio'" });
     }
 
     const userRol = normalizeRol(req.user?.rol);
-
     console.log("🔎 Rol resuelto:", JSON.stringify(userRol));
 
     if (userRol !== "admin") {
       return res.status(403).json({
-        error: `Solo un administrador puede anular ventas (rol detectado: "${
-          userRol || "vacío"
-        }")`,
+        error: `Solo un administrador puede anular ventas (rol detectado: "${userRol || "vacío"}")`,
       });
     }
 
     const usuarioId = await resolveUsuarioIdForzado(req);
     if (!usuarioId) {
-      return res
-        .status(401)
-        .json({ error: "No se pudo resolver el usuario actual" });
+      return res.status(401).json({ error: "No se pudo resolver el usuario actual" });
     }
 
     const userSucursalId = await resolveUserSucursalId(req);
@@ -373,16 +344,56 @@ const anularVenta = async (req, res) => {
 
     const status =
       error.statusCode ||
-      (error.message?.includes("Solo se pueden anular")
-        ? 400
-        : error.message?.includes("no existe")
-        ? 404
-        : 500);
+      (error.message?.includes("Solo se pueden anular") ? 400 : 500);
 
     res.status(status).json({
       error: error.message || "Error al anular la venta",
-      details:
-        process.env.NODE_ENV === "development" ? error.stack : undefined,
+      details: process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+};
+
+// ============================================
+// ✅ ANULAR PAGO PENDIENTE (ABONO)
+// ============================================
+const anularPagoPendiente = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    console.log("🔎 ===== ANULAR PAGO PENDIENTE =====");
+    console.log("🔎 req.user:", req.user);
+    console.log("🔎 id:", id);
+
+    if (!id) return res.status(400).json({ error: "ID de pago requerido" });
+
+    const userRol = normalizeRol(req.user?.rol);
+    if (userRol !== "admin") {
+      return res.status(403).json({
+        error: `Solo un administrador puede anular pagos (rol detectado: "${userRol || "vacío"}")`,
+      });
+    }
+
+    const usuarioId = await resolveUsuarioIdForzado(req);
+    if (!usuarioId) {
+      return res.status(401).json({ error: "No se pudo resolver el usuario actual" });
+    }
+
+    const result = await salesService.anularPagoPendiente(id, {
+      usuarioId,
+      rol: userRol,
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error("❌ Error in anularPagoPendiente controller:", error);
+
+    const status =
+      error.statusCode ||
+      (error.message?.includes("no existe") ? 404 : 500);
+
+    res.status(status).json({
+      error: error.message || "Error al anular el pago",
+      details: process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
   }
 };
@@ -393,4 +404,5 @@ module.exports = {
   getSaleDetails,
   getSucursales,
   anularVenta,
+  anularPagoPendiente,
 };

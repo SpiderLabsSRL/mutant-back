@@ -880,7 +880,8 @@ const anularVenta = async (saleId, saleType, actor) => {
          v.cupon_id,
          v.total,
          v.forma_pago,
-         v.detalle_pago
+         v.detalle_pago,
+         v.descripcion_descuento
        FROM ${tablaVenta} v
        WHERE v.id = $1
        FOR UPDATE`,
@@ -907,6 +908,7 @@ const anularVenta = async (saleId, saleType, actor) => {
     // ---------- Anular según tipo ----------
     let cuponId = venta.cupon_id || null;
     let montoEfectivoCaja = 0;
+    let esAbono = false;
 
     if (saleType === "producto") {
       // ====== PRODUCTOS ======
@@ -961,87 +963,156 @@ const anularVenta = async (saleId, saleType, actor) => {
     } else {
       // ====== SERVICIOS ======
 
-      // 1. Obtener todas las inscripciones asociadas a esta venta
-      const detallesResult = await client.query(
-        `SELECT inscripcion_id
-         FROM detalle_venta_servicios
-         WHERE venta_servicio_id = $1`,
-        [ventaIdNum]
-      );
+      // 🔍 DETECTAR SI ES UN ABONO
+      // En registrarPago se guarda descripcion_descuento = 'Pago de deuda pendiente'
+      const descripcion = (venta.descripcion_descuento || "").toLowerCase();
+      esAbono =
+        descripcion.includes("pago de deuda") ||
+        descripcion.includes("abono") ||
+        (venta.detalle_pago || "").toLowerCase().includes("pago de deuda");
 
-      const inscripcionIds = detallesResult.rows
-        .map((r) => r.inscripcion_id)
-        .filter((id) => id != null);
+      if (esAbono) {
+        // ============================================
+        // CASO A: ANULAR UN ABONO (SOLO EL PAGO)
+        // ============================================
 
-      // 2. Si hay inscripciones, eliminar registros dependientes
-      //    (esto puede incluir ventas/pagos de OTROS registros que
-      //    apunten a la misma inscripción, por ejemplo un pago en plazos)
-      if (inscripcionIds.length > 0) {
-        // 2.1 Eliminar los pagos pendientes (deudas) asociados a estas inscripciones
+        // 1. Obtener la inscripción asociada
+        const detalleResult = await client.query(
+          `SELECT inscripcion_id FROM detalle_venta_servicios 
+           WHERE venta_servicio_id = $1 LIMIT 1`,
+          [ventaIdNum]
+        );
+
+        if (detalleResult.rows.length === 0) {
+          throw new Error("No se encontró la inscripción asociada a este abono");
+        }
+        const inscripcionId = detalleResult.rows[0].inscripcion_id;
+
+        // 2. Buscar la venta original (que tiene el pago pendiente)
+        const ventaOriginalResult = await client.query(
+          `SELECT vs.id as venta_original_id, pp.id as pago_pendiente_id
+           FROM ventas_servicios vs
+           INNER JOIN detalle_venta_servicios dvs ON vs.id = dvs.venta_servicio_id
+           INNER JOIN pagos_pendientes pp ON pp.venta_servicio_id = vs.id
+           WHERE dvs.inscripcion_id = $1
+             AND vs.id != $2
+           LIMIT 1`,
+          [inscripcionId, ventaIdNum]
+        );
+
+        if (ventaOriginalResult.rows.length > 0) {
+          const pagoPendienteId = ventaOriginalResult.rows[0].pago_pendiente_id;
+          const montoAbono = parseFloat(venta.total) || 0;
+
+          // 3. Devolver el monto del abono a la deuda original
+          await client.query(
+            `UPDATE pagos_pendientes
+             SET monto_pagado = monto_pagado - $1,
+                 monto_pendiente = monto_pendiente + $1,
+                 estado = 'pendiente',
+                 fecha_ultima_actualizacion = TIMEZONE('America/La_Paz', NOW())
+             WHERE id = $2`,
+            [montoAbono, pagoPendienteId]
+          );
+        }
+
+        // 4. Calcular monto efectivo a devolver a caja
+        if (venta.forma_pago === "efectivo") {
+          montoEfectivoCaja = parseFloat(venta.total) || 0;
+        } else if (venta.forma_pago === "mixto") {
+          const m = (venta.detalle_pago || "").match(
+            new RegExp(EFECTIVO_REGEX, "i")
+          );
+          const parsed = m ? parseFloat((m[1] || "0").replace(",", ".")) : 0;
+          montoEfectivoCaja =
+            parsed > 0 ? parsed : (parseFloat(venta.total) || 0) / 2;
+        }
+
+        // 5. Eliminar movimientos_caja y la venta del abono
         await client.query(
-          `DELETE FROM pagos_pendientes
-           WHERE venta_servicio_id IN (
-             SELECT DISTINCT venta_servicio_id
-             FROM detalle_venta_servicios
-             WHERE inscripcion_id = ANY($1::int[])
-           )`,
-          [inscripcionIds]
+          `DELETE FROM movimientos_caja WHERE venta_servicio_id = $1`,
+          [ventaIdNum]
         );
 
-        // 2.2 Eliminar movimientos de caja de TODAS esas ventas
         await client.query(
-          `DELETE FROM movimientos_caja
-           WHERE venta_servicio_id IN (
-             SELECT DISTINCT venta_servicio_id
-             FROM detalle_venta_servicios
-             WHERE inscripcion_id = ANY($1::int[])
-           )`,
-          [inscripcionIds]
+          `DELETE FROM ventas_servicios WHERE id = $1`,
+          [ventaIdNum]
         );
+      } else {
+        // ============================================
+        // CASO B: ANULAR LA VENTA ORIGINAL (BORRAR TODO)
+        // ============================================
 
-        // 2.3 ✅ ELIMINAR TODOS LOS DETALLES de esas inscripciones
-        //     (sin importar de qué venta sean). Esto libera la FK
-        //     RESTRICT para poder borrar las inscripciones.
-        await client.query(
-          `DELETE FROM detalle_venta_servicios
-           WHERE inscripcion_id = ANY($1::int[])`,
-          [inscripcionIds]
+        // 1. Obtener inscripciones asociadas
+        const detallesResult = await client.query(
+          `SELECT inscripcion_id FROM detalle_venta_servicios 
+           WHERE venta_servicio_id = $1`,
+          [ventaIdNum]
         );
+        const inscripcionIds = detallesResult.rows
+          .map((r) => r.inscripcion_id)
+          .filter((id) => id != null);
 
-        // 2.4 Desvincular registros de acceso
-        await client.query(
-          `UPDATE registros_acceso
-           SET inscripcion_id = NULL
-           WHERE inscripcion_id = ANY($1::int[])`,
-          [inscripcionIds]
-        );
-      }
+        if (inscripcionIds.length > 0) {
+          // 2. Buscar TODAS las ventas asociadas (abonos + original)
+          const ventasAsociadasResult = await client.query(
+            `SELECT DISTINCT venta_servicio_id 
+             FROM detalle_venta_servicios 
+             WHERE inscripcion_id = ANY($1::int[])`,
+            [inscripcionIds]
+          );
+          const ventasAsociadasIds = ventasAsociadasResult.rows.map(
+            (r) => r.venta_servicio_id
+          );
 
-      // 3. Calcular monto efectivo real
-      if (venta.forma_pago === "efectivo") {
-        montoEfectivoCaja = parseFloat(venta.total) || 0;
-      } else if (venta.forma_pago === "mixto") {
-        const m = (venta.detalle_pago || "").match(
-          new RegExp(EFECTIVO_REGEX, "i")
-        );
-        const parsed = m ? parseFloat((m[1] || "0").replace(",", ".")) : 0;
-        montoEfectivoCaja =
-          parsed > 0 ? parsed : (parseFloat(venta.total) || 0) / 2;
-      }
+          // 3. Borrar pagos pendientes
+          await client.query(
+            `DELETE FROM pagos_pendientes WHERE venta_servicio_id = ANY($1::int[])`,
+            [ventasAsociadasIds]
+          );
 
-      // 4. Ahora sí borrar la venta principal
-      await client.query(
-        `DELETE FROM ventas_servicios WHERE id = $1`,
-        [ventaIdNum]
-      );
+          // 4. Borrar movimientos de caja de todas esas ventas
+          await client.query(
+            `DELETE FROM movimientos_caja WHERE venta_servicio_id = ANY($1::int[])`,
+            [ventasAsociadasIds]
+          );
 
-      // 5. Ahora sí borrar las inscripciones
-      if (inscripcionIds.length > 0) {
-        await client.query(
-          `DELETE FROM inscripciones
-           WHERE id = ANY($1::int[])`,
-          [inscripcionIds]
-        );
+          // 5. Borrar detalles de venta
+          await client.query(
+            `DELETE FROM detalle_venta_servicios WHERE inscripcion_id = ANY($1::int[])`,
+            [inscripcionIds]
+          );
+
+          // 6. Borrar TODAS las ventas (abonos + original)
+          await client.query(
+            `DELETE FROM ventas_servicios WHERE id = ANY($1::int[])`,
+            [ventasAsociadasIds]
+          );
+
+          // 7. Desvincular accesos
+          await client.query(
+            `UPDATE registros_acceso SET inscripcion_id = NULL WHERE inscripcion_id = ANY($1::int[])`,
+            [inscripcionIds]
+          );
+
+          // 8. Borrar inscripciones
+          await client.query(
+            `DELETE FROM inscripciones WHERE id = ANY($1::int[])`,
+            [inscripcionIds]
+          );
+        }
+
+        // 9. Calcular monto efectivo de la venta original
+        if (venta.forma_pago === "efectivo") {
+          montoEfectivoCaja = parseFloat(venta.total) || 0;
+        } else if (venta.forma_pago === "mixto") {
+          const m = (venta.detalle_pago || "").match(
+            new RegExp(EFECTIVO_REGEX, "i")
+          );
+          const parsed = m ? parseFloat((m[1] || "0").replace(",", ".")) : 0;
+          montoEfectivoCaja =
+            parsed > 0 ? parsed : (parseFloat(venta.total) || 0) / 2;
+        }
       }
     }
 
@@ -1078,7 +1149,9 @@ const anularVenta = async (saleId, saleType, actor) => {
         [nuevoTotal, venta.caja_id]
       );
 
-      const descripcionEgreso = `Anulación venta #${ventaIdNum} (${saleType}) - reverso efectivo`;
+      const descripcionEgreso = esAbono
+        ? `Anulación de abono #${ventaIdNum} - reverso efectivo`
+        : `Anulación venta #${ventaIdNum} (${saleType}) - reverso efectivo`;
 
       const egresoResult = await client.query(
         `INSERT INTO movimientos_caja
@@ -1100,6 +1173,7 @@ const anularVenta = async (saleId, saleType, actor) => {
       const egresoId = egresoResult.rows[0].id;
       const egresoFecha = egresoResult.rows[0].fecha;
 
+      // Recalcular cadena de movimientos posteriores
       const posterioresResult = await client.query(
         `SELECT id, monto, tipo
          FROM movimientos_caja
@@ -1144,12 +1218,14 @@ const anularVenta = async (saleId, saleType, actor) => {
 
     return {
       success: true,
-      message:
-        saleType === "producto"
-          ? `Venta de productos #${ventaIdNum} anulada. Stock revertido.`
-          : `Venta de servicios #${ventaIdNum} anulada. Inscripciones y pagos asociados eliminados.`,
+      message: esAbono
+        ? `Abono #${ventaIdNum} anulado. La deuda original ha sido restaurada.`
+        : saleType === "producto"
+        ? `Venta de productos #${ventaIdNum} anulada. Stock revertido.`
+        : `Venta de servicios #${ventaIdNum} anulada. Inscripciones y abonos asociados eliminados.`,
       ventaId: ventaIdNum,
       tipo: saleType,
+      esAbono,
     };
   } catch (error) {
     await client.query("ROLLBACK");

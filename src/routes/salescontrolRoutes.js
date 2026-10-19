@@ -12,7 +12,10 @@ router.get("/totals", salesController.getTotals);
 router.get("/sucursales/list", salesController.getSucursales);
 router.get("/", salesController.getSales);
 
-// ✅ Anular venta (solo admin, solo hoy)
+// ✅ Anular pago pendiente (abono) - debe ir ANTES de DELETE /:id
+router.delete("/pagos/:id", salesController.anularPagoPendiente);
+
+// ✅ Anular venta
 router.delete("/:id", salesController.anularVenta);
 
 // Detalle (dinámica, va al final)
