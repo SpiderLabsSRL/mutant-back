@@ -1,5 +1,5 @@
 // backend/services/salescontrolService.js
-const { query } = require("../../db");
+const { query, pool } = require("../../db");
 
 // ============================================
 // HELPERS
@@ -9,7 +9,6 @@ const EFECTIVO_REGEX =
 const QR_REGEX =
   "(?:QR|qr|Q\\.R\\.)\\s*[:=]?\\s*(?:Bs\\.?)?\\s*([0-9]+(?:[.,][0-9]+)?)";
 
-// ✅ La fecha ya está en hora Bolivia, solo extraemos la parte de fecha (sin conversión)
 const LA_PAZ_DATE = (alias) => `(${alias}.fecha)::date`;
 
 // ============================================
@@ -20,7 +19,7 @@ function normalizeRol(rol) {
 }
 
 // ============================================
-// HELPER: aplica filtro de sucursal forzado para no-admin/superadmin
+// HELPER: aplica filtro de sucursal forzado
 // ============================================
 function applyForcedSucursal(filters, userSucursalId, userRol) {
   const rolNorm = normalizeRol(userRol);
@@ -149,7 +148,6 @@ async function applyEmpleadoFilter(
 ) {
   if (!empleadoIdFilter) return paramCount;
 
-  // El valor que llega es un `usuario_id` (columna id de `usuarios`)
   const usuarioResult = await query(
     "SELECT empleado_id FROM usuarios WHERE id = $1",
     [empleadoIdFilter]
@@ -172,9 +170,6 @@ async function applyEmpleadoFilter(
 
   whereConditions.push(`${columnExpr} = $${paramCount}`);
   params.push(empleadoIdReal);
-  console.log(
-    `✅ Filtro empleado aplicado: ${columnExpr} = ${empleadoIdReal} (usuario ${empleadoIdFilter})`
-  );
   return paramCount + 1;
 }
 
@@ -193,11 +188,6 @@ const getSales = async (
       filters,
       userSucursalId,
       userRol
-    );
-
-    console.log(
-      "🔍 getSales filters efectivos:",
-      JSON.stringify(effectiveFilters, null, 2)
     );
 
     const todayResult = await query(
@@ -228,7 +218,6 @@ const getSales = async (
       paramCountServicios++;
     }
 
-    // ✅ Filtro de empleado (por usuario_id)
     if (effectiveFilters.empleadoId) {
       paramCountProductos = await applyEmpleadoFilter(
         whereConditionsProductos,
@@ -273,11 +262,6 @@ const getSales = async (
       whereConditionsServicios.length > 0
         ? `WHERE ${baseConditionServicios} AND ${whereConditionsServicios.join(" AND ")}`
         : `WHERE ${baseConditionServicios}`;
-
-    console.log("📝 whereClauseProductos:", whereClauseProductos);
-    console.log("📝 paramsProductos:", paramsProductos);
-    console.log("📝 whereClauseServicios:", whereClauseServicios);
-    console.log("📝 paramsServicios:", paramsServicios);
 
     const countQueryProductos = `
       SELECT COUNT(DISTINCT vp.id) as total_count 
@@ -545,11 +529,6 @@ const getTotals = async (
       userRol
     );
 
-    console.log(
-      "🔍 getTotals filters efectivos:",
-      JSON.stringify(effectiveFilters, null, 2)
-    );
-
     const todayResult = await query(
       "SELECT (NOW() AT TIME ZONE 'America/La_Paz')::date as hoy_la_paz"
     );
@@ -576,7 +555,6 @@ const getTotals = async (
       paramCountServicios++;
     }
 
-    // ✅ Filtro de empleado (por usuario_id)
     if (effectiveFilters.empleadoId) {
       paramCountProductos = await applyEmpleadoFilter(
         whereConditionsProductos,
@@ -879,9 +857,320 @@ const getSucursales = async () => {
   }
 };
 
+// ============================================
+// ✅ ANULAR VENTA (SOLO ADMIN, SOLO HOY)
+// ============================================
+const anularVenta = async (saleId, saleType, actor) => {
+  const { usuarioId, rol } = actor || {};
+
+  // ---------- Validaciones de entrada / permisos ----------
+  if (!saleId) {
+    throw new Error("ID de venta requerido");
+  }
+  if (saleType !== "producto" && saleType !== "servicio") {
+    throw new Error("Tipo de venta inválido. Debe ser 'producto' o 'servicio'");
+  }
+  if (normalizeRol(rol) !== "admin") {
+    const err = new Error("Solo un administrador puede anular ventas");
+    err.statusCode = 403;
+    throw err;
+  }
+
+  const ventaIdNum = parseInt(saleId, 10);
+  if (!Number.isInteger(ventaIdNum) || ventaIdNum <= 0) {
+    throw new Error("ID de venta inválido");
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    // ---------- Verificar venta existe y es de HOY ----------
+    const tablaVenta =
+      saleType === "producto" ? "ventas_productos" : "ventas_servicios";
+
+    const ventaResult = await client.query(
+      `SELECT 
+         v.id,
+         v.fecha,
+         (v.fecha)::date AS fecha_dia,
+         (NOW() AT TIME ZONE 'America/La_Paz')::date AS hoy_dia,
+         v.sucursal_id,
+         v.caja_id,
+         v.empleado_id,
+         v.cupon_id,
+         v.total,
+         v.forma_pago,
+         v.detalle_pago
+       FROM ${tablaVenta} v
+       WHERE v.id = $1
+       FOR UPDATE`,
+      [ventaIdNum]
+    );
+
+    if (ventaResult.rows.length === 0) {
+      throw new Error("La venta no existe");
+    }
+
+    const venta = ventaResult.rows[0];
+
+    const fechaVentaStr = venta.fecha_dia
+      ? new Date(venta.fecha_dia).toISOString().slice(0, 10)
+      : null;
+    const hoyStr = venta.hoy_dia
+      ? new Date(venta.hoy_dia).toISOString().slice(0, 10)
+      : null;
+
+    if (!fechaVentaStr || !hoyStr || fechaVentaStr !== hoyStr) {
+      throw new Error("Solo se pueden anular ventas realizadas el día de hoy");
+    }
+
+    // ---------- Anular según tipo ----------
+    let cuponId = venta.cupon_id || null;
+    let montoEfectivoCaja = 0;
+
+    if (saleType === "producto") {
+      // ====== PRODUCTOS ======
+
+      const detallesResult = await client.query(
+        `SELECT producto_id, cantidad
+         FROM detalle_venta_productos
+         WHERE venta_producto_id = $1`,
+        [ventaIdNum]
+      );
+
+      for (const item of detallesResult.rows) {
+        const stockCheck = await client.query(
+          `SELECT stock IS NULL AS sin_stock
+           FROM producto_sucursal
+           WHERE producto_id = $1 AND sucursal_id = $2
+           FOR UPDATE`,
+          [item.producto_id, venta.sucursal_id]
+        );
+
+        if (stockCheck.rows.length > 0 && !stockCheck.rows[0].sin_stock) {
+          await client.query(
+            `UPDATE producto_sucursal
+             SET stock = stock + $1
+             WHERE producto_id = $2 AND sucursal_id = $3`,
+            [item.cantidad, item.producto_id, venta.sucursal_id]
+          );
+        }
+      }
+
+      if (venta.forma_pago === "efectivo") {
+        montoEfectivoCaja = parseFloat(venta.total) || 0;
+      } else if (venta.forma_pago === "mixto") {
+        const m = (venta.detalle_pago || "").match(
+          new RegExp(EFECTIVO_REGEX, "i")
+        );
+        const parsed = m ? parseFloat((m[1] || "0").replace(",", ".")) : 0;
+        montoEfectivoCaja =
+          parsed > 0 ? parsed : (parseFloat(venta.total) || 0) / 2;
+      }
+
+      await client.query(
+        `DELETE FROM movimientos_caja
+         WHERE venta_producto_id = $1`,
+        [ventaIdNum]
+      );
+
+      await client.query(
+        `DELETE FROM ventas_productos WHERE id = $1`,
+        [ventaIdNum]
+      );
+    } else {
+      // ====== SERVICIOS ======
+
+      // 3.1 Obtener inscripciones asociadas
+      const detallesResult = await client.query(
+        `SELECT id, inscripcion_id, precio
+         FROM detalle_venta_servicios
+         WHERE venta_servicio_id = $1`,
+        [ventaIdNum]
+      );
+
+      const inscripcionIds = detallesResult.rows
+        .map((r) => r.inscripcion_id)
+        .filter((id) => id != null);
+
+      // 3.2 Eliminar pagos pendientes de la venta
+      await client.query(
+        `DELETE FROM pagos_pendientes
+         WHERE venta_servicio_id = $1`,
+        [ventaIdNum]
+      );
+
+      // 3.3 Eliminar movimientos_caja de esta venta
+      await client.query(
+        `DELETE FROM movimientos_caja
+         WHERE venta_servicio_id = $1`,
+        [ventaIdNum]
+      );
+
+      // 3.4 Desvincular registros_acceso (FK ON DELETE SET NULL)
+      if (inscripcionIds.length > 0) {
+        await client.query(
+          `UPDATE registros_acceso
+           SET inscripcion_id = NULL
+           WHERE inscripcion_id = ANY($1::int[])`,
+          [inscripcionIds]
+        );
+      }
+
+      // 3.5 Calcular monto efectivo real ANTES de borrar la venta
+      if (venta.forma_pago === "efectivo") {
+        montoEfectivoCaja = parseFloat(venta.total) || 0;
+      } else if (venta.forma_pago === "mixto") {
+        const m = (venta.detalle_pago || "").match(
+          new RegExp(EFECTIVO_REGEX, "i")
+        );
+        const parsed = m ? parseFloat((m[1] || "0").replace(",", ".")) : 0;
+        montoEfectivoCaja =
+          parsed > 0 ? parsed : (parseFloat(venta.total) || 0) / 2;
+      }
+
+      // 3.6 ✅ PRIMERO eliminar ventas_servicios → cascade borra
+      //     detalle_venta_servicios (FK ON DELETE CASCADE)
+      await client.query(
+        `DELETE FROM ventas_servicios WHERE id = $1`,
+        [ventaIdNum]
+      );
+
+      // 3.7 ✅ AHORA SÍ eliminar inscripciones (ya no hay detalle
+      //     que las referencie). movimientos_fechas_inscripcion
+      //     cae en cascada por su FK.
+      if (inscripcionIds.length > 0) {
+        await client.query(
+          `DELETE FROM inscripciones
+           WHERE id = ANY($1::int[])`,
+          [inscripcionIds]
+        );
+      }
+    }
+
+    // ---------- Revertir uso de cupón ----------
+    if (cuponId) {
+      await client.query(
+        `UPDATE cupones
+         SET usos = GREATEST(usos - 1, 0)
+         WHERE id = $1`,
+        [cuponId]
+      );
+    }
+
+    // ---------- Revertir monto en caja ----------
+    if (montoEfectivoCaja > 0) {
+      const cajaResult = await client.query(
+        `SELECT estado_caja, COALESCE(total, 0) AS total_actual
+         FROM cajas
+         WHERE id = $1
+         FOR UPDATE`,
+        [venta.caja_id]
+      );
+
+      if (cajaResult.rows.length === 0) {
+        throw new Error("Caja asociada a la venta no encontrada");
+      }
+
+      const caja = cajaResult.rows[0];
+      const totalActual = parseFloat(caja.total_actual) || 0;
+      const nuevoTotal = Math.max(0, totalActual - montoEfectivoCaja);
+
+      await client.query(
+        `UPDATE cajas SET total = $1 WHERE id = $2`,
+        [nuevoTotal, venta.caja_id]
+      );
+
+      const descripcionEgreso = `Anulación venta #${ventaIdNum} (${saleType}) - reverso efectivo`;
+
+      const egresoResult = await client.query(
+        `INSERT INTO movimientos_caja
+          (caja_id, usuario_id, monto, tipo, descripcion,
+           monto_anterior, monto_actual, venta_servicio_id, venta_producto_id, fecha)
+         VALUES ($1, $2, $3, 'egreso', $4, $5, $6, NULL, NULL,
+                 TIMEZONE('America/La_Paz', NOW()))
+         RETURNING id, fecha`,
+        [
+          venta.caja_id,
+          usuarioId,
+          montoEfectivoCaja,
+          descripcionEgreso,
+          totalActual,
+          nuevoTotal,
+        ]
+      );
+
+      const egresoId = egresoResult.rows[0].id;
+      const egresoFecha = egresoResult.rows[0].fecha;
+
+      // Recalcular cadena monto_anterior/monto_actual de movimientos
+      // POSTERIORES al egreso para mantener consistencia
+      const posterioresResult = await client.query(
+        `SELECT id, monto, tipo
+         FROM movimientos_caja
+         WHERE caja_id = $1
+           AND (
+             fecha > $2
+             OR (fecha = $2 AND id > $3)
+           )
+         ORDER BY fecha ASC, id ASC`,
+        [venta.caja_id, egresoFecha, egresoId]
+      );
+
+      let runningTotal = nuevoTotal;
+
+      for (const mov of posterioresResult.rows) {
+        const montoMov = parseFloat(mov.monto) || 0;
+        const anterior = runningTotal;
+        let actual = runningTotal;
+
+        if (mov.tipo === "ingreso") {
+          actual = anterior + montoMov;
+        } else if (mov.tipo === "egreso") {
+          actual = Math.max(0, anterior - montoMov);
+        } else if (mov.tipo === "apertura") {
+          actual = montoMov;
+        } else if (mov.tipo === "cierre") {
+          actual = anterior;
+        }
+
+        await client.query(
+          `UPDATE movimientos_caja
+           SET monto_anterior = $1, monto_actual = $2
+           WHERE id = $3`,
+          [anterior, actual, mov.id]
+        );
+
+        runningTotal = actual;
+      }
+    }
+
+    await client.query("COMMIT");
+
+    return {
+      success: true,
+      message:
+        saleType === "producto"
+          ? `Venta de productos #${ventaIdNum} anulada. Stock revertido.`
+          : `Venta de servicios #${ventaIdNum} anulada. Inscripciones eliminadas.`,
+      ventaId: ventaIdNum,
+      tipo: saleType,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    console.error("❌ Error in anularVenta service:", error);
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   getSales,
   getTotals,
   getSaleDetails,
   getSucursales,
+  anularVenta,
 };

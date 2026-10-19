@@ -6,8 +6,8 @@ const { query } = require("../../db");
 // HELPER: Obtener sucursal_id del usuario logueado
 // ============================================
 async function resolveUserSucursalId(req) {
-  if (req.user?.sucursal_id) {
-    return Number(req.user.sucursal_id);
+  if (req.user?.idsucursal) {
+    return Number(req.user.idsucursal);
   }
 
   const empleadoId = req.user?.idempleado || req.user?.empleado_id;
@@ -40,15 +40,12 @@ async function resolveUserSucursalId(req) {
 }
 
 // ============================================
-// ✅ HELPER: Obtener empleado_id real del usuario logueado
-//    (por si en algún momento se necesita)
+// HELPER: Obtener empleado_id real
 // ============================================
 async function resolveUserEmpleadoId(req) {
   const usuarioId = req.user?.idusuario || req.user?.id;
 
-  if (!usuarioId) {
-    return null;
-  }
+  if (!usuarioId) return null;
 
   try {
     const r = await query(
@@ -79,17 +76,12 @@ async function resolveUserEmpleadoId(req) {
 }
 
 // ============================================
-// ✅ HELPER: Obtener el idusuario "efectivo" para forzar ventas
-//    El servicio de ventas filtra por `usuario_id` (columna `id` de la
-//    tabla `usuarios`), NO por `empleado_id`. Por eso aquí devolvemos
-//    el idusuario del JWT (o el que se resuelva desde el empleado).
+// HELPER: Obtener el idusuario "efectivo"
 // ============================================
 async function resolveUsuarioIdForzado(req) {
-  // 1) Preferimos el idusuario directo del JWT
   const usuarioId = req.user?.idusuario || req.user?.id;
   if (usuarioId) return Number(usuarioId);
 
-  // 2) Fallback: resolver por empleado/persona
   const empleadoId = await resolveUserEmpleadoId(req);
   if (empleadoId) {
     try {
@@ -107,7 +99,7 @@ async function resolveUsuarioIdForzado(req) {
 }
 
 // ============================================
-// HELPER: Normaliza el rol a minúsculas
+// HELPER: Normaliza el rol
 // ============================================
 function normalizeRol(rol) {
   return (rol || "").toString().toLowerCase().trim();
@@ -152,34 +144,19 @@ const getSales = async (req, res) => {
     const userSucursalId = await resolveUserSucursalId(req);
     const userRol = normalizeRol(req.user?.rol);
 
-    // ==========================================================
-    // ✅ FIX: El servicio filtra por `usuario_id`. Forzamos
-    //    el filtro al `idusuario` del recepcionista logueado.
-    // ==========================================================
     let empleadoIdEfectivo = empleadoId || null;
 
     if (userRol === "recepcionista") {
       const usuarioIdForzado = await resolveUsuarioIdForzado(req);
 
       if (!usuarioIdForzado) {
-        console.warn(
-          "⚠️ Recepcionista sin usuario_id resoluble. Devolviendo vacío."
-        );
         return res.json({
           sales: [],
-          pagination: {
-            page: 1,
-            pageSize: 20,
-            total: 0,
-            totalPages: 0,
-          },
+          pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 },
         });
       }
 
       empleadoIdEfectivo = usuarioIdForzado.toString();
-      console.log(
-        `🔒 Recepcionista forzado a usuarioId=${empleadoIdEfectivo} (rol=${userRol})`
-      );
     }
 
     const filters = {
@@ -202,10 +179,7 @@ const getSales = async (req, res) => {
       userRol
     );
 
-    res.json({
-      sales: result.sales,
-      pagination: result.pagination,
-    });
+    res.json({ sales: result.sales, pagination: result.pagination });
   } catch (error) {
     console.error("❌ Error in getSales controller:", error);
     res.status(500).json({
@@ -253,18 +227,12 @@ const getTotals = async (req, res) => {
     const userSucursalId = await resolveUserSucursalId(req);
     const userRol = normalizeRol(req.user?.rol);
 
-    // ==========================================================
-    // ✅ FIX: mismo criterio que en getSales
-    // ==========================================================
     let empleadoIdEfectivo = empleadoId || null;
 
     if (userRol === "recepcionista") {
       const usuarioIdForzado = await resolveUsuarioIdForzado(req);
 
       if (!usuarioIdForzado) {
-        console.warn(
-          "⚠️ Recepcionista sin usuario_id resoluble. Totales en cero."
-        );
         return res.json({
           totalGeneral: 0,
           efectivoGeneral: 0,
@@ -279,9 +247,6 @@ const getTotals = async (req, res) => {
       }
 
       empleadoIdEfectivo = usuarioIdForzado.toString();
-      console.log(
-        `🔒 Recepcionista (totales) forzado a usuarioId=${empleadoIdEfectivo}`
-      );
     }
 
     const filters = {
@@ -352,9 +317,80 @@ const getSucursales = async (req, res) => {
   }
 };
 
+// ============================================
+// ✅ ANULAR VENTA
+// ============================================
+const anularVenta = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type } = req.query;
+
+    // 🔎 LOG DE DEBUG (podés quitar esto después)
+    console.log("🔎 ===== ANULAR VENTA =====");
+    console.log("🔎 req.user:", req.user);
+    console.log("🔎 id:", id, "| type:", type);
+
+    if (!id) {
+      return res.status(400).json({ error: "ID de venta requerido" });
+    }
+
+    if (type !== "producto" && type !== "servicio") {
+      return res.status(400).json({
+        error: "Tipo de venta inválido. Debe ser 'producto' o 'servicio'",
+      });
+    }
+
+    const userRol = normalizeRol(req.user?.rol);
+
+    console.log("🔎 Rol resuelto:", JSON.stringify(userRol));
+
+    if (userRol !== "admin") {
+      return res.status(403).json({
+        error: `Solo un administrador puede anular ventas (rol detectado: "${
+          userRol || "vacío"
+        }")`,
+      });
+    }
+
+    const usuarioId = await resolveUsuarioIdForzado(req);
+    if (!usuarioId) {
+      return res
+        .status(401)
+        .json({ error: "No se pudo resolver el usuario actual" });
+    }
+
+    const userSucursalId = await resolveUserSucursalId(req);
+
+    const result = await salesService.anularVenta(id, type, {
+      usuarioId,
+      rol: userRol,
+      sucursalId: userSucursalId,
+    });
+
+    res.json(result);
+  } catch (error) {
+    console.error("❌ Error in anularVenta controller:", error);
+
+    const status =
+      error.statusCode ||
+      (error.message?.includes("Solo se pueden anular")
+        ? 400
+        : error.message?.includes("no existe")
+        ? 404
+        : 500);
+
+    res.status(status).json({
+      error: error.message || "Error al anular la venta",
+      details:
+        process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+};
+
 module.exports = {
   getSales,
   getTotals,
   getSaleDetails,
   getSucursales,
+  anularVenta,
 };
