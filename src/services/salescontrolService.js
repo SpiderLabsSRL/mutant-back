@@ -11,16 +11,10 @@ const QR_REGEX =
 
 const LA_PAZ_DATE = (alias) => `(${alias}.fecha)::date`;
 
-// ============================================
-// HELPER: Normaliza el rol
-// ============================================
 function normalizeRol(rol) {
   return (rol || "").toString().toLowerCase().trim();
 }
 
-// ============================================
-// HELPER: aplica filtro de sucursal forzado
-// ============================================
 function applyForcedSucursal(filters, userSucursalId, userRol) {
   const rolNorm = normalizeRol(userRol);
   const esAdminGlobal = rolNorm === "admin" || rolNorm === "superadmin";
@@ -33,9 +27,6 @@ function applyForcedSucursal(filters, userSucursalId, userRol) {
   };
 }
 
-// ============================================
-// HELPER: Construye filtros de fecha
-// ============================================
 const buildDateFilters = async (
   whereConditions,
   params,
@@ -136,9 +127,6 @@ const buildDateFilters = async (
   return newParamCount;
 };
 
-// ============================================
-// HELPER: aplica filtro de empleado/usuario
-// ============================================
 async function applyEmpleadoFilter(
   whereConditions,
   params,
@@ -153,20 +141,10 @@ async function applyEmpleadoFilter(
     [empleadoIdFilter]
   );
 
-  if (usuarioResult.rows.length === 0) {
-    console.warn(
-      `⚠️ applyEmpleadoFilter: no existe usuario con id=${empleadoIdFilter}. Filtro NO aplicado.`
-    );
-    return paramCount;
-  }
+  if (usuarioResult.rows.length === 0) return paramCount;
 
   const empleadoIdReal = usuarioResult.rows[0].empleado_id;
-  if (!empleadoIdReal) {
-    console.warn(
-      `⚠️ applyEmpleadoFilter: usuario ${empleadoIdFilter} sin empleado_id. Filtro NO aplicado.`
-    );
-    return paramCount;
-  }
+  if (!empleadoIdReal) return paramCount;
 
   whereConditions.push(`${columnExpr} = $${paramCount}`);
   params.push(empleadoIdReal);
@@ -983,9 +961,9 @@ const anularVenta = async (saleId, saleType, actor) => {
     } else {
       // ====== SERVICIOS ======
 
-      // 3.1 Obtener inscripciones asociadas
+      // 1. Obtener todas las inscripciones asociadas a esta venta
       const detallesResult = await client.query(
-        `SELECT id, inscripcion_id, precio
+        `SELECT inscripcion_id
          FROM detalle_venta_servicios
          WHERE venta_servicio_id = $1`,
         [ventaIdNum]
@@ -995,22 +973,42 @@ const anularVenta = async (saleId, saleType, actor) => {
         .map((r) => r.inscripcion_id)
         .filter((id) => id != null);
 
-      // 3.2 Eliminar pagos pendientes de la venta
-      await client.query(
-        `DELETE FROM pagos_pendientes
-         WHERE venta_servicio_id = $1`,
-        [ventaIdNum]
-      );
-
-      // 3.3 Eliminar movimientos_caja de esta venta
-      await client.query(
-        `DELETE FROM movimientos_caja
-         WHERE venta_servicio_id = $1`,
-        [ventaIdNum]
-      );
-
-      // 3.4 Desvincular registros_acceso (FK ON DELETE SET NULL)
+      // 2. Si hay inscripciones, eliminar registros dependientes
+      //    (esto puede incluir ventas/pagos de OTROS registros que
+      //    apunten a la misma inscripción, por ejemplo un pago en plazos)
       if (inscripcionIds.length > 0) {
+        // 2.1 Eliminar los pagos pendientes (deudas) asociados a estas inscripciones
+        await client.query(
+          `DELETE FROM pagos_pendientes
+           WHERE venta_servicio_id IN (
+             SELECT DISTINCT venta_servicio_id
+             FROM detalle_venta_servicios
+             WHERE inscripcion_id = ANY($1::int[])
+           )`,
+          [inscripcionIds]
+        );
+
+        // 2.2 Eliminar movimientos de caja de TODAS esas ventas
+        await client.query(
+          `DELETE FROM movimientos_caja
+           WHERE venta_servicio_id IN (
+             SELECT DISTINCT venta_servicio_id
+             FROM detalle_venta_servicios
+             WHERE inscripcion_id = ANY($1::int[])
+           )`,
+          [inscripcionIds]
+        );
+
+        // 2.3 ✅ ELIMINAR TODOS LOS DETALLES de esas inscripciones
+        //     (sin importar de qué venta sean). Esto libera la FK
+        //     RESTRICT para poder borrar las inscripciones.
+        await client.query(
+          `DELETE FROM detalle_venta_servicios
+           WHERE inscripcion_id = ANY($1::int[])`,
+          [inscripcionIds]
+        );
+
+        // 2.4 Desvincular registros de acceso
         await client.query(
           `UPDATE registros_acceso
            SET inscripcion_id = NULL
@@ -1019,7 +1017,7 @@ const anularVenta = async (saleId, saleType, actor) => {
         );
       }
 
-      // 3.5 Calcular monto efectivo real ANTES de borrar la venta
+      // 3. Calcular monto efectivo real
       if (venta.forma_pago === "efectivo") {
         montoEfectivoCaja = parseFloat(venta.total) || 0;
       } else if (venta.forma_pago === "mixto") {
@@ -1031,16 +1029,13 @@ const anularVenta = async (saleId, saleType, actor) => {
           parsed > 0 ? parsed : (parseFloat(venta.total) || 0) / 2;
       }
 
-      // 3.6 ✅ PRIMERO eliminar ventas_servicios → cascade borra
-      //     detalle_venta_servicios (FK ON DELETE CASCADE)
+      // 4. Ahora sí borrar la venta principal
       await client.query(
         `DELETE FROM ventas_servicios WHERE id = $1`,
         [ventaIdNum]
       );
 
-      // 3.7 ✅ AHORA SÍ eliminar inscripciones (ya no hay detalle
-      //     que las referencie). movimientos_fechas_inscripcion
-      //     cae en cascada por su FK.
+      // 5. Ahora sí borrar las inscripciones
       if (inscripcionIds.length > 0) {
         await client.query(
           `DELETE FROM inscripciones
@@ -1105,8 +1100,6 @@ const anularVenta = async (saleId, saleType, actor) => {
       const egresoId = egresoResult.rows[0].id;
       const egresoFecha = egresoResult.rows[0].fecha;
 
-      // Recalcular cadena monto_anterior/monto_actual de movimientos
-      // POSTERIORES al egreso para mantener consistencia
       const posterioresResult = await client.query(
         `SELECT id, monto, tipo
          FROM movimientos_caja
@@ -1154,7 +1147,7 @@ const anularVenta = async (saleId, saleType, actor) => {
       message:
         saleType === "producto"
           ? `Venta de productos #${ventaIdNum} anulada. Stock revertido.`
-          : `Venta de servicios #${ventaIdNum} anulada. Inscripciones eliminadas.`,
+          : `Venta de servicios #${ventaIdNum} anulada. Inscripciones y pagos asociados eliminados.`,
       ventaId: ventaIdNum,
       tipo: saleType,
     };
