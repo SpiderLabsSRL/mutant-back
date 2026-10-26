@@ -10,7 +10,7 @@ const getDiaSemanaBD = (date) => {
 
 // ============================================
 // CONFIG: ROLES QUE NO REQUIEREN HORARIO
-// ============================================
+// ============================================ 
 const ROLES_SIN_HORARIO = new Set(["admin"]);
 
 const rolRequiereHorario = (rol) => !ROLES_SIN_HORARIO.has(rol);
@@ -1472,5 +1472,236 @@ exports.registerAccessDeniedNoActiveSubscription = async (
   return {
     success: false,
     message: `${memberName} no tiene inscripciones activas`,
+  };
+};
+// ============================================
+// REGISTER ACCESS BY FINGERPRINT (flujo automático)
+// ============================================
+exports.registerAccessByFingerprint = async (ci, branchId, userId) => {
+  const normalizedCi = (ci || "").trim();
+  if (!normalizedCi) {
+    throw new Error("CI requerido");
+  }
+
+  // 1. Buscar persona por CI
+  const personaResult = await query(
+    `SELECT id, nombres, apellidos, ci
+     FROM personas
+     WHERE TRIM(ci) = $1 AND estado = 0
+     LIMIT 1`,
+    [normalizedCi]
+  );
+
+  if (personaResult.rows.length === 0) {
+    return {
+      success: false,
+      mode: "not_found",
+      message: `No se encontró persona con CI ${normalizedCi}`,
+    };
+  }
+
+  const persona = personaResult.rows[0];
+  const memberName = `${persona.nombres} ${persona.apellidos}`.trim();
+
+  // 2. ¿Es empleado activo?
+  const employeeResult = await query(
+    `SELECT e.id, e.rol, e.sucursal_id
+     FROM empleados e
+     WHERE e.persona_id = $1 AND e.estado = 1
+     LIMIT 1`,
+    [persona.id]
+  );
+
+  if (employeeResult.rows.length > 0) {
+    const emp = employeeResult.rows[0];
+
+    // Validar sucursal (admin y limpieza pueden saltar restricción como en searchMembers)
+    const branchOk =
+      !branchId ||
+      emp.sucursal_id === Number(branchId) ||
+      emp.rol === "limpieza" ||
+      emp.rol === "admin";
+
+    if (!branchOk) {
+      return {
+        success: false,
+        mode: "denied",
+        message: `${memberName} no pertenece a esta sucursal`,
+      };
+    }
+
+    const { estado } = await getEmployeeEstadoHoy(persona.id);
+
+    let result;
+    if (estado === "in") {
+      result = await exports.registerEmployeeCheckOut(emp.id, branchId, userId);
+    } else {
+      result = await exports.registerEmployeeCheckIn(emp.id, branchId, userId);
+    }
+
+    // Recuperar el último log del empleado para devolverlo al front
+    const logResult = await query(
+      `SELECT ra.id,
+              TO_CHAR(ra.fecha, 'YYYY-MM-DD HH24:MI') as fecha,
+              ra.detalle,
+              ra.estado,
+              ra.tipo_persona
+       FROM registros_acceso ra
+       WHERE ra.persona_id = $1
+         AND ra.tipo_persona = 'empleado'
+       ORDER BY ra.fecha DESC
+       LIMIT 1`,
+      [persona.id]
+    );
+
+    const logRow = logResult.rows[0];
+
+    return {
+      success: result.success !== false && !result.denied,
+      mode: "employee",
+      message: result.message,
+      denied: !!result.denied,
+      isLate: result.isLate || false,
+      isEarly: result.isEarly || false,
+      minutos: result.minutes || 0,
+      log: logRow
+        ? {
+            id: logRow.id.toString(),
+            timestamp: logRow.fecha,
+            memberName,
+            memberType: "employee",
+            detail: logRow.detalle,
+            status: logRow.estado === "exitoso" ? "success" : "denied",
+            ci: persona.ci,
+          }
+        : result.log || null,
+    };
+  }
+
+  // 3. Es cliente → obtener servicios activos (misma agrupación por tipo_servicio)
+  const servicesResult = await query(
+    `WITH inscripciones_calculadas AS (
+        SELECT
+          i.id as idinscripcion,
+          i.servicio_id,
+          i.ingresos_disponibles,
+          i.fecha_inicio::text as fecha_inicio,
+          i.fecha_vencimiento::text as fecha_vencimiento,
+          i.estado_inscripcion,
+          i.sucursal_id,
+          s.nombre as nombre_servicio,
+          s.multisucursal,
+          s.numero_ingresos as servicio_ingresos_ilimitados,
+          COALESCE(ts.nombre, 'general') as tipo_servicio,
+          CASE WHEN i.estado_inscripcion = 'activo' THEN true ELSE false END as es_activa
+        FROM inscripciones i
+        INNER JOIN servicios s ON i.servicio_id = s.id
+        LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
+        WHERE i.persona_id = $1
+          AND i.estado = 1
+          AND ($2::int IS NULL OR i.sucursal_id = $2 OR s.multisucursal = TRUE)
+      ),
+      candidatas AS (
+        SELECT
+          ic.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY ic.tipo_servicio
+            ORDER BY
+              CASE WHEN ic.es_activa THEN 0 ELSE 1 END,
+              ic.fecha_vencimiento DESC,
+              ic.idinscripcion DESC
+          ) as rn_por_tipo
+        FROM inscripciones_calculadas ic
+      )
+      SELECT * FROM candidatas WHERE rn_por_tipo = 1`,
+    [persona.id, branchId || null]
+  );
+
+  const services = servicesResult.rows;
+
+  if (services.length === 0) {
+    // Registrar denegado (sin inscripción)
+    await exports.registerAccessDeniedNoActiveSubscription(
+      persona.id,
+      branchId,
+      userId,
+      memberName
+    );
+
+    const logResult = await query(
+      `SELECT ra.id,
+              TO_CHAR(ra.fecha, 'YYYY-MM-DD HH24:MI') as fecha,
+              ra.detalle,
+              ra.estado
+       FROM registros_acceso ra
+       WHERE ra.persona_id = $1
+       ORDER BY ra.fecha DESC
+       LIMIT 1`,
+      [persona.id]
+    );
+    const logRow = logResult.rows[0];
+
+    return {
+      success: false,
+      mode: "denied",
+      message: `${memberName} no tiene inscripciones activas`,
+      log: logRow
+        ? {
+            id: logRow.id.toString(),
+            timestamp: logRow.fecha,
+            memberName,
+            memberType: "client",
+            detail: logRow.detalle,
+            status: "denied",
+            ci: persona.ci,
+          }
+        : null,
+    };
+  }
+
+  // 4. ¿Un solo servicio? → registrar directo
+  if (services.length === 1) {
+    const svc = services[0];
+    const result = await exports.registerClientAccess(
+      persona.id,
+      svc.idinscripcion,
+      branchId,
+      userId
+    );
+
+    return {
+      success: !!result.success,
+      mode: "client_auto",
+      message: result.message,
+      tieneDeuda: !!result.tieneDeuda,
+      deudaInfo: result.deudaInfo || null,
+      remainingVisits: result.remainingVisits ?? null,
+      log: result.log || null,
+      memberName,
+      ci: persona.ci,
+    };
+  }
+
+  // 5. Múltiples servicios de distintos tipos → requiere selección manual
+  return {
+    success: false,
+    mode: "requires_selection",
+    message: `${memberName} tiene varios servicios activos. Seleccione uno.`,
+    memberName,
+    ci: persona.ci,
+    memberId: persona.id.toString(),
+    services: services.map((s) => ({
+      id: s.idinscripcion.toString(),
+      name: s.nombre_servicio,
+      visits:
+        s.servicio_ingresos_ilimitados === null
+          ? null
+          : s.ingresos_disponibles,
+      status: s.estado_inscripcion === "activo" ? "active" : "expired",
+      expirationDate: s.fecha_vencimiento,
+      tipoServicio: s.tipo_servicio,
+      branchId: s.sucursal_id,
+      multisucursal: s.multisucursal,
+    })),
   };
 };

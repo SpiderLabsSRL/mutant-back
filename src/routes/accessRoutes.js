@@ -23,4 +23,7 @@ router.post("/register/employee/checkout", accessController.registerEmployeeChec
 // Registrar acceso denegado sin inscripción activa
 router.post("/register/denied/no-subscription", accessController.registerAccessDeniedNoSubscription);
 
+// 🆕 Registrar acceso automático por huella (CI → registro directo)
+router.post("/register/fingerprint", accessController.registerByFingerprint);
+
 module.exports = router;

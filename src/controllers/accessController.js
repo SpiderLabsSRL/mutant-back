@@ -12,7 +12,7 @@ exports.getAccessLogs = async (req, res) => {
     const logs = await accessService.getAccessLogs(
       search,
       type,
-      limit ? parseInt(limit) : 100,
+      limit ? parseInt(limit) : 100, 
       branchIdParsed
     );
     res.json(logs);
@@ -178,6 +178,31 @@ exports.registerAccessDeniedNoSubscription = async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error("Error in registerAccessDeniedNoSubscription:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+// ============================================
+// REGISTER ACCESS BY FINGERPRINT (flujo automático)
+// ============================================
+exports.registerByFingerprint = async (req, res) => {
+  try {
+    const { ci, branchId, userId } = req.body;
+
+    if (!ci || !branchId || !userId) {
+      return res.status(400).json({
+        message: "Faltan parámetros requeridos (ci, branchId, userId)",
+        received: { ci, branchId, userId },
+      });
+    }
+
+    const result = await accessService.registerAccessByFingerprint(
+      ci,
+      parseInt(branchId),
+      parseInt(userId)
+    );
+    res.json(result);
+  } catch (error) {
+    console.error("Error in registerByFingerprint:", error);
     res.status(500).json({ message: error.message });
   }
 };
