@@ -1,12 +1,266 @@
 const { query } = require("../../db");
 
-exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) => {
+// ============================================
+// HELPER: DÍA DE LA SEMANA EN BD (1=Lunes, 7=Domingo)
+// ============================================
+const getDiaSemanaBD = (date) => {
+  const jsDay = date.getDay();
+  return jsDay === 0 ? 7 : jsDay;
+};
+
+// ============================================
+// CONFIG: ROLES QUE NO REQUIEREN HORARIO
+// ============================================
+const ROLES_SIN_HORARIO = new Set(["admin"]);
+
+const rolRequiereHorario = (rol) => !ROLES_SIN_HORARIO.has(rol);
+
+const NOMBRES_DIAS = {
+  1: "Lunes",
+  2: "Martes",
+  3: "Miércoles",
+  4: "Jueves",
+  5: "Viernes",
+  6: "Sábado",
+  7: "Domingo",
+};
+
+// ============================================
+// VALIDAR HORARIO DEL SERVICIO
+// ============================================
+const validarHorarioServicio = async (servicioId, fechaActual) => {
+  try {
+    const horariosResult = await query(
+      `SELECT 
+         dia_semana, 
+         TO_CHAR(hora_inicio, 'HH24:MI:SS') as hora_inicio,
+         TO_CHAR(hora_fin, 'HH24:MI:SS') as hora_fin
+       FROM horarios_servicio
+       WHERE servicio_id = $1`,
+      [servicioId]
+    );
+
+    if (horariosResult.rows.length === 0) {
+      return { valid: true, reason: null };
+    }
+
+    const diaActual = getDiaSemanaBD(fechaActual);
+    const horaActual = fechaActual.toTimeString().split(" ")[0];
+
+    const horariosDelDia = horariosResult.rows.filter(
+      (h) => h.dia_semana === diaActual
+    );
+
+    if (horariosDelDia.length === 0) {
+      const diasDisponibles = [
+        ...new Set(horariosResult.rows.map((h) => h.dia_semana)),
+      ].sort();
+      const nombresDias = {
+        1: "Lunes",
+        2: "Martes",
+        3: "Miércoles",
+        4: "Jueves",
+        5: "Viernes",
+        6: "Sábado",
+        7: "Domingo",
+      };
+      const listaDias = diasDisponibles.map((d) => nombresDias[d]).join(", ");
+
+      return {
+        valid: false,
+        reason: `El servicio no está disponible hoy. Días disponibles: ${listaDias}`,
+      };
+    }
+
+    const horaDentroRango = horariosDelDia.some((h) => {
+      return horaActual >= h.hora_inicio && horaActual <= h.hora_fin;
+    });
+
+    if (!horaDentroRango) {
+      const rangos = horariosDelDia
+        .map((h) => `${h.hora_inicio.slice(0, 5)} - ${h.hora_fin.slice(0, 5)}`)
+        .join(", ");
+      return {
+        valid: false,
+        reason: `El servicio no está disponible a esta hora. Horarios: ${rangos}`,
+      };
+    }
+
+    return { valid: true, reason: null };
+  } catch (error) {
+    console.error("Error en validarHorarioServicio:", error);
+    return { valid: true, reason: null };
+  }
+};
+
+// ============================================
+// HELPER: FORMATEAR FECHA
+// ============================================
+const formatDate = (dateString) => {
+  if (!dateString) return "";
+  const date = new Date(dateString);
+  const day = date.getDate();
+  const month = date.toLocaleString("es-ES", { month: "short" });
+  const year = date.getFullYear();
+  return `${day} ${month} ${year}`;
+};
+
+// ============================================
+// GET CLIENT SUBSCRIPTIONS
+// ============================================
+exports.getClientSubscriptions = async (personId, branchId = null) => {
+  try {
+    const params = [personId];
+
+    let sql = `
+      SELECT 
+        i.id AS id,
+        i.servicio_id,
+        i.sucursal_id,
+        s.nombre AS service_name,
+        i.fecha_inicio::text AS fecha_inicio,
+        i.fecha_vencimiento::text AS fecha_vencimiento,
+        i.ingresos_disponibles,
+        i.estado,
+        i.estado_inscripcion,
+        s.precio,
+        s.numero_ingresos,
+        s.multisucursal,
+        COALESCE(ts.nombre, 'general') AS tipo_servicio,
+        CASE 
+          WHEN i.estado_inscripcion = 'inactivo' 
+               AND i.fecha_inicio > TIMEZONE('America/La_Paz', NOW())::date 
+               THEN 'pending'
+          WHEN i.estado_inscripcion = 'activo'
+               THEN 'active'
+          ELSE 'expired'
+        END AS computed_status
+      FROM inscripciones i
+      INNER JOIN servicios s ON i.servicio_id = s.id
+      LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
+      WHERE i.persona_id = $1
+        AND i.estado = 1
+    `;
+
+    if (
+      branchId !== null &&
+      branchId !== undefined &&
+      !Number.isNaN(Number(branchId))
+    ) {
+      params.push(Number(branchId));
+      sql += ` AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)`;
+    }
+
+    sql += ` ORDER BY 
+      s.nombre,
+      i.sucursal_id,
+      i.fecha_inicio DESC,
+      i.id DESC
+    `;
+
+    const result = await query(sql, params);
+
+    const statusPriority = { active: 0, pending: 1, expired: 2 };
+
+    const targetBranchId =
+      branchId !== null &&
+      branchId !== undefined &&
+      !Number.isNaN(Number(branchId))
+        ? Number(branchId)
+        : null;
+
+    const groupedMap = new Map();
+
+    result.rows.forEach((row) => {
+      const key = targetBranchId
+        ? `${row.tipo_servicio}`
+        : `${row.tipo_servicio}-${row.sucursal_id}`;
+
+      if (!groupedMap.has(key)) {
+        groupedMap.set(key, row);
+        return;
+      }
+
+      const existing = groupedMap.get(key);
+
+      if (targetBranchId) {
+        const existingIsLocal = existing.sucursal_id === targetBranchId;
+        const newIsLocal = row.sucursal_id === targetBranchId;
+
+        if (newIsLocal && !existingIsLocal) {
+          groupedMap.set(key, row);
+          return;
+        }
+        if (!newIsLocal && existingIsLocal) {
+          return;
+        }
+      }
+
+      const existingPriority = statusPriority[existing.computed_status] ?? 3;
+      const newPriority = statusPriority[row.computed_status] ?? 3;
+
+      if (newPriority < existingPriority) {
+        groupedMap.set(key, row);
+        return;
+      }
+
+      if (newPriority === existingPriority) {
+        const cmpFecha = (row.fecha_vencimiento || "").localeCompare(
+          existing.fecha_vencimiento || ""
+        );
+        if (cmpFecha > 0) {
+          groupedMap.set(key, row);
+          return;
+        }
+        if (cmpFecha === 0 && row.id > existing.id) {
+          groupedMap.set(key, row);
+        }
+      }
+    });
+
+    const uniqueSubscriptions = Array.from(groupedMap.values());
+
+    uniqueSubscriptions.sort((a, b) => {
+      const aOrder = statusPriority[a.computed_status] ?? 3;
+      const bOrder = statusPriority[b.computed_status] ?? 3;
+      if (aOrder !== bOrder) return aOrder - bOrder;
+
+      return (a.tipo_servicio || "").localeCompare(b.tipo_servicio || "");
+    });
+
+    return uniqueSubscriptions.map((row) => ({
+      id: row.id,
+      serviceName: row.service_name,
+      startDate: row.fecha_inicio,
+      endDate: row.fecha_vencimiento,
+      visitsLeft:
+        row.numero_ingresos === null ? null : row.ingresos_disponibles,
+      status: row.computed_status,
+      price: parseFloat(row.precio) || 0,
+      isMultisucursal: row.multisucursal,
+    }));
+  } catch (error) {
+    console.error("❌ Error en getClientSubscriptions service:", error);
+    throw error;
+  }
+};
+
+// ============================================
+// GET ACCESS LOGS
+// ============================================
+exports.getAccessLogs = async (
+  searchTerm,
+  typeFilter,
+  limit = 100,
+  branchId
+) => {
   let sql = `
     SELECT 
       ra.id, 
       TO_CHAR(ra.fecha, 'YYYY-MM-DD HH24:MI') as fecha, 
       ra.persona_id, 
       ra.servicio_id,
+      ra.inscripcion_id,
       ra.detalle, 
       ra.estado, 
       ra.sucursal_id, 
@@ -20,33 +274,59 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
     INNER JOIN personas p ON ra.persona_id = p.id
     LEFT JOIN servicios s ON ra.servicio_id = s.id
     WHERE ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
-    AND p.estado = 0
   `;
 
   const params = [];
   const whereClauses = [];
 
-  if (branchId) {
+  if (branchId && !Number.isNaN(Number(branchId))) {
     whereClauses.push(`ra.sucursal_id = $${params.length + 1}`);
-    params.push(branchId);
+    params.push(Number(branchId));
   }
 
-  if (searchTerm) {
-    whereClauses.push(
-      `(p.nombres ILIKE $${params.length + 1} 
-        OR p.apellidos ILIKE $${params.length + 1} 
-        OR p.ci ILIKE $${params.length + 1})`
-    );
-    params.push(`%${searchTerm}%`);
+  if (searchTerm && searchTerm.trim() !== "") {
+    const normalizedSearch = searchTerm.trim().replace(/\s+/g, " ");
+    const paramIndex = params.length + 1;
+
+    whereClauses.push(`
+      (
+        unaccent(LOWER(REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g'))) 
+          ILIKE unaccent(LOWER($${paramIndex}))
+        OR unaccent(LOWER(REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g'))) 
+          ILIKE unaccent(LOWER($${paramIndex}))
+        OR TRIM(p.ci) ILIKE $${paramIndex}
+        OR unaccent(LOWER(
+          REGEXP_REPLACE(
+            TRIM(CONCAT(
+              REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g'),
+              ' ',
+              REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g')
+            )),
+            '\\s+', ' ', 'g'
+          )
+        )) ILIKE unaccent(LOWER($${paramIndex}))
+        OR unaccent(LOWER(
+          REGEXP_REPLACE(
+            TRIM(CONCAT(
+              REGEXP_REPLACE(TRIM(p.apellidos), '\\s+', ' ', 'g'),
+              ' ',
+              REGEXP_REPLACE(TRIM(p.nombres), '\\s+', ' ', 'g')
+            )),
+            '\\s+', ' ', 'g'
+          )
+        )) ILIKE unaccent(LOWER($${paramIndex}))
+      )
+    `);
+    params.push(`%${normalizedSearch}%`);
   }
 
-  if (typeFilter && typeFilter !== 'all') {
+  if (typeFilter && typeFilter !== "all") {
     whereClauses.push(`ra.tipo_persona = $${params.length + 1}`);
     params.push(typeFilter);
   }
 
   if (whereClauses.length > 0) {
-    sql += ` AND ${whereClauses.join(' AND ')}`;
+    sql += ` AND ${whereClauses.join(" AND ")}`;
   }
 
   const safeLimit = Number.isNaN(Number(limit)) ? 100 : Number(limit);
@@ -56,64 +336,96 @@ exports.getAccessLogs = async (searchTerm, typeFilter, limit = 100, branchId) =>
   return result.rows;
 };
 
-const formatDate = (dateString) => {
-  if (!dateString) return '';
-  const date = new Date(dateString);
-  const day = date.getDate();
-  const month = date.toLocaleString('es-ES', { month: 'short' });
-  const year = date.getFullYear();
-  return `${day} ${month} ${year}`;
-};
-
+// ============================================
+// SEARCH MEMBERS
+// ============================================
 exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
-  const searchParam = `%${searchTerm}%`;
+  const normalizedSearch = (searchTerm || "").trim().replace(/\s+/g, " ");
+  const searchParam = `%${normalizedSearch}%`;
+
   const results = [];
 
+  const filtrarPorSucursal =
+    branchId !== null &&
+    branchId !== undefined &&
+    !Number.isNaN(Number(branchId));
+
+  const buildPersonSearchWhere = (alias = "p", paramIndex = 1) => `
+    (
+      unaccent(LOWER(REGEXP_REPLACE(TRIM(${alias}.nombres), '\\s+', ' ', 'g'))) 
+        ILIKE unaccent(LOWER($${paramIndex}))
+      OR unaccent(LOWER(REGEXP_REPLACE(TRIM(${alias}.apellidos), '\\s+', ' ', 'g'))) 
+        ILIKE unaccent(LOWER($${paramIndex}))
+      OR TRIM(${alias}.ci) ILIKE $${paramIndex}
+      OR unaccent(LOWER(
+        REGEXP_REPLACE(
+          TRIM(CONCAT(
+            REGEXP_REPLACE(TRIM(${alias}.nombres), '\\s+', ' ', 'g'),
+            ' ',
+            REGEXP_REPLACE(TRIM(${alias}.apellidos), '\\s+', ' ', 'g')
+          )),
+          '\\s+', ' ', 'g'
+        )
+      )) ILIKE unaccent(LOWER($${paramIndex}))
+      OR unaccent(LOWER(
+        REGEXP_REPLACE(
+          TRIM(CONCAT(
+            REGEXP_REPLACE(TRIM(${alias}.apellidos), '\\s+', ' ', 'g'),
+            ' ',
+            REGEXP_REPLACE(TRIM(${alias}.nombres), '\\s+', ' ', 'g')
+          )),
+          '\\s+', ' ', 'g'
+        )
+      )) ILIKE unaccent(LOWER($${paramIndex}))
+    )
+  `;
+
+  // ============================================
+  // CLIENTES
+  // ============================================
   if (typeFilter === "all" || typeFilter === "cliente") {
-    const clientParams = [searchParam, branchId];
+    const clientParams = [searchParam];
+    let branchFilterIn = "";
+
+    if (filtrarPorSucursal) {
+      clientParams.push(Number(branchId));
+      branchFilterIn = `AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)`;
+    }
+
     let clientSql = `
-      WITH todas_las_inscripciones AS (
+      WITH inscripciones_calculadas AS (
         SELECT 
           i.id as idinscripcion,
           i.persona_id,
           i.servicio_id,
           i.ingresos_disponibles,
-          i.fecha_inicio,
-          i.fecha_vencimiento,
+          i.fecha_inicio::text as fecha_inicio,
+          i.fecha_vencimiento::text as fecha_vencimiento,
           i.estado,
+          i.estado_inscripcion,
           i.sucursal_id,
           s.nombre as nombre_servicio,
           s.multisucursal,
           s.numero_ingresos as servicio_ingresos_ilimitados,
-          ROW_NUMBER() OVER (
-            PARTITION BY 
-              i.servicio_id, 
-              i.persona_id
-            ORDER BY 
-              CASE WHEN i.sucursal_id = $2 THEN 0 ELSE 1 END,
-              i.fecha_inicio DESC, 
-              i.id DESC
-          ) as rn,
-          CASE 
-            WHEN i.fecha_vencimiento::date < TIMEZONE('America/La_Paz', NOW())::date THEN 'vencido'
-            ELSE 'activo'
-          END as estado_servicio,
-          CASE
-            WHEN s.numero_ingresos IS NULL THEN true
-            WHEN i.ingresos_disponibles IS NULL THEN true
-            WHEN i.ingresos_disponibles <= 0 THEN false
-            ELSE true
-          END as tiene_visitas_disponibles,
-          CASE 
-            WHEN i.fecha_inicio::date <= TIMEZONE('America/La_Paz', NOW())::date 
-              AND i.fecha_vencimiento::date >= TIMEZONE('America/La_Paz', NOW())::date 
-            THEN true 
-            ELSE false 
-          END as esta_en_rango_fechas
+          COALESCE(ts.nombre, 'general') as tipo_servicio,
+          CASE WHEN i.estado_inscripcion = 'activo' THEN true ELSE false END as es_activa
         FROM inscripciones i
         INNER JOIN servicios s ON i.servicio_id = s.id
+        LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
         WHERE i.estado = 1
-        AND (i.sucursal_id = $2 OR s.multisucursal = TRUE)
+        ${branchFilterIn}
+      ),
+      candidatas AS (
+        SELECT 
+          ic.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY ic.persona_id, ic.tipo_servicio
+            ORDER BY 
+              CASE WHEN ic.es_activa THEN 0 ELSE 1 END,
+              ic.fecha_vencimiento DESC,
+              ic.idinscripcion DESC
+          ) as rn_por_tipo
+        FROM inscripciones_calculadas ic
       )
       SELECT 
         p.id as idpersona,
@@ -126,34 +438,32 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
         COALESCE(
           json_agg(
             json_build_object(
-              'idinscripcion', ti.idinscripcion,
-              'idservicio', ti.servicio_id,
-              'nombre_servicio', ti.nombre_servicio,
-              'ingresos_disponibles', ti.ingresos_disponibles,
-              'fecha_inicio', ti.fecha_inicio,
-              'fecha_vencimiento', ti.fecha_vencimiento,
-              'estado', ti.estado,
-              'sucursal_id', ti.sucursal_id,
-              'multisucursal', ti.multisucursal,
-              'estado_servicio', ti.estado_servicio,
-              'servicio_ingresos_ilimitados', (ti.servicio_ingresos_ilimitados IS NULL),
-              'tiene_visitas_disponibles', ti.tiene_visitas_disponibles,
-              'esta_en_rango_fechas', ti.esta_en_rango_fechas
+              'idinscripcion', c.idinscripcion,
+              'idservicio', c.servicio_id,
+              'nombre_servicio', c.nombre_servicio,
+              'ingresos_disponibles', c.ingresos_disponibles,
+              'fecha_inicio', c.fecha_inicio,
+              'fecha_vencimiento', c.fecha_vencimiento,
+              'estado', c.estado,
+              'estado_inscripcion', c.estado_inscripcion,
+              'sucursal_id', c.sucursal_id,
+              'multisucursal', c.multisucursal,
+              'tipo_servicio', c.tipo_servicio,
+              'servicio_ingresos_ilimitados', (c.servicio_ingresos_ilimitados IS NULL)
             ) ORDER BY 
-              ti.sucursal_id,
-              CASE WHEN ti.estado_servicio = 'activo' THEN 0 ELSE 1 END,
-              ti.fecha_vencimiento DESC
-          ) FILTER (WHERE ti.idinscripcion IS NOT NULL AND ti.rn = 1),
+              CASE WHEN c.es_activa THEN 0 ELSE 1 END,
+              c.tipo_servicio ASC,
+              c.fecha_vencimiento DESC
+          ) FILTER (WHERE c.idinscripcion IS NOT NULL AND c.rn_por_tipo = 1),
           '[]'
         ) as servicios
       FROM personas p
-      LEFT JOIN todas_las_inscripciones ti ON p.id = ti.persona_id
-      WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
-      AND p.estado = 0
+      LEFT JOIN candidatas c ON p.id = c.persona_id AND c.rn_por_tipo = 1
+      WHERE ${buildPersonSearchWhere("p", 1)}
     `;
 
     if (typeFilter === "all") {
-      clientSql += ` AND NOT EXISTS (SELECT 1 FROM empleados e WHERE e.persona_id = p.id AND e.estado = 1)`;
+      clientSql += ` AND NOT EXISTS (SELECT 1 FROM empleados e WHERE e.persona_id = p.id)`;
     }
 
     clientSql += ` GROUP BY p.id`;
@@ -162,8 +472,18 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
     results.push(...clientResult.rows);
   }
 
+  // ============================================
+  // EMPLEADOS
+  // ============================================
   if (typeFilter === "all" || typeFilter === "empleado") {
-    const employeeParams = [searchParam, branchId];
+    const employeeParams = [searchParam];
+    let branchCond = "";
+
+    if (filtrarPorSucursal) {
+      employeeParams.push(Number(branchId));
+      branchCond = `AND (e.sucursal_id = $2 OR e.rol IN ('admin', 'limpieza'))`;
+    }
+
     let employeeSql = `
       SELECT 
         p.id as idpersona,
@@ -178,13 +498,21 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
           'rol', e.rol,
           'sucursal_id', e.sucursal_id,
           'estado', e.estado,
+          'trabaja_hoy', CASE
+            WHEN e.rol = 'admin' THEN true
+            ELSE EXISTS (
+              SELECT 1 FROM horarios_empleado he
+              WHERE he.empleado_id = e.id
+                AND he.dia_semana = EXTRACT(ISODOW FROM TIMEZONE('America/La_Paz', NOW()))::int
+            )
+          END,
           'ultimo_registro_entrada', (
             SELECT MAX(ra.fecha) 
             FROM registros_acceso ra 
             WHERE ra.persona_id = p.id 
             AND ra.tipo_persona = 'empleado' 
             AND ra.detalle LIKE '%Entrada%'
-            AND ra.sucursal_id = $2
+            ${filtrarPorSucursal ? "AND ra.sucursal_id = $2" : ""}
           ),
           'ultimo_registro_salida', (
             SELECT MAX(ra.fecha) 
@@ -192,34 +520,35 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
             WHERE ra.persona_id = p.id 
             AND ra.tipo_persona = 'empleado' 
             AND ra.detalle LIKE '%Salida%'
-            AND ra.sucursal_id = $2
+            ${filtrarPorSucursal ? "AND ra.sucursal_id = $2" : ""}
           ),
           'estado_actual', CASE 
             WHEN EXISTS (
               SELECT 1 FROM registros_acceso ra 
               WHERE ra.persona_id = p.id 
               AND ra.tipo_persona = 'empleado' 
-              AND ra.detalle LIKE '%Entrada%'
-              AND ra.sucursal_id = $2
-              AND ra.fecha > COALESCE((
-                SELECT MAX(ra2.fecha) 
-                FROM registros_acceso ra2 
-                WHERE ra2.persona_id = p.id 
-                AND ra2.tipo_persona = 'empleado' 
-                AND ra2.detalle LIKE '%Salida%'
-                AND ra2.sucursal_id = $2
-              ), '1900-01-01')
+              AND ra.estado = 'exitoso'
+              AND ra.detalle LIKE 'Entrada%'
+              AND ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
+              ${filtrarPorSucursal ? "AND ra.sucursal_id = $2" : ""}
+              AND NOT EXISTS (
+                SELECT 1 FROM registros_acceso ra2
+                WHERE ra2.persona_id = p.id
+                  AND ra2.tipo_persona = 'empleado'
+                  AND ra2.estado = 'exitoso'
+                  AND ra2.detalle LIKE 'Salida%'
+                  AND ra2.fecha > ra.fecha
+                  AND ra2.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
+                  ${filtrarPorSucursal ? "AND ra2.sucursal_id = $2" : ""}
+              )
             ) THEN 'in' 
             ELSE 'out' 
           END
         ) as empleado_info
       FROM personas p
       INNER JOIN empleados e ON p.id = e.persona_id
-      WHERE (p.nombres ILIKE $1 OR p.apellidos ILIKE $1 OR p.ci ILIKE $1)
-      AND e.estado = 1
-      AND p.estado = 0
-      -- MODIFICADO: Los empleados de limpieza aparecen en todas las sucursales
-      AND (e.sucursal_id = $2 OR e.rol = 'limpieza')
+      WHERE ${buildPersonSearchWhere("p", 1)}
+      ${branchCond}
     `;
 
     const employeeResult = await query(employeeSql, employeeParams);
@@ -229,7 +558,15 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
   return results;
 };
 
-const getLatestMultisucursalInscriptions = async (personId, serviceId, fechaInicio, fechaVencimiento) => {
+// ============================================
+// MULTISUCURSAL HELPER
+// ============================================
+const getLatestMultisucursalInscriptions = async (
+  personId,
+  serviceId,
+  fechaInicio,
+  fechaVencimiento
+) => {
   const result = await query(
     `
     WITH ranked_inscriptions AS (
@@ -254,10 +591,13 @@ const getLatestMultisucursalInscriptions = async (personId, serviceId, fechaInic
     `,
     [personId, serviceId, fechaInicio, fechaVencimiento]
   );
-  
+
   return result.rows;
 };
 
+// ============================================
+// CHECK PAGOS PENDIENTES
+// ============================================
 const checkPagosPendientes = async (personId) => {
   try {
     const result = await query(
@@ -279,24 +619,52 @@ const checkPagosPendientes = async (personId) => {
       `,
       [personId]
     );
-    
-    if (result.rows.length === 0) {
-      return null;
-    }
+
+    if (result.rows.length === 0) return null;
 
     const pago = result.rows[0];
-    
+
     return {
       monto_pendiente: parseFloat(pago.monto_pendiente),
       monto_total: parseFloat(pago.monto_total),
-      servicio_nombre: pago.servicio_nombre
+      servicio_nombre: pago.servicio_nombre,
     };
   } catch (error) {
-    console.error('Error en checkPagosPendientes:', error);
+    console.error("Error en checkPagosPendientes:", error);
     return null;
   }
 };
 
+// ============================================
+// CHECK: YA INGRESÓ HOY (por inscripción)
+// ============================================
+const checkYaIngresóHoy = async (inscripcionId) => {
+  const result = await query(
+    `
+    SELECT 
+      ra.id,
+      ra.sucursal_id,
+      s.nombre AS sucursal_nombre,
+      TO_CHAR(ra.fecha, 'HH24:MI') AS hora_ingreso
+    FROM registros_acceso ra
+    INNER JOIN sucursales s ON ra.sucursal_id = s.id
+    WHERE ra.inscripcion_id = $1
+      AND ra.tipo_persona = 'cliente'
+      AND ra.estado = 'exitoso'
+      AND ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
+    ORDER BY ra.fecha DESC
+    LIMIT 1
+    `,
+    [inscripcionId]
+  );
+
+  if (result.rows.length === 0) return null;
+  return result.rows[0];
+};
+
+// ============================================
+// REGISTER CLIENT ACCESS
+// ============================================
 exports.registerClientAccess = async (
   personId,
   serviceId,
@@ -310,130 +678,178 @@ exports.registerClientAccess = async (
       s.id as servicio_real_id,
       s.nombre as servicio_nombre, 
       s.multisucursal,
-      s.numero_ingresos as servicio_ingresos_ilimitados
+      s.numero_ingresos as servicio_ingresos_ilimitados,
+      p.nombres AS persona_nombres,
+      p.apellidos AS persona_apellidos,
+      p.ci AS persona_ci
     FROM inscripciones i
     INNER JOIN servicios s ON i.servicio_id = s.id
     INNER JOIN personas p ON i.persona_id = p.id
     WHERE i.persona_id = $1 AND i.id = $2
     AND (i.sucursal_id = $3 OR s.multisucursal = TRUE)
-    AND p.estado = 0
   `,
     [personId, serviceId, branchId]
   );
 
+  const insertLogAndReturn = async ({
+    inscripcionId,
+    servicioId,
+    detalle,
+    estado,
+  }) => {
+    const logInsert = await query(
+      `
+      INSERT INTO registros_acceso 
+      (persona_id, servicio_id, inscripcion_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, TIMEZONE('America/La_Paz', NOW()), 'cliente')
+      RETURNING id, TO_CHAR(fecha, 'YYYY-MM-DD HH24:MI') as fecha
+      `,
+      [
+        personId,
+        servicioId,
+        inscripcionId,
+        detalle,
+        estado,
+        branchId,
+        userId,
+      ]
+    );
+
+    return {
+      id: logInsert.rows[0].id.toString(),
+      timestamp: logInsert.rows[0].fecha,
+      memberName: "",
+      memberType: "client",
+      detail: detalle,
+      status: estado === "exitoso" ? "success" : "denied",
+      ci: undefined,
+    };
+  };
+
   if (client.rows.length === 0) {
-    throw new Error("Inscripción no encontrada, no válida para esta sucursal, servicio eliminado o cliente eliminado");
+    const servicioInfo = await query(
+      `SELECT s.nombre 
+       FROM servicios s
+       INNER JOIN inscripciones i ON i.servicio_id = s.id
+       WHERE i.id = $1`,
+      [serviceId]
+    );
+    const nombreServicio = servicioInfo.rows[0]?.nombre || "Desconocido";
+    const detalle = `Acceso denegado - Inscripción no válida para esta sucursal (${nombreServicio})`;
+
+    const log = await insertLogAndReturn({
+      inscripcionId: serviceId,
+      servicioId: servicioInfo.rows[0] ? serviceId : null,
+      detalle,
+      estado: "denegado",
+    });
+
+    return {
+      success: false,
+      message: "Inscripción no encontrada o no válida para esta sucursal",
+      log,
+    };
   }
 
   const inscription = client.rows[0];
+  const inscripcionId = inscription.id;
 
-  const checkExpiration = await query(
-    `
-    SELECT 
-      CASE 
-        WHEN fecha_vencimiento::date < TIMEZONE('America/La_Paz', NOW())::date THEN true
-        ELSE false
-      END as esta_vencido,
-      fecha_vencimiento,
-      fecha_inicio
-    FROM inscripciones 
-    WHERE id = $1
-  `,
-    [serviceId]
-  );
-
-  const isExpired = checkExpiration.rows[0]?.esta_vencido || false;
-  const fechaInicio = checkExpiration.rows[0]?.fecha_inicio;
-  const fechaVencimiento = checkExpiration.rows[0]?.fecha_vencimiento;
-  const hoy = new Date();
-  
-  const dentroDeRango = fechaInicio <= hoy && fechaVencimiento >= hoy;
-
-  if (isExpired) {
-    const fechaVencimientoFormateada = formatDate(fechaVencimiento);
-    
-    await query(
-      `
-      INSERT INTO registros_acceso 
-      (persona_id, servicio_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
-      VALUES ($1, $2, $3, $4, $5, $6, TIMEZONE('America/La_Paz', NOW()), 'cliente')
-    `,
-      [
-        personId,
-        inscription.servicio_real_id,
-        `Acceso denegado - Servicio ${inscription.servicio_nombre} vencido (venció el ${fechaVencimientoFormateada})`,
-        "denegado",
-        branchId,
-        userId,
-      ]
-    );
-
-    return {
-      success: false,
-      message: `Servicio ${inscription.servicio_nombre} vencido`,
-    };
-  }
-
-  if (!dentroDeRango) {
-    await query(
-      `
-      INSERT INTO registros_acceso 
-      (persona_id, servicio_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
-      VALUES ($1, $2, $3, $4, $5, $6, TIMEZONE('America/La_Paz', NOW()), 'cliente')
-    `,
-      [
-        personId,
-        inscription.servicio_real_id,
-        `Acceso denegado - Fuera del período de vigencia del servicio ${inscription.servicio_nombre}`,
-        "denegado",
-        branchId,
-        userId,
-      ]
-    );
-
-    return {
-      success: false,
-      message: `Fuera del período de vigencia del servicio ${inscription.servicio_nombre}`,
-    };
-  }
+  const memberName = `${inscription.persona_nombres} ${inscription.persona_apellidos}`;
+  const memberCi = inscription.persona_ci;
 
   const isUnlimitedService = inscription.servicio_ingresos_ilimitados === null;
 
-  if (!isUnlimitedService && inscription.ingresos_disponibles <= 0) {
-    await query(
-      `
-      INSERT INTO registros_acceso 
-      (persona_id, servicio_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
-      VALUES ($1, $2, $3, $4, $5, $6, TIMEZONE('America/La_Paz', NOW()), 'cliente')
-    `,
-      [
-        personId,
-        inscription.servicio_real_id,
-        `Acceso denegado - Sin ingresos disponibles para ${inscription.servicio_nombre}`,
-        "denegado",
-        branchId,
-        userId,
-      ]
-    );
+  if (inscription.estado_inscripcion !== "activo") {
+    const motivo =
+      inscription.fecha_vencimiento &&
+      inscription.fecha_vencimiento.toISOString().slice(0, 10) <
+        new Date().toISOString().slice(0, 10)
+        ? `Servicio ${inscription.servicio_nombre} vencido`
+        : `Servicio ${inscription.servicio_nombre} sin ingresos disponibles o inactivo`;
+
+    const detalle = `Acceso denegado - ${motivo}`;
+    const log = await insertLogAndReturn({
+      inscripcionId,
+      servicioId: inscription.servicio_real_id,
+      detalle,
+      estado: "denegado",
+    });
+    log.memberName = memberName;
+    log.ci = memberCi;
 
     return {
       success: false,
-      message: `Sin ingresos disponibles para ${inscription.servicio_nombre}`,
+      message: motivo,
+      log,
+    };
+  }
+
+  if (!isUnlimitedService) {
+    const ingresoPrevio = await checkYaIngresóHoy(inscripcionId);
+
+    if (ingresoPrevio) {
+      const motivo = `Ya se ingresó una vez hoy a ${ingresoPrevio.sucursal_nombre} con esta inscripción`;
+      const detalle = `Acceso denegado - ${motivo}`;
+
+      const log = await insertLogAndReturn({
+        inscripcionId,
+        servicioId: inscription.servicio_real_id,
+        detalle,
+        estado: "denegado",
+      });
+      log.memberName = memberName;
+      log.ci = memberCi;
+
+      return {
+        success: false,
+        message: motivo,
+        log,
+      };
+    }
+  }
+
+  const fechaActualResult = await query(
+    `SELECT TIMEZONE('America/La_Paz', NOW()) as ahora`
+  );
+  const ahora = new Date(fechaActualResult.rows[0].ahora);
+
+  const validacionHorario = await validarHorarioServicio(
+    inscription.servicio_real_id,
+    ahora
+  );
+
+  if (!validacionHorario.valid) {
+    const detalle = `Acceso denegado - ${validacionHorario.reason} (Servicio: ${inscription.servicio_nombre})`;
+
+    const log = await insertLogAndReturn({
+      inscripcionId,
+      servicioId: inscription.servicio_real_id,
+      detalle,
+      estado: "denegado",
+    });
+    log.memberName = memberName;
+    log.ci = memberCi;
+
+    return {
+      success: false,
+      message: validacionHorario.reason,
+      log,
     };
   }
 
   let remainingVisits = 0;
   let latestMultisucursalInscriptions = [];
-  
+
   if (!isUnlimitedService) {
     if (inscription.multisucursal) {
-      latestMultisucursalInscriptions = await getLatestMultisucursalInscriptions(
-        personId, 
-        inscription.servicio_real_id, 
-        inscription.fecha_inicio, 
-        inscription.fecha_vencimiento
-      );
-      
+      latestMultisucursalInscriptions =
+        await getLatestMultisucursalInscriptions(
+          personId,
+          inscription.servicio_real_id,
+          inscription.fecha_inicio,
+          inscription.fecha_vencimiento
+        );
+
       for (const multiInscription of latestMultisucursalInscriptions) {
         await query(
           `
@@ -444,12 +860,12 @@ exports.registerClientAccess = async (
           [multiInscription.id]
         );
       }
-      
+
       const updatedInscription = await query(
         `SELECT ingresos_disponibles FROM inscripciones WHERE id = $1`,
         [serviceId]
       );
-      
+
       remainingVisits = updatedInscription.rows[0]?.ingresos_disponibles || 0;
     } else {
       await query(
@@ -465,30 +881,30 @@ exports.registerClientAccess = async (
         `SELECT ingresos_disponibles FROM inscripciones WHERE id = $1`,
         [serviceId]
       );
-      
+
       remainingVisits = updatedInscription.rows[0]?.ingresos_disponibles || 0;
+    }
+
+    if (remainingVisits <= 0) {
+      await query(
+        `UPDATE inscripciones SET estado_inscripcion = 'inactivo' WHERE id = $1`,
+        [serviceId]
+      );
     }
   }
 
-  const detailMessage = isUnlimitedService 
+  const detailMessage = isUnlimitedService
     ? `Acceso exitoso - ${inscription.servicio_nombre} (Ingresos ilimitados)`
     : `Acceso exitoso - ${inscription.servicio_nombre} (Visitas restantes: ${remainingVisits})`;
 
-  await query(
-    `
-    INSERT INTO registros_acceso 
-    (persona_id, servicio_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
-    VALUES ($1, $2, $3, $4, $5, $6, TIMEZONE('America/La_Paz', NOW()), 'cliente')
-  `,
-    [
-      personId,
-      inscription.servicio_real_id,
-      detailMessage,
-      "exitoso",
-      branchId,
-      userId,
-    ]
-  );
+  const log = await insertLogAndReturn({
+    inscripcionId,
+    servicioId: inscription.servicio_real_id,
+    detalle: detailMessage,
+    estado: "exitoso",
+  });
+  log.memberName = memberName;
+  log.ci = memberCi;
 
   const pagoPendiente = await checkPagosPendientes(personId);
 
@@ -497,16 +913,24 @@ exports.registerClientAccess = async (
     message: `Acceso registrado para ${inscription.servicio_nombre}`,
     remainingVisits: isUnlimitedService ? null : remainingVisits,
     isMultisucursal: inscription.multisucursal,
-    updatedInscriptionsCount: inscription.multisucursal ? latestMultisucursalInscriptions.length : 1,
+    updatedInscriptionsCount: inscription.multisucursal
+      ? latestMultisucursalInscriptions.length
+      : 1,
     tieneDeuda: pagoPendiente !== null,
-    deudaInfo: pagoPendiente ? {
-      montoPendiente: pagoPendiente.monto_pendiente,
-      montoTotal: pagoPendiente.monto_total,
-      servicioNombre: pagoPendiente.servicio_nombre
-    } : null
+    deudaInfo: pagoPendiente
+      ? {
+          montoPendiente: pagoPendiente.monto_pendiente,
+          montoTotal: pagoPendiente.monto_total,
+          servicioNombre: pagoPendiente.servicio_nombre,
+        }
+      : null,
+    log,
   };
 };
 
+// ============================================
+// HELPER: EMPLOYEE SCHEDULE (según rol y día)
+// ============================================
 const getEmployeeScheduleForToday = async (employeeId) => {
   const employeeResult = await query(
     `SELECT rol FROM empleados WHERE id = $1`,
@@ -519,97 +943,242 @@ const getEmployeeScheduleForToday = async (employeeId) => {
 
   const rol = employeeResult.rows[0].rol;
 
-  // Si es limpieza, no tiene horario (retorna null)
-  if (rol === 'limpieza') {
+  if (!rolRequiereHorario(rol)) {
     return null;
   }
 
   const dayResult = await query(
-    `SELECT EXTRACT(DOW FROM TIMEZONE('America/La_Paz', NOW())) as dia_semana_postgres`
+    `SELECT EXTRACT(ISODOW FROM TIMEZONE('America/La_Paz', NOW()))::int as dia`
   );
-  let diaSemanaActual = dayResult.rows[0].dia_semana_postgres;
-  
-  let diaSemanaBusqueda;
-  
-  if (diaSemanaActual === 0) {
-    diaSemanaBusqueda = 7;
-  } else if (diaSemanaActual >= 1 && diaSemanaActual <= 5) {
-    diaSemanaBusqueda = 1;
-  } else if (diaSemanaActual === 6) {
-    diaSemanaBusqueda = 6;
-  } else {
-    diaSemanaBusqueda = diaSemanaActual;
-  }
+  const diaSemanaActual = dayResult.rows[0].dia;
 
   const horarioResult = await query(
-    `SELECT hora_ingreso, hora_salida 
-     FROM horarios_empleado 
+    `SELECT hora_ingreso, hora_salida
+     FROM horarios_empleado
      WHERE empleado_id = $1 AND dia_semana = $2`,
-    [employeeId, diaSemanaBusqueda]
+    [employeeId, diaSemanaActual]
   );
 
   if (horarioResult.rows.length > 0) {
     return horarioResult.rows[0];
   }
 
-  if (diaSemanaBusqueda === 1) {
-    const anyScheduleResult = await query(
-      `SELECT hora_ingreso, hora_salida 
-       FROM horarios_empleado 
-       WHERE empleado_id = $1 
-       ORDER BY dia_semana 
-       LIMIT 1`,
-      [employeeId]
-    );
-
-    if (anyScheduleResult.rows.length > 0) {
-      return anyScheduleResult.rows[0];
-    }
-  }
-
-  if (diaSemanaBusqueda === 6 || diaSemanaBusqueda === 7) {
-    const anyScheduleResult = await query(
-      `SELECT hora_ingreso, hora_salida 
-       FROM horarios_empleado 
-       WHERE empleado_id = $1 
-       ORDER BY dia_semana 
-       LIMIT 1`,
-      [employeeId]
-    );
-
-    if (anyScheduleResult.rows.length > 0) {
-      return anyScheduleResult.rows[0];
-    }
-  }
-
-  throw new Error("El empleado no tiene horarios definidos");
+  return {
+    noTrabajaHoy: true,
+    diaSemanaActual,
+    rol,
+  };
 };
 
+// ============================================
+// HELPER: ESTADO ACTUAL DEL EMPLEADO (por persona) - HOY
+// ============================================
+const getEmployeeEstadoHoy = async (personaId) => {
+  const result = await query(
+    `
+    SELECT 
+      ra.detalle,
+      ra.fecha
+    FROM registros_acceso ra
+    WHERE ra.persona_id = $1
+      AND ra.tipo_persona = 'empleado'
+      AND ra.estado = 'exitoso'
+      AND ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
+      AND (ra.detalle LIKE 'Entrada%' OR ra.detalle LIKE 'Salida%')
+    ORDER BY ra.fecha DESC
+    LIMIT 1
+    `,
+    [personaId]
+  );
+
+  if (result.rows.length === 0) {
+    return { estado: "out", ultimoDetalle: null };
+  }
+
+  const ultimo = result.rows[0];
+  const esEntrada = ultimo.detalle.startsWith("Entrada");
+
+  return {
+    estado: esEntrada ? "in" : "out",
+    ultimoDetalle: ultimo.detalle,
+  };
+};
+
+// ============================================
+// HELPER: BUSCAR ENTRADA HUÉRFANA DE DÍAS ANTERIORES
+// ============================================
+const getEntradaHuerfanaAnterior = async (personaId, employeeId) => {
+  const result = await query(
+    `
+    SELECT 
+      ra.id,
+      ra.fecha::date::text as fecha_dia,
+      ra.detalle,
+      ra.sucursal_id,
+      ra.usuario_registro_id
+    FROM registros_acceso ra
+    WHERE ra.persona_id = $1
+      AND ra.tipo_persona = 'empleado'
+      AND ra.estado = 'exitoso'
+      AND ra.detalle LIKE 'Entrada%'
+      AND ra.fecha::date < TIMEZONE('America/La_Paz', NOW())::date
+      AND NOT EXISTS (
+        SELECT 1 FROM registros_acceso ra2
+        WHERE ra2.persona_id = ra.persona_id
+          AND ra2.tipo_persona = 'empleado'
+          AND ra2.estado = 'exitoso'
+          AND ra2.detalle LIKE 'Salida%'
+          AND ra2.fecha > ra.fecha
+          AND ra2.fecha::date <= TIMEZONE('America/La_Paz', NOW())::date
+      )
+    ORDER BY ra.fecha DESC
+    LIMIT 1
+    `,
+    [personaId]
+  );
+
+  if (result.rows.length === 0) return null;
+
+  const entrada = result.rows[0];
+
+  const diaSemana = await query(
+    `SELECT EXTRACT(ISODOW FROM $1::date)::int as dia`,
+    [entrada.fecha_dia]
+  );
+  const diaNum = diaSemana.rows[0].dia;
+
+  const teniaHorario = await query(
+    `SELECT 1 FROM horarios_empleado 
+     WHERE empleado_id = $1 AND dia_semana = $2
+     LIMIT 1`,
+    [employeeId, diaNum]
+  );
+
+  return {
+    ...entrada,
+    diaSemana: diaNum,
+    nombreDia: NOMBRES_DIAS[diaNum],
+    eraDiaLaboral: teniaHorario.rows.length > 0,
+  };
+};
+
+// ============================================
+// HELPER: CERRAR ENTRADA HUÉRFANA COMO "SIN MARCAR"
+// ============================================
+const cerrarEntradaHuerfana = async ({
+  personaId,
+  branchId,
+  userId,
+  entrada,
+}) => {
+  const detalle = `Salida: Sin Marcar (${entrada.nombreDia} - olvidó registrar salida)`;
+
+  await query(
+    `
+    INSERT INTO registros_acceso 
+    (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
+    VALUES (
+      $1, 
+      $2, 
+      'exitoso', 
+      $3, 
+      $4, 
+      (($5::date) + TIMEZONE('America/La_Paz', NOW())::time),
+      'empleado'
+    )
+    `,
+    [
+      personaId,
+      detalle,
+      branchId || entrada.sucursal_id,
+      userId || entrada.usuario_registro_id,
+      entrada.fecha_dia,
+    ]
+  );
+
+  return detalle;
+};
+
+// ============================================
+// HELPER: registra log de acceso denegado de empleado
+// ============================================
+const registrarAccesoDenegadoEmpleado = async ({
+  personaId,
+  branchId,
+  userId,
+  motivo,
+  rol,
+}) => {
+  const detalle = `Acceso denegado - ${motivo} (rol: ${rol})`;
+
+  await query(
+    `
+    INSERT INTO registros_acceso
+    (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
+    VALUES ($1, $2, $3, $4, $5, TIMEZONE('America/La_Paz', NOW()), 'empleado')
+    `,
+    [personaId, detalle, "denegado", branchId, userId]
+  );
+
+  return detalle;
+};
+
+// ============================================
+// REGISTER EMPLOYEE CHECK-IN
+// ============================================
 exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   const employee = await query(
     `
-    SELECT e.*, p.nombres, p.apellidos, p.ci
+    SELECT e.*, p.nombres, p.apellidos, p.ci, p.estado AS persona_estado
     FROM empleados e
     INNER JOIN personas p ON e.persona_id = p.id
     WHERE e.id = $1
-    AND p.estado = 0
-  `,
+    `,
     [employeeId]
   );
 
   if (employee.rows.length === 0) {
-    throw new Error("Empleado no encontrado o eliminado");
+    throw new Error("Empleado no encontrado");
   }
 
   const emp = employee.rows[0];
 
-  // Si es limpieza, solo registra la hora de entrada sin verificar horario ni sucursal
-  if (emp.rol === 'limpieza') {
+  const { estado } = await getEmployeeEstadoHoy(emp.persona_id);
+
+  if (estado === "in") {
+    throw new Error(
+      "El empleado ya tiene una entrada registrada hoy sin salida. Debe registrar su salida antes de volver a ingresar."
+    );
+  }
+
+  const rol = emp.rol;
+  const requiereHorario = rolRequiereHorario(rol);
+
+  // Si hay entrada huérfana de días anteriores, cerrarla ANTES de registrar la entrada de hoy
+  let entradaHuerfanaCerrada = null;
+
+  if (requiereHorario) {
+    const entradaHuerfana = await getEntradaHuerfanaAnterior(
+      emp.persona_id,
+      employeeId
+    );
+
+    if (entradaHuerfana && entradaHuerfana.eraDiaLaboral) {
+      await cerrarEntradaHuerfana({
+        personaId: emp.persona_id,
+        branchId,
+        userId,
+        entrada: entradaHuerfana,
+      });
+      entradaHuerfanaCerrada = entradaHuerfana;
+    }
+  }
+
+  if (!requiereHorario) {
     const currentTimeResult = await query(
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
     );
     const horaActual = currentTimeResult.rows[0].hora_actual;
-
     const detail = `Entrada: ${horaActual}`;
 
     await query(
@@ -617,30 +1186,65 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
       INSERT INTO registros_acceso 
       (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
       VALUES ($1, $2, $3, $4, $5, TIMEZONE('America/La_Paz', NOW()), 'empleado')
-    `,
+      `,
       [emp.persona_id, detail, "exitoso", branchId, userId]
     );
 
     return {
       success: true,
-      message: detail,
+      message: entradaHuerfanaCerrada
+        ? `Se cerró la entrada del ${entradaHuerfanaCerrada.nombreDia} como "Sin Marcar". ${detail}`
+        : detail,
       isLate: false,
       minutes: 0,
+      rol,
     };
   }
 
   const horario = await getEmployeeScheduleForToday(employeeId);
 
+  if (horario && horario.noTrabajaHoy) {
+    const motivo = `Hoy no trabaja (${NOMBRES_DIAS[horario.diaSemanaActual]})`;
+
+    const detalle = await registrarAccesoDenegadoEmpleado({
+      personaId: emp.persona_id,
+      branchId,
+      userId,
+      motivo,
+      rol,
+    });
+
+    return {
+      success: false,
+      message: motivo,
+      isLate: false,
+      minutes: 0,
+      rol,
+      denied: true,
+      log: {
+        id: null,
+        timestamp: new Date().toISOString(),
+        memberName: `${emp.nombres} ${emp.apellidos}`.trim(),
+        memberType: "employee",
+        detail: detalle,
+        status: "denied",
+        ci: emp.ci,
+      },
+    };
+  }
+
   const currentTimeResult = await query(
     `SELECT TIMEZONE('America/La_Paz', NOW()) as hora_actual_bolivia`
   );
+  const horaActualBolivia = new Date(
+    currentTimeResult.rows[0].hora_actual_bolivia
+  );
 
-  const horaActualBolivia = currentTimeResult.rows[0].hora_actual_bolivia;
+  const [shiftHours, shiftMinutes, shiftSeconds] = horario.hora_ingreso
+    .split(":")
+    .map(Number);
 
-  const [shiftHours, shiftMinutes, shiftSeconds] = horario.hora_ingreso.split(':').map(Number);
-  
-  const hoy = new Date(horaActualBolivia);
-  const horaIngresoHoy = new Date(hoy);
+  const horaIngresoHoy = new Date(horaActualBolivia);
   horaIngresoHoy.setHours(shiftHours, shiftMinutes, shiftSeconds || 0, 0);
 
   const diffMs = horaActualBolivia - horaIngresoHoy;
@@ -649,11 +1253,11 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   let detail;
   let isLate = false;
   let minutes = 0;
-  
+
   if (diffMinutes > 0) {
     isLate = true;
     minutes = diffMinutes;
-    detail = `Entrada: ${diffMinutes} minuto${diffMinutes !== 1 ? 's' : ''} tarde`;
+    detail = `Entrada: ${diffMinutes} minuto${diffMinutes !== 1 ? "s" : ""} tarde`;
   } else {
     detail = `Entrada: A tiempo`;
   }
@@ -663,43 +1267,57 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
     INSERT INTO registros_acceso 
     (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
     VALUES ($1, $2, $3, $4, $5, TIMEZONE('America/La_Paz', NOW()), 'empleado')
-  `,
+    `,
     [emp.persona_id, detail, "exitoso", branchId, userId]
   );
 
   return {
     success: true,
-    message: detail,
+    message: entradaHuerfanaCerrada
+      ? `Se cerró la entrada del ${entradaHuerfanaCerrada.nombreDia} como "Sin Marcar". ${detail}`
+      : detail,
     isLate,
     minutes,
+    rol,
   };
 };
 
+// ============================================
+// REGISTER EMPLOYEE CHECK-OUT
+// ============================================
 exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   const employee = await query(
     `
-    SELECT e.*, p.nombres, p.apellidos, p.ci
+    SELECT e.*, p.nombres, p.apellidos, p.ci, p.estado AS persona_estado
     FROM empleados e
     INNER JOIN personas p ON e.persona_id = p.id
     WHERE e.id = $1
-    AND p.estado = 0
-  `,
+    `,
     [employeeId]
   );
 
   if (employee.rows.length === 0) {
-    throw new Error("Empleado no encontrado o eliminado");
+    throw new Error("Empleado no encontrado");
   }
 
   const emp = employee.rows[0];
 
-  // Si es limpieza, solo registra la hora de salida sin verificar horario ni sucursal
-  if (emp.rol === 'limpieza') {
+  const rol = emp.rol;
+  const requiereHorario = rolRequiereHorario(rol);
+
+  const { estado } = await getEmployeeEstadoHoy(emp.persona_id);
+
+  if (estado !== "in") {
+    throw new Error(
+      "El empleado no tiene una entrada registrada hoy. Debe registrar su entrada primero."
+    );
+  }
+
+  if (!requiereHorario) {
     const currentTimeResult = await query(
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
     );
     const horaActual = currentTimeResult.rows[0].hora_actual;
-
     const detail = `Salida: ${horaActual}`;
 
     await query(
@@ -707,7 +1325,7 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
       INSERT INTO registros_acceso 
       (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
       VALUES ($1, $2, $3, $4, $5, TIMEZONE('America/La_Paz', NOW()), 'empleado')
-    `,
+      `,
       [emp.persona_id, detail, "exitoso", branchId, userId]
     );
 
@@ -716,21 +1334,54 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
       message: detail,
       isEarly: false,
       minutes: 0,
+      rol,
     };
   }
 
   const horario = await getEmployeeScheduleForToday(employeeId);
 
+  if (horario && horario.noTrabajaHoy) {
+    const motivo = `Hoy no trabaja (${NOMBRES_DIAS[horario.diaSemanaActual]})`;
+
+    const detalle = await registrarAccesoDenegadoEmpleado({
+      personaId: emp.persona_id,
+      branchId,
+      userId,
+      motivo,
+      rol,
+    });
+
+    return {
+      success: false,
+      message: motivo,
+      isEarly: false,
+      minutes: 0,
+      rol,
+      denied: true,
+      log: {
+        id: null,
+        timestamp: new Date().toISOString(),
+        memberName: `${emp.nombres} ${emp.apellidos}`.trim(),
+        memberType: "employee",
+        detail: detalle,
+        status: "denied",
+        ci: emp.ci,
+      },
+    };
+  }
+
   const currentTimeResult = await query(
     `SELECT TIMEZONE('America/La_Paz', NOW()) as hora_actual_bolivia`
   );
+  const horaActualBolivia = new Date(
+    currentTimeResult.rows[0].hora_actual_bolivia
+  );
 
-  const horaActualBolivia = currentTimeResult.rows[0].hora_actual_bolivia;
+  const [shiftHours, shiftMinutes, shiftSeconds] = horario.hora_salida
+    .split(":")
+    .map(Number);
 
-  const [shiftHours, shiftMinutes, shiftSeconds] = horario.hora_salida.split(':').map(Number);
-  
-  const hoy = new Date(horaActualBolivia);
-  const horaSalidaHoy = new Date(hoy);
+  const horaSalidaHoy = new Date(horaActualBolivia);
   horaSalidaHoy.setHours(shiftHours, shiftMinutes, shiftSeconds || 0, 0);
 
   const diffMs = horaSalidaHoy - horaActualBolivia;
@@ -739,11 +1390,11 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   let detail;
   let isEarly = false;
   let minutes = 0;
-  
+
   if (diffMinutes > 0) {
     isEarly = true;
     minutes = diffMinutes;
-    detail = `Salida: ${diffMinutes} minuto${diffMinutes !== 1 ? 's' : ''} antes`;
+    detail = `Salida: ${diffMinutes} minuto${diffMinutes !== 1 ? "s" : ""} antes`;
   } else {
     detail = `Salida: A tiempo`;
   }
@@ -753,7 +1404,7 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     INSERT INTO registros_acceso 
     (persona_id, detalle, estado, sucursal_id, usuario_registro_id, fecha, tipo_persona)
     VALUES ($1, $2, $3, $4, $5, TIMEZONE('America/La_Paz', NOW()), 'empleado')
-  `,
+    `,
     [emp.persona_id, detail, "exitoso", branchId, userId]
   );
 
@@ -762,10 +1413,19 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
     message: detail,
     isEarly,
     minutes,
+    rol,
   };
 };
 
-exports.registerAccessDeniedNoActiveSubscription = async (personId, branchId, userId, memberName) => {
+// ============================================
+// REGISTER ACCESS DENIED (cliente sin inscripción)
+// ============================================
+exports.registerAccessDeniedNoActiveSubscription = async (
+  personId,
+  branchId,
+  userId,
+  memberName
+) => {
   await query(
     `
     INSERT INTO registros_acceso 
@@ -784,5 +1444,352 @@ exports.registerAccessDeniedNoActiveSubscription = async (personId, branchId, us
   return {
     success: false,
     message: `${memberName} no tiene inscripciones activas`,
+  };
+};
+
+// ============================================
+// HELPER: normaliza CI quitando espacios, guiones y extensión
+// ============================================
+const normalizeCI = (ci) => {
+  if (!ci) return "";
+  const base = String(ci)
+    .trim()
+    .split("-")[0]
+    .replace(/[\s.\-]/g, "")
+    .replace(/^0+/, "");
+  return base;
+};
+
+// ============================================
+// REGISTER ACCESS BY FINGERPRINT (flujo automático)
+// ============================================
+exports.registerAccessByFingerprint = async (ci, branchId, userId) => {
+  const rawCi = (ci || "").trim();
+  const normalizedCi = normalizeCI(rawCi);
+
+  if (!normalizedCi) {
+    throw new Error("CI requerido");
+  }
+
+  console.log(
+    `🔍 [FINGERPRINT] CI recibido: "${rawCi}" → normalizado: "${normalizedCi}"`
+  );
+
+  // 1. Buscar persona por CI con match tolerante y fallback por sufijo
+  let personaResult = await query(
+    `SELECT id, nombres, apellidos, ci
+     FROM personas
+     WHERE (
+         TRIM(ci) = $1
+         OR REGEXP_REPLACE(TRIM(ci), '[\\s.\\-]', '', 'g') = $2
+       )
+     LIMIT 1`,
+    [rawCi, normalizedCi]
+  );
+
+  if (personaResult.rows.length === 0 && normalizedCi.length >= 6) {
+    const suffix = normalizedCi.slice(-8);
+    personaResult = await query(
+      `SELECT id, nombres, apellidos, ci
+       FROM personas
+       WHERE REGEXP_REPLACE(TRIM(ci), '[\\s.\\-]', '', 'g') LIKE $1
+       LIMIT 1`,
+      [`%${suffix}`]
+    );
+
+    if (personaResult.rows.length > 0) {
+      console.log(
+        `⚠️ [FINGERPRINT] Match por sufijo: "${rawCi}" → persona CI "${personaResult.rows[0].ci}"`
+      );
+    }
+  }
+
+  if (personaResult.rows.length === 0) {
+    console.warn(
+      `❌ [FINGERPRINT] No se encontró persona para CI "${rawCi}" (normalizado: "${normalizedCi}")`
+    );
+
+    const isPlaceholder =
+      /^(\d)\1{5,}$/.test(normalizedCi) || normalizedCi.length < 5;
+
+    return {
+      success: false,
+      mode: "not_found",
+      message: isPlaceholder
+        ? "Lectura de huella no reconocida. Intente de nuevo."
+        : `No se encontró persona con CI ${rawCi}`,
+    };
+  }
+
+  const persona = personaResult.rows[0];
+  const memberName = `${persona.nombres} ${persona.apellidos}`.trim();
+
+  console.log(
+    `✅ [FINGERPRINT] Persona encontrada: ${memberName} (CI BD: ${persona.ci})`
+  );
+
+  // 2. ¿Es empleado?
+  const employeeResult = await query(
+    `SELECT 
+       e.id as idempleado,
+       e.rol,
+       e.sucursal_id,
+       e.estado,
+       CASE
+         WHEN e.rol = 'admin' THEN true
+         ELSE EXISTS (
+           SELECT 1 FROM horarios_empleado he
+           WHERE he.empleado_id = e.id
+             AND he.dia_semana = EXTRACT(ISODOW FROM TIMEZONE('America/La_Paz', NOW()))::int
+         )
+       END AS trabaja_hoy,
+       (
+         SELECT MAX(ra.fecha) 
+         FROM registros_acceso ra 
+         WHERE ra.persona_id = $1 
+           AND ra.tipo_persona = 'empleado' 
+           AND ra.detalle LIKE '%Entrada%'
+       ) AS ultimo_registro_entrada,
+       (
+         SELECT MAX(ra.fecha) 
+         FROM registros_acceso ra 
+         WHERE ra.persona_id = $1 
+           AND ra.tipo_persona = 'empleado' 
+           AND ra.detalle LIKE '%Salida%'
+       ) AS ultimo_registro_salida,
+       CASE 
+         WHEN EXISTS (
+           SELECT 1 FROM registros_acceso ra 
+           WHERE ra.persona_id = $1 
+             AND ra.tipo_persona = 'empleado' 
+             AND ra.estado = 'exitoso'
+             AND ra.detalle LIKE 'Entrada%'
+             AND ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
+             AND NOT EXISTS (
+               SELECT 1 FROM registros_acceso ra2
+               WHERE ra2.persona_id = $1
+                 AND ra2.tipo_persona = 'empleado'
+                 AND ra2.estado = 'exitoso'
+                 AND ra2.detalle LIKE 'Salida%'
+                 AND ra2.fecha > ra.fecha
+                 AND ra2.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
+             )
+         ) THEN 'in' 
+         ELSE 'out' 
+       END AS estado_actual
+     FROM empleados e
+     WHERE e.persona_id = $1
+     LIMIT 1`,
+    [persona.id]
+  );
+
+  if (employeeResult.rows.length > 0) {
+    const emp = employeeResult.rows[0];
+
+    if (emp.estado === 0) {
+      return {
+        success: false,
+        mode: "denied",
+        message: `El empleado ${memberName} está inactivo en el sistema`,
+        memberName,
+        ci: persona.ci,
+      };
+    }
+
+    let result;
+    if (emp.estado_actual === "in") {
+      result = await exports.registerEmployeeCheckOut(
+        emp.idempleado,
+        branchId,
+        userId
+      );
+    } else {
+      result = await exports.registerEmployeeCheckIn(
+        emp.idempleado,
+        branchId,
+        userId
+      );
+    }
+
+    if (result.log) {
+      return {
+        success: result.success !== false && !result.denied,
+        mode: "employee",
+        message: result.message,
+        denied: !!result.denied,
+        isLate: result.isLate || false,
+        isEarly: result.isEarly || false,
+        minutos: result.minutes || 0,
+        log: result.log,
+        memberName,
+        ci: persona.ci,
+      };
+    }
+
+    const logResult = await query(
+      `SELECT ra.id,
+              TO_CHAR(ra.fecha, 'YYYY-MM-DD HH24:MI') as fecha,
+              ra.detalle,
+              ra.estado
+       FROM registros_acceso ra
+       WHERE ra.persona_id = $1
+         AND ra.tipo_persona = 'empleado'
+         AND ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
+       ORDER BY ra.fecha DESC
+       LIMIT 1`,
+      [persona.id]
+    );
+
+    const logRow = logResult.rows[0];
+
+    return {
+      success: result.success !== false,
+      mode: "employee",
+      message: result.message,
+      isLate: result.isLate || false,
+      isEarly: result.isEarly || false,
+      minutos: result.minutes || 0,
+      log: logRow
+        ? {
+            id: logRow.id.toString(),
+            timestamp: logRow.fecha,
+            memberName,
+            memberType: "employee",
+            detail: logRow.detalle,
+            status: logRow.estado === "exitoso" ? "success" : "denied",
+            ci: persona.ci,
+          }
+        : null,
+      memberName,
+      ci: persona.ci,
+    };
+  }
+
+  // 3. Es cliente → obtener servicios activos
+  const servicesResult = await query(
+    `WITH inscripciones_calculadas AS (
+        SELECT
+          i.id as idinscripcion,
+          i.servicio_id,
+          i.ingresos_disponibles,
+          i.fecha_inicio::text as fecha_inicio,
+          i.fecha_vencimiento::text as fecha_vencimiento,
+          i.estado_inscripcion,
+          i.sucursal_id,
+          s.nombre as nombre_servicio,
+          s.multisucursal,
+          s.numero_ingresos as servicio_ingresos_ilimitados,
+          COALESCE(ts.nombre, 'general') as tipo_servicio,
+          CASE WHEN i.estado_inscripcion = 'activo' THEN true ELSE false END as es_activa
+        FROM inscripciones i
+        INNER JOIN servicios s ON i.servicio_id = s.id
+        LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
+        WHERE i.persona_id = $1
+          AND i.estado = 1
+          AND ($2::int IS NULL OR i.sucursal_id = $2 OR s.multisucursal = TRUE)
+      ),
+      candidatas AS (
+        SELECT
+          ic.*,
+          ROW_NUMBER() OVER (
+            PARTITION BY ic.tipo_servicio
+            ORDER BY
+              CASE WHEN ic.es_activa THEN 0 ELSE 1 END,
+              ic.fecha_vencimiento DESC,
+              ic.idinscripcion DESC
+          ) as rn_por_tipo
+        FROM inscripciones_calculadas ic
+      )
+      SELECT * FROM candidatas WHERE rn_por_tipo = 1`,
+    [persona.id, branchId || null]
+  );
+
+  const services = servicesResult.rows;
+
+  if (services.length === 0) {
+    await exports.registerAccessDeniedNoActiveSubscription(
+      persona.id,
+      branchId,
+      userId,
+      memberName
+    );
+
+    const logResult = await query(
+      `SELECT ra.id,
+              TO_CHAR(ra.fecha, 'YYYY-MM-DD HH24:MI') as fecha,
+              ra.detalle,
+              ra.estado
+       FROM registros_acceso ra
+       WHERE ra.persona_id = $1
+       ORDER BY ra.fecha DESC
+       LIMIT 1`,
+      [persona.id]
+    );
+    const logRow = logResult.rows[0];
+
+    return {
+      success: false,
+      mode: "denied",
+      message: `${memberName} no tiene inscripciones activas`,
+      log: logRow
+        ? {
+            id: logRow.id.toString(),
+            timestamp: logRow.fecha,
+            memberName,
+            memberType: "client",
+            detail: logRow.detalle,
+            status: "denied",
+            ci: persona.ci,
+          }
+        : null,
+      memberName,
+      ci: persona.ci,
+    };
+  }
+
+  // 4. Un solo servicio → registrar directo
+  if (services.length === 1) {
+    const svc = services[0];
+    const result = await exports.registerClientAccess(
+      persona.id,
+      svc.idinscripcion,
+      branchId,
+      userId
+    );
+
+    return {
+      success: !!result.success,
+      mode: "client_auto",
+      message: result.message,
+      tieneDeuda: !!result.tieneDeuda,
+      deudaInfo: result.deudaInfo || null,
+      remainingVisits: result.remainingVisits ?? null,
+      log: result.log || null,
+      memberName,
+      ci: persona.ci,
+    };
+  }
+
+  // 5. Múltiples servicios → requiere selección manual
+  return {
+    success: false,
+    mode: "requires_selection",
+    message: `${memberName} tiene varios servicios activos. Seleccione uno.`,
+    memberName,
+    ci: persona.ci,
+    memberId: persona.id.toString(),
+    services: services.map((s) => ({
+      id: s.idinscripcion.toString(),
+      name: s.nombre_servicio,
+      visits:
+        s.servicio_ingresos_ilimitados === null
+          ? null
+          : s.ingresos_disponibles,
+      status: s.estado_inscripcion === "activo" ? "active" : "expired",
+      expirationDate: s.fecha_vencimiento,
+      tipoServicio: s.tipo_servicio,
+      branchId: s.sucursal_id,
+      multisucursal: s.multisucursal,
+    })),
   };
 };
