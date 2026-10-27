@@ -30,7 +30,6 @@ function buildErrorResponse(error) {
     if (error.constraint === "usuarios_username_key") {
       return { status: 400, message: "username_unique" };
     }
-    // Fallback genérico de duplicado
     if (error.message?.includes("personas_ci_key")) {
       return { status: 400, message: "ci_unique" };
     }
@@ -44,7 +43,6 @@ function buildErrorResponse(error) {
   }
 
   if (error.code === "42703") {
-    // Column does not exist
     return {
       status: 500,
       message: `Error de esquema: la columna "${error.column || "?"}" no existe en la tabla "${error.table || "?"}".`,
@@ -52,7 +50,6 @@ function buildErrorResponse(error) {
   }
 
   if (error.code === "23502") {
-    // Not null violation
     return {
       status: 400,
       message: `Falta un campo obligatorio: ${error.column || "desconocido"}`,
@@ -60,14 +57,12 @@ function buildErrorResponse(error) {
   }
 
   if (error.code === "22P02") {
-    // Invalid text representation (ej: mandar string donde va integer)
     return {
       status: 400,
       message: `Formato de dato inválido en algún campo: ${error.message}`,
     };
   }
 
-  // Fallback: siempre devolvemos algo
   const fallbackMessage =
     error.message && error.message.trim().length > 0
       ? error.message
@@ -180,7 +175,6 @@ exports.updateEmployee = async (req, res) => {
     const { id } = req.params;
     const employeeData = req.body;
 
-    // Validaciones básicas
     if (
       !employeeData.nombres ||
       !employeeData.apellidos ||
@@ -193,7 +187,6 @@ exports.updateEmployee = async (req, res) => {
         .json({ message: "Todos los campos son obligatorios" });
     }
 
-    // Validar usuario para roles administrativos
     if (["admin", "recepcionista"].includes(employeeData.cargo)) {
       if (!employeeData.username) {
         return res
@@ -202,7 +195,6 @@ exports.updateEmployee = async (req, res) => {
       }
     }
 
-    // Validaciones para roles que requieren sucursal
     if (employeeData.cargo !== "admin") {
       if (!employeeData.sucursal_id) {
         return res
@@ -211,7 +203,6 @@ exports.updateEmployee = async (req, res) => {
       }
     }
 
-    // Validar caja solo para recepcionista
     if (employeeData.cargo === "recepcionista" && !employeeData.caja_id) {
       return res
         .status(400)
@@ -251,11 +242,45 @@ exports.toggleEmployeeStatus = async (req, res) => {
   }
 };
 
+// ============================================
+// REGISTER FINGERPRINT (compat: empleado_id o persona_id)
+// ============================================
 exports.registerFingerprint = async (req, res) => {
   try {
     const { id } = req.params;
-    await employeeService.registerFingerprint(id);
-    res.status(200).json({ message: "Huella registrada exitosamente" });
+    const result = await employeeService.registerFingerprint(id);
+    res.status(200).json({
+      message: "Huella registrada exitosamente",
+      ...result,
+    });
+  } catch (error) {
+    const { status, message } = buildErrorResponse(error);
+    res.status(status).json({ message });
+  }
+};
+
+// ============================================
+// 🆕 REGISTER FINGERPRINT BY PERSONA ID (explícito, sin ambigüedad)
+// ============================================
+exports.registerFingerprintByPersona = async (req, res) => {
+  try {
+    const { personaId } = req.params;
+
+    const personaIdNum = Number(personaId);
+    if (!personaId || Number.isNaN(personaIdNum) || personaIdNum <= 0) {
+      return res.status(400).json({
+        message: "personaId inválido",
+        received: personaId,
+      });
+    }
+
+    const result =
+      await employeeService.registerFingerprintByPersonaId(personaIdNum);
+
+    res.status(200).json({
+      message: "Huella registrada exitosamente",
+      ...result,
+    });
   } catch (error) {
     const { status, message } = buildErrorResponse(error);
     res.status(status).json({ message });

@@ -1,3 +1,4 @@
+// src/services/employeeService.js
 const { query, pool } = require("../../db");
 const bcrypt = require("bcrypt");
 
@@ -16,9 +17,16 @@ exports.getBranches = async () => {
 // ============================================
 exports.getBoxes = async () => {
   const result = await query(
-    "SELECT id, nombre, sucursal_id, estado FROM cajas WHERE estado = 1 ORDER BY nombre"
+    "SELECT id, nombre, sucursal_id, estado_caja FROM cajas ORDER BY nombre"
   );
-  return result.rows;
+
+  return result.rows.map((row) => ({
+    id: row.id,
+    nombre: row.nombre,
+    sucursal_id: row.sucursal_id,
+    estado: 1,
+    estado_caja: row.estado_caja,
+  }));
 };
 
 // ============================================
@@ -99,7 +107,6 @@ exports.createEmployee = async (employeeData) => {
   try {
     await client.query("BEGIN");
 
-    // 1. Crear persona
     const personaResult = await client.query(
       `INSERT INTO personas (nombres, apellidos, ci, telefono, estado) 
        VALUES ($1, $2, $3, $4, 1) RETURNING id`,
@@ -107,7 +114,6 @@ exports.createEmployee = async (employeeData) => {
     );
     const personaId = personaResult.rows[0].id;
 
-    // 2. Crear empleado
     const empleadoResult = await client.query(
       `INSERT INTO empleados (persona_id, rol, sucursal_id, estado) 
        VALUES ($1, $2, $3, 1) RETURNING id`,
@@ -115,7 +121,6 @@ exports.createEmployee = async (employeeData) => {
     );
     const empleadoId = empleadoResult.rows[0].id;
 
-    // 3. Asignar caja solo para recepcionista
     if (caja_id && cargo === "recepcionista") {
       await client.query(
         `INSERT INTO empleado_caja (empleado_id, caja_id, estado) 
@@ -124,7 +129,6 @@ exports.createEmployee = async (employeeData) => {
       );
     }
 
-    // 4. Crear horarios con sucursal_id (solo si no es admin)
     if (cargo !== "admin" && horarios && horarios.length > 0) {
       for (const horario of horarios) {
         if (horario.hora_ingreso && horario.hora_salida) {
@@ -144,7 +148,6 @@ exports.createEmployee = async (employeeData) => {
       }
     }
 
-    // 5. Crear usuario si es necesario
     if (username && password && ["admin", "recepcionista"].includes(cargo)) {
       const hashedPassword = await bcrypt.hash(password, 10);
       await client.query(
@@ -188,7 +191,6 @@ exports.updateEmployee = async (id, employeeData) => {
   try {
     await client.query("BEGIN");
 
-    // 1. Obtener persona_id
     const empleadoResult = await client.query(
       "SELECT persona_id FROM empleados WHERE id = $1",
       [id]
@@ -200,20 +202,17 @@ exports.updateEmployee = async (id, employeeData) => {
 
     const personaId = empleadoResult.rows[0].persona_id;
 
-    // 2. Actualizar persona
     await client.query(
       `UPDATE personas SET nombres = $1, apellidos = $2, ci = $3, telefono = $4 
        WHERE id = $5`,
       [nombres, apellidos, ci, telefono, personaId]
     );
 
-    // 3. Actualizar empleado
     await client.query(
       `UPDATE empleados SET rol = $1, sucursal_id = $2 WHERE id = $3`,
       [cargo, cargo === "admin" ? null : sucursal_id, id]
     );
 
-    // 4. Manejar caja (solo recepcionista)
     if (cargo === "recepcionista" && caja_id) {
       const asignacionExistente = await client.query(
         "SELECT id FROM empleado_caja WHERE empleado_id = $1 AND estado = 1",
@@ -239,7 +238,6 @@ exports.updateEmployee = async (id, employeeData) => {
       );
     }
 
-    // 5. Manejar horarios (borrar y recrear, CON sucursal_id)
     if (cargo !== "admin") {
       await client.query(
         "DELETE FROM horarios_empleado WHERE empleado_id = $1",
@@ -265,14 +263,12 @@ exports.updateEmployee = async (id, employeeData) => {
         }
       }
     } else {
-      // Si es admin, eliminar todos los horarios
       await client.query(
         "DELETE FROM horarios_empleado WHERE empleado_id = $1",
         [id]
       );
     }
 
-    // 6. Manejar usuario (para admin y recepcionista)
     if (["admin", "recepcionista"].includes(cargo)) {
       const usuarioExistente = await client.query(
         "SELECT id FROM usuarios WHERE empleado_id = $1",
@@ -305,8 +301,6 @@ exports.updateEmployee = async (id, employeeData) => {
         );
       }
     } else {
-      // ✅ SOFT DELETE: solo desactivamos el usuario, no lo borramos.
-      //    Esto evita violar FKs en registros_acceso, movimientos_caja, etc.
       await client.query(
         "UPDATE usuarios SET estado = 0 WHERE empleado_id = $1",
         [id]
@@ -334,7 +328,6 @@ exports.deleteEmployee = async (id) => {
   try {
     await client.query("BEGIN");
 
-    // Soft delete del empleado
     const result = await client.query(
       "UPDATE empleados SET estado = 2 WHERE id = $1 RETURNING id",
       [id]
@@ -344,13 +337,11 @@ exports.deleteEmployee = async (id) => {
       throw new Error("Empleado no encontrado");
     }
 
-    // Desactivar también el usuario asociado (si existe)
     await client.query(
       "UPDATE usuarios SET estado = 0 WHERE empleado_id = $1",
       [id]
     );
 
-    // Desactivar asignación de caja (si existe)
     await client.query(
       "UPDATE empleado_caja SET estado = 0 WHERE empleado_id = $1",
       [id]
@@ -386,24 +377,98 @@ exports.toggleEmployeeStatus = async (id) => {
 };
 
 // ============================================
-// REGISTER FINGERPRINT
+// REGISTER FINGERPRINT BY PERSONA ID (ÚNICO que escribe huella)
 // ============================================
-exports.registerFingerprint = async (id) => {
-  const empleadoResult = await query(
-    "SELECT persona_id FROM empleados WHERE id = $1",
-    [id]
-  );
+// Recibe directamente `persona_id`, que es el único identificador que
+// `personas.huella_digital` conoce. Cero ambigüedad.
+// ============================================
+exports.registerFingerprintByPersonaId = async (personaId) => {
+  const numericId = Number(personaId);
 
-  if (empleadoResult.rows.length === 0) {
-    throw new Error("Empleado no encontrado");
+  if (Number.isNaN(numericId) || numericId <= 0) {
+    throw new Error(`persona_id inválido: ${personaId}`);
   }
 
-  const personaId = empleadoResult.rows[0].persona_id;
+  const personaResult = await query(
+    "SELECT id, nombres, apellidos FROM personas WHERE id = $1 AND estado IN (0, 1)",
+    [numericId]
+  );
+
+  if (personaResult.rows.length === 0) {
+    throw new Error(
+      `Persona no encontrada o inactiva (persona_id=${numericId})`
+    );
+  }
+
+  const persona = personaResult.rows[0];
 
   await query(
     "UPDATE personas SET huella_digital = $1 WHERE id = $2",
-    [Buffer.from("simulated_fingerprint_data"), personaId]
+    [Buffer.from("simulated_fingerprint_data"), numericId]
   );
+
+  const empleadoResult = await query(
+    "SELECT id FROM empleados WHERE persona_id = $1 AND estado = 1",
+    [numericId]
+  );
+
+  console.log(
+    `🟢 Huella registrada por persona_id=${numericId} (${persona.nombres} ${persona.apellidos})` +
+      (empleadoResult.rows.length > 0
+        ? ` → empleado_id=${empleadoResult.rows[0].id}`
+        : " (sin empleado activo)")
+  );
+
+  return {
+    persona_id: numericId,
+    nombres: persona.nombres,
+    apellidos: persona.apellidos,
+    empleado_id:
+      empleadoResult.rows.length > 0 ? empleadoResult.rows[0].id : null,
+  };
+};
+
+// ============================================
+// REGISTER FINGERPRINT (por empleado_id — ESTRICTO, sin fallback)
+// ============================================
+// ⚠️ FIX CRÍTICO:
+// Antes este método intentaba resolver `id` como empleado_id y, si no
+// existía, caía al fallback de persona_id. Eso causaba que al editar un
+// empleado (empleado_id=5) cuya persona_id real era 3, si existía una
+// persona_id=5 distinta, se actualizaba la huella de ESA otra persona.
+//
+// Ahora:
+//   - Resolvemos `id` ESTRICTAMENTE como empleado_id.
+//   - Si no existe como empleado, lanzamos error (NO caemos a persona_id).
+//   - Delegamos la escritura de huella al método por persona_id.
+// ============================================
+exports.registerFingerprint = async (empleadoId) => {
+  const numericId = Number(empleadoId);
+
+  if (Number.isNaN(numericId) || numericId <= 0) {
+    throw new Error(`empleado_id inválido para registrar huella: ${empleadoId}`);
+  }
+
+  const asEmpleado = await query(
+    "SELECT id, persona_id FROM empleados WHERE id = $1 AND estado IN (0, 1, 2)",
+    [numericId]
+  );
+
+  if (asEmpleado.rows.length === 0) {
+    throw new Error(
+      `No existe ningún empleado con id=${numericId}. ` +
+        `Si querías registrar la huella por persona_id, usa el endpoint ` +
+        `/employees/person/:personaId/register-fingerprint.`
+    );
+  }
+
+  const { id: empleadoIdResuelto, persona_id: personaId } = asEmpleado.rows[0];
+
+  console.log(
+    `🟢 Huella: empleado_id=${empleadoIdResuelto} → persona_id=${personaId}`
+  );
+
+  return exports.registerFingerprintByPersonaId(personaId);
 };
 
 // ============================================
