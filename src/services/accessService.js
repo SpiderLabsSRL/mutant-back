@@ -10,7 +10,7 @@ const getDiaSemanaBD = (date) => {
 
 // ============================================
 // CONFIG: ROLES QUE NO REQUIEREN HORARIO
-// ============================================ 
+// ============================================
 const ROLES_SIN_HORARIO = new Set(["admin"]);
 
 const rolRequiereHorario = (rol) => !ROLES_SIN_HORARIO.has(rol);
@@ -274,7 +274,6 @@ exports.getAccessLogs = async (
     INNER JOIN personas p ON ra.persona_id = p.id
     LEFT JOIN servicios s ON ra.servicio_id = s.id
     WHERE ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
-    AND p.estado = 0
   `;
 
   const params = [];
@@ -461,11 +460,10 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       FROM personas p
       LEFT JOIN candidatas c ON p.id = c.persona_id AND c.rn_por_tipo = 1
       WHERE ${buildPersonSearchWhere("p", 1)}
-      AND p.estado = 0
     `;
 
     if (typeFilter === "all") {
-      clientSql += ` AND NOT EXISTS (SELECT 1 FROM empleados e WHERE e.persona_id = p.id AND e.estado = 1)`;
+      clientSql += ` AND NOT EXISTS (SELECT 1 FROM empleados e WHERE e.persona_id = p.id)`;
     }
 
     clientSql += ` GROUP BY p.id`;
@@ -483,10 +481,9 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
 
     if (filtrarPorSucursal) {
       employeeParams.push(Number(branchId));
-      branchCond = `AND (e.sucursal_id = $2 OR e.rol = 'limpieza')`;
+      branchCond = `AND (e.sucursal_id = $2 OR e.rol IN ('admin', 'limpieza'))`;
     }
 
-    // estado_actual SOLO considera registros de HOY (coherente con check-out)
     let employeeSql = `
       SELECT 
         p.id as idpersona,
@@ -551,8 +548,6 @@ exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {
       FROM personas p
       INNER JOIN empleados e ON p.id = e.persona_id
       WHERE ${buildPersonSearchWhere("p", 1)}
-      AND e.estado = 1
-      AND p.estado = 0
       ${branchCond}
     `;
 
@@ -692,7 +687,6 @@ exports.registerClientAccess = async (
     INNER JOIN personas p ON i.persona_id = p.id
     WHERE i.persona_id = $1 AND i.id = $2
     AND (i.sucursal_id = $3 OR s.multisucursal = TRUE)
-    AND p.estado = 0
   `,
     [personId, serviceId, branchId]
   );
@@ -939,12 +933,12 @@ exports.registerClientAccess = async (
 // ============================================
 const getEmployeeScheduleForToday = async (employeeId) => {
   const employeeResult = await query(
-    `SELECT rol FROM empleados WHERE id = $1 AND estado = 1`,
+    `SELECT rol FROM empleados WHERE id = $1`,
     [employeeId]
   );
 
   if (employeeResult.rows.length === 0) {
-    throw new Error("Empleado no encontrado o inactivo");
+    throw new Error("Empleado no encontrado");
   }
 
   const rol = employeeResult.rows[0].rol;
@@ -1149,14 +1143,6 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
-  if (emp.persona_estado !== 0) {
-    throw new Error("Empleado eliminado o inactivo");
-  }
-
-  if (emp.estado !== 1) {
-    throw new Error("El empleado está inactivo en el sistema");
-  }
-
   const { estado } = await getEmployeeEstadoHoy(emp.persona_id);
 
   if (estado === "in") {
@@ -1193,7 +1179,6 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
     );
     const horaActual = currentTimeResult.rows[0].hora_actual;
-    // 🔧 Sin (rol: ...)
     const detail = `Entrada: ${horaActual}`;
 
     await query(
@@ -1272,10 +1257,8 @@ exports.registerEmployeeCheckIn = async (employeeId, branchId, userId) => {
   if (diffMinutes > 0) {
     isLate = true;
     minutes = diffMinutes;
-    // 🔧 Sin (rol: ...)
     detail = `Entrada: ${diffMinutes} minuto${diffMinutes !== 1 ? "s" : ""} tarde`;
   } else {
-    // 🔧 Sin (rol: ...)
     detail = `Entrada: A tiempo`;
   }
 
@@ -1319,14 +1302,6 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
 
   const emp = employee.rows[0];
 
-  if (emp.persona_estado !== 0) {
-    throw new Error("Empleado eliminado o inactivo");
-  }
-
-  if (emp.estado !== 1) {
-    throw new Error("El empleado está inactivo en el sistema");
-  }
-
   const rol = emp.rol;
   const requiereHorario = rolRequiereHorario(rol);
 
@@ -1343,7 +1318,6 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
       `SELECT TO_CHAR(TIMEZONE('America/La_Paz', NOW()), 'HH24:MI') as hora_actual`
     );
     const horaActual = currentTimeResult.rows[0].hora_actual;
-    // 🔧 Sin (rol: ...)
     const detail = `Salida: ${horaActual}`;
 
     await query(
@@ -1420,10 +1394,8 @@ exports.registerEmployeeCheckOut = async (employeeId, branchId, userId) => {
   if (diffMinutes > 0) {
     isEarly = true;
     minutes = diffMinutes;
-    // 🔧 Sin (rol: ...)
     detail = `Salida: ${diffMinutes} minuto${diffMinutes !== 1 ? "s" : ""} antes`;
   } else {
-    // 🔧 Sin (rol: ...)
     detail = `Salida: A tiempo`;
   }
 
@@ -1474,40 +1446,139 @@ exports.registerAccessDeniedNoActiveSubscription = async (
     message: `${memberName} no tiene inscripciones activas`,
   };
 };
+
+// ============================================
+// HELPER: normaliza CI quitando espacios, guiones y extensión
+// ============================================
+const normalizeCI = (ci) => {
+  if (!ci) return "";
+  const base = String(ci)
+    .trim()
+    .split("-")[0]
+    .replace(/[\s.\-]/g, "")
+    .replace(/^0+/, "");
+  return base;
+};
+
 // ============================================
 // REGISTER ACCESS BY FINGERPRINT (flujo automático)
 // ============================================
 exports.registerAccessByFingerprint = async (ci, branchId, userId) => {
-  const normalizedCi = (ci || "").trim();
+  const rawCi = (ci || "").trim();
+  const normalizedCi = normalizeCI(rawCi);
+
   if (!normalizedCi) {
     throw new Error("CI requerido");
   }
 
-  // 1. Buscar persona por CI
-  const personaResult = await query(
-    `SELECT id, nombres, apellidos, ci
-     FROM personas
-     WHERE TRIM(ci) = $1 AND estado = 0
-     LIMIT 1`,
-    [normalizedCi]
+  console.log(
+    `🔍 [FINGERPRINT] CI recibido: "${rawCi}" → normalizado: "${normalizedCi}"`
   );
 
+  // 1. Buscar persona por CI con match tolerante y fallback por sufijo
+  let personaResult = await query(
+    `SELECT id, nombres, apellidos, ci
+     FROM personas
+     WHERE (
+         TRIM(ci) = $1
+         OR REGEXP_REPLACE(TRIM(ci), '[\\s.\\-]', '', 'g') = $2
+       )
+     LIMIT 1`,
+    [rawCi, normalizedCi]
+  );
+
+  if (personaResult.rows.length === 0 && normalizedCi.length >= 6) {
+    const suffix = normalizedCi.slice(-8);
+    personaResult = await query(
+      `SELECT id, nombres, apellidos, ci
+       FROM personas
+       WHERE REGEXP_REPLACE(TRIM(ci), '[\\s.\\-]', '', 'g') LIKE $1
+       LIMIT 1`,
+      [`%${suffix}`]
+    );
+
+    if (personaResult.rows.length > 0) {
+      console.log(
+        `⚠️ [FINGERPRINT] Match por sufijo: "${rawCi}" → persona CI "${personaResult.rows[0].ci}"`
+      );
+    }
+  }
+
   if (personaResult.rows.length === 0) {
+    console.warn(
+      `❌ [FINGERPRINT] No se encontró persona para CI "${rawCi}" (normalizado: "${normalizedCi}")`
+    );
+
+    const isPlaceholder =
+      /^(\d)\1{5,}$/.test(normalizedCi) || normalizedCi.length < 5;
+
     return {
       success: false,
       mode: "not_found",
-      message: `No se encontró persona con CI ${normalizedCi}`,
+      message: isPlaceholder
+        ? "Lectura de huella no reconocida. Intente de nuevo."
+        : `No se encontró persona con CI ${rawCi}`,
     };
   }
 
   const persona = personaResult.rows[0];
   const memberName = `${persona.nombres} ${persona.apellidos}`.trim();
 
-  // 2. ¿Es empleado activo?
+  console.log(
+    `✅ [FINGERPRINT] Persona encontrada: ${memberName} (CI BD: ${persona.ci})`
+  );
+
+  // 2. ¿Es empleado?
   const employeeResult = await query(
-    `SELECT e.id, e.rol, e.sucursal_id
+    `SELECT 
+       e.id as idempleado,
+       e.rol,
+       e.sucursal_id,
+       e.estado,
+       CASE
+         WHEN e.rol = 'admin' THEN true
+         ELSE EXISTS (
+           SELECT 1 FROM horarios_empleado he
+           WHERE he.empleado_id = e.id
+             AND he.dia_semana = EXTRACT(ISODOW FROM TIMEZONE('America/La_Paz', NOW()))::int
+         )
+       END AS trabaja_hoy,
+       (
+         SELECT MAX(ra.fecha) 
+         FROM registros_acceso ra 
+         WHERE ra.persona_id = $1 
+           AND ra.tipo_persona = 'empleado' 
+           AND ra.detalle LIKE '%Entrada%'
+       ) AS ultimo_registro_entrada,
+       (
+         SELECT MAX(ra.fecha) 
+         FROM registros_acceso ra 
+         WHERE ra.persona_id = $1 
+           AND ra.tipo_persona = 'empleado' 
+           AND ra.detalle LIKE '%Salida%'
+       ) AS ultimo_registro_salida,
+       CASE 
+         WHEN EXISTS (
+           SELECT 1 FROM registros_acceso ra 
+           WHERE ra.persona_id = $1 
+             AND ra.tipo_persona = 'empleado' 
+             AND ra.estado = 'exitoso'
+             AND ra.detalle LIKE 'Entrada%'
+             AND ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
+             AND NOT EXISTS (
+               SELECT 1 FROM registros_acceso ra2
+               WHERE ra2.persona_id = $1
+                 AND ra2.tipo_persona = 'empleado'
+                 AND ra2.estado = 'exitoso'
+                 AND ra2.detalle LIKE 'Salida%'
+                 AND ra2.fecha > ra.fecha
+                 AND ra2.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
+             )
+         ) THEN 'in' 
+         ELSE 'out' 
+       END AS estado_actual
      FROM empleados e
-     WHERE e.persona_id = $1 AND e.estado = 1
+     WHERE e.persona_id = $1
      LIMIT 1`,
     [persona.id]
   );
@@ -1515,40 +1586,55 @@ exports.registerAccessByFingerprint = async (ci, branchId, userId) => {
   if (employeeResult.rows.length > 0) {
     const emp = employeeResult.rows[0];
 
-    // Validar sucursal (admin y limpieza pueden saltar restricción como en searchMembers)
-    const branchOk =
-      !branchId ||
-      emp.sucursal_id === Number(branchId) ||
-      emp.rol === "limpieza" ||
-      emp.rol === "admin";
-
-    if (!branchOk) {
+    if (emp.estado === 0) {
       return {
         success: false,
         mode: "denied",
-        message: `${memberName} no pertenece a esta sucursal`,
+        message: `El empleado ${memberName} está inactivo en el sistema`,
+        memberName,
+        ci: persona.ci,
       };
     }
 
-    const { estado } = await getEmployeeEstadoHoy(persona.id);
-
     let result;
-    if (estado === "in") {
-      result = await exports.registerEmployeeCheckOut(emp.id, branchId, userId);
+    if (emp.estado_actual === "in") {
+      result = await exports.registerEmployeeCheckOut(
+        emp.idempleado,
+        branchId,
+        userId
+      );
     } else {
-      result = await exports.registerEmployeeCheckIn(emp.id, branchId, userId);
+      result = await exports.registerEmployeeCheckIn(
+        emp.idempleado,
+        branchId,
+        userId
+      );
     }
 
-    // Recuperar el último log del empleado para devolverlo al front
+    if (result.log) {
+      return {
+        success: result.success !== false && !result.denied,
+        mode: "employee",
+        message: result.message,
+        denied: !!result.denied,
+        isLate: result.isLate || false,
+        isEarly: result.isEarly || false,
+        minutos: result.minutes || 0,
+        log: result.log,
+        memberName,
+        ci: persona.ci,
+      };
+    }
+
     const logResult = await query(
       `SELECT ra.id,
               TO_CHAR(ra.fecha, 'YYYY-MM-DD HH24:MI') as fecha,
               ra.detalle,
-              ra.estado,
-              ra.tipo_persona
+              ra.estado
        FROM registros_acceso ra
        WHERE ra.persona_id = $1
          AND ra.tipo_persona = 'empleado'
+         AND ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date
        ORDER BY ra.fecha DESC
        LIMIT 1`,
       [persona.id]
@@ -1557,10 +1643,9 @@ exports.registerAccessByFingerprint = async (ci, branchId, userId) => {
     const logRow = logResult.rows[0];
 
     return {
-      success: result.success !== false && !result.denied,
+      success: result.success !== false,
       mode: "employee",
       message: result.message,
-      denied: !!result.denied,
       isLate: result.isLate || false,
       isEarly: result.isEarly || false,
       minutos: result.minutes || 0,
@@ -1574,11 +1659,13 @@ exports.registerAccessByFingerprint = async (ci, branchId, userId) => {
             status: logRow.estado === "exitoso" ? "success" : "denied",
             ci: persona.ci,
           }
-        : result.log || null,
+        : null,
+      memberName,
+      ci: persona.ci,
     };
   }
 
-  // 3. Es cliente → obtener servicios activos (misma agrupación por tipo_servicio)
+  // 3. Es cliente → obtener servicios activos
   const servicesResult = await query(
     `WITH inscripciones_calculadas AS (
         SELECT
@@ -1620,7 +1707,6 @@ exports.registerAccessByFingerprint = async (ci, branchId, userId) => {
   const services = servicesResult.rows;
 
   if (services.length === 0) {
-    // Registrar denegado (sin inscripción)
     await exports.registerAccessDeniedNoActiveSubscription(
       persona.id,
       branchId,
@@ -1656,10 +1742,12 @@ exports.registerAccessByFingerprint = async (ci, branchId, userId) => {
             ci: persona.ci,
           }
         : null,
+      memberName,
+      ci: persona.ci,
     };
   }
 
-  // 4. ¿Un solo servicio? → registrar directo
+  // 4. Un solo servicio → registrar directo
   if (services.length === 1) {
     const svc = services[0];
     const result = await exports.registerClientAccess(
@@ -1682,7 +1770,7 @@ exports.registerAccessByFingerprint = async (ci, branchId, userId) => {
     };
   }
 
-  // 5. Múltiples servicios de distintos tipos → requiere selección manual
+  // 5. Múltiples servicios → requiere selección manual
   return {
     success: false,
     mode: "requires_selection",
