@@ -19,7 +19,8 @@ const authenticateUser = async (username, password) => {
         p.nombres,
         p.apellidos,
         ec.caja_id as idcaja,
-        s.nombre as sucursalNombre 
+        s.nombre as sucursalNombre,
+        s.estado as estado_sucursal
       FROM usuarios u
       INNER JOIN empleados e ON u.empleado_id = e.id
       INNER JOIN personas p ON e.persona_id = p.id
@@ -57,7 +58,14 @@ const authenticateUser = async (username, password) => {
     } else {
       user = result.rows[0];
       user.userType = 'empleado';
-      
+
+      // 🔥 VALIDACIÓN: Sucursal inactiva (solo para empleados que no son admin)
+      if (user.rol !== 'admin' && user.idsucursal) {
+        if (user.estado_sucursal !== 1) {
+          throw new Error("Sucursal Inactiva");
+        }
+      }
+
       // Asegurarnos de que tenemos el nombre de la sucursal
       if (!user.sucursalNombre && user.idsucursal) {
         const sucursalResult = await query(
@@ -98,9 +106,10 @@ const authenticateUser = async (username, password) => {
       throw new Error("Contraseña incorrecta");
     }
 
-    // Eliminar la contraseña del objeto de retorno
+    // Eliminar la contraseña y campos internos del objeto de retorno
     delete user.password;
     delete user.estado_empleado;
+    delete user.estado_sucursal;
 
     return user;
   } catch (error) {
@@ -135,7 +144,8 @@ const authenticateByFingerprint = async (ci) => {
         p.nombres,
         p.apellidos,
         ec.caja_id as idcaja,
-        s.nombre as sucursalNombre 
+        s.nombre as sucursalNombre,
+        s.estado as estado_sucursal
       FROM personas p
       INNER JOIN empleados e ON p.id = e.persona_id
       INNER JOIN usuarios u ON e.id = u.empleado_id
@@ -154,9 +164,16 @@ const authenticateByFingerprint = async (ci) => {
     const user = result.rows[0];
     user.userType = "empleado";
 
-    // 2. Validar que esté activo (aquí está la regla estricta que pediste)
+    // 2. Validar que esté activo
     if (user.estado_empleado !== 1) {
       throw new Error("Empleado inactivo. Contacte al administrador.");
+    }
+
+    // 🔥 VALIDACIÓN: Sucursal inactiva (solo para empleados que no son admin)
+    if (user.rol !== 'admin' && user.idsucursal) {
+      if (user.estado_sucursal !== 1) {
+        throw new Error("Sucursal Inactiva");
+      }
     }
 
     // 3. Obtener nombre de sucursal si falta
@@ -185,6 +202,7 @@ const authenticateByFingerprint = async (ci) => {
     }
 
     delete user.estado_empleado;
+    delete user.estado_sucursal;
 
     return user;
   } catch (error) {

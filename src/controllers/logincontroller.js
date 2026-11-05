@@ -14,19 +14,15 @@ const login = async (req, res) => {
 
     const user = await authService.authenticateUser(username, password);
 
-    // Preparar datos según el tipo de usuario
     let userResponse = {};
     
     if (user.userType === 'empleado') {
-      // Obtener horario principal para compatibilidad
       let horarioPrincipal = null;
       if (user.horarios && user.horarios.length > 0) {
-        // Buscar horario de lunes a viernes (dia_semana = 1) como principal
         const horarioLV = user.horarios.find(h => h.dia_semana === 1);
         if (horarioLV) {
           horarioPrincipal = horarioLV;
         } else {
-          // Si no tiene horario de lunes a viernes, usar el primero disponible
           horarioPrincipal = user.horarios[0];
         }
       }
@@ -45,7 +41,7 @@ const login = async (req, res) => {
         username: user.username,
         userType: user.userType,
         sucursalNombre: user.sucursalNombre,
-        horarios: user.horarios // Enviar todos los horarios
+        horarios: user.horarios
       };
     } else {
       userResponse = {
@@ -59,7 +55,6 @@ const login = async (req, res) => {
       };
     }
 
-    // Generar token
     const token = generateToken({
       id: user.idusuario,
       username: user.username,
@@ -123,7 +118,6 @@ const loginWithFingerprint = async (req, res) => {
       horarios: user.horarios
     };
 
-    // Generar token
     const token = generateToken({
       id: user.idusuario,
       username: user.username,
