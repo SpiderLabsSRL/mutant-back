@@ -145,7 +145,7 @@ const getCashRegisterStatus = async (userId) => {
 };
 
 // ============================================
-// VALIDATE COUPON (endpoint dedicado)
+// VALIDATE COUPON
 // ============================================
 const validateCoupon = async (userId, codigo) => {
   try {
@@ -153,7 +153,6 @@ const validateCoupon = async (userId, codigo) => {
       throw new Error("Código de cupón requerido");
     }
 
-    // 1. Obtener sucursal del empleado
     const userQuery = `
       SELECT e.sucursal_id
       FROM empleados e
@@ -169,7 +168,6 @@ const validateCoupon = async (userId, codigo) => {
 
     const { sucursal_id } = userResult.rows[0];
 
-    // 2. Obtener cupón
     const cuponQuery = `
       SELECT 
         c.id,
@@ -196,7 +194,6 @@ const validateCoupon = async (userId, codigo) => {
 
     const cupon = cuponResult.rows[0];
 
-    // 3. Validaciones
     if (cupon.estado !== 1) {
       throw new Error("El cupón no está activo");
     }
@@ -205,7 +202,6 @@ const validateCoupon = async (userId, codigo) => {
       throw new Error("Este cupón solo aplica a servicios, no a productos");
     }
 
-    // 4. Validar sucursales
     const sucursalesQuery = `
       SELECT sucursal_id
       FROM cupon_sucursal
@@ -215,16 +211,10 @@ const validateCoupon = async (userId, codigo) => {
     const sucursalesResult = await query(sucursalesQuery, [cupon.id]);
     const sucursalesIds = sucursalesResult.rows.map((r) => r.sucursal_id);
 
-    if (
-      sucursalesIds.length > 0 &&
-      !sucursalesIds.includes(sucursal_id)
-    ) {
-      throw new Error(
-        "El cupón no está disponible en esta sucursal"
-      );
+    if (sucursalesIds.length > 0 && !sucursalesIds.includes(sucursal_id)) {
+      throw new Error("El cupón no está disponible en esta sucursal");
     }
 
-    // 5. Validar vigencia
     const hoy = new Date();
     hoy.setHours(0, 0, 0, 0);
     const inicio = new Date(cupon.fecha_inicio);
@@ -240,7 +230,6 @@ const validateCoupon = async (userId, codigo) => {
       throw new Error("El cupón ha expirado");
     }
 
-    // 6. Validar usos
     if (cupon.usos_maximos > 0 && cupon.usos >= cupon.usos_maximos) {
       throw new Error("El cupón ha alcanzado su límite de usos");
     }
@@ -267,7 +256,7 @@ const validateCoupon = async (userId, codigo) => {
 };
 
 // ============================================
-// PROCESS SALE
+// PROCESS SALE — VERSIÓN ORIGINAL SIN client_sale_id
 // ============================================
 const processSale = async (userId, saleData) => {
   const client = await pool.connect();
@@ -355,12 +344,9 @@ const processSale = async (userId, saleData) => {
       }
     }
 
-    // ============================================
-    // 4. Validar cupón (SEPARADO: primero GROUP BY, luego FOR UPDATE)
-    // ============================================
+    // 4. Validar cupón
     let cuponId = null;
     if (saleData.cupon_codigo) {
-      // 4.1 Primero obtener el cupón SIN FOR UPDATE (para poder agrupar)
       const cuponQuery = `
         SELECT 
           c.id,
@@ -393,12 +379,9 @@ const processSale = async (userId, saleData) => {
       }
 
       if (!cupon.aplica_productos) {
-        throw new Error(
-          "Este cupón solo aplica a servicios, no a productos"
-        );
+        throw new Error("Este cupón solo aplica a servicios, no a productos");
       }
 
-      // 4.2 Validar sucursales (query separada)
       const sucursalesQuery = `
         SELECT sucursal_id 
         FROM cupon_sucursal 
@@ -408,16 +391,10 @@ const processSale = async (userId, saleData) => {
       const sucursalesResult = await client.query(sucursalesQuery, [cupon.id]);
       const sucursalesIds = sucursalesResult.rows.map((r) => r.sucursal_id);
 
-      if (
-        sucursalesIds.length > 0 &&
-        !sucursalesIds.includes(sucursal_id)
-      ) {
-        throw new Error(
-          "El cupón no está disponible en esta sucursal"
-        );
+      if (sucursalesIds.length > 0 && !sucursalesIds.includes(sucursal_id)) {
+        throw new Error("El cupón no está disponible en esta sucursal");
       }
 
-      // 4.3 Validar vigencia
       const hoy = new Date();
       hoy.setHours(0, 0, 0, 0);
       const inicio = new Date(cupon.fecha_inicio);
@@ -433,12 +410,10 @@ const processSale = async (userId, saleData) => {
         throw new Error("El cupón ha expirado");
       }
 
-      // 4.4 Validar usos
       if (cupon.usos_maximos > 0 && cupon.usos >= cupon.usos_maximos) {
         throw new Error("El cupón ha alcanzado su límite de usos");
       }
 
-      // 4.5 Bloquear la fila del cupón ahora (sin GROUP BY)
       await client.query(
         `SELECT id FROM cupones WHERE id = $1 FOR UPDATE`,
         [cupon.id]
@@ -446,16 +421,13 @@ const processSale = async (userId, saleData) => {
 
       cuponId = cupon.id;
 
-      // 4.6 Registrar uso
       await client.query(
         `UPDATE cupones SET usos = usos + 1 WHERE id = $1`,
         [cuponId]
       );
     }
 
-    // ============================================
-    // 5. Insertar venta
-    // ============================================
+    // 5. Insertar venta (SIN client_sale_id)
     const insertSaleQuery = `
       INSERT INTO ventas_productos (
         subtotal, descuento, descripcion_descuento, total, 
@@ -481,9 +453,7 @@ const processSale = async (userId, saleData) => {
     const saleResult = await client.query(insertSaleQuery, saleValues);
     const ventaId = saleResult.rows[0].id;
 
-    // ============================================
     // 6. Detalles y stock
-    // ============================================
     for (const producto of saleData.productos) {
       await client.query(
         `INSERT INTO detalle_venta_productos (
@@ -515,9 +485,7 @@ const processSale = async (userId, saleData) => {
       }
     }
 
-    // ============================================
     // 7. Movimiento de caja (efectivo)
-    // ============================================
     const montoEfectivo =
       saleData.forma_pago === "efectivo"
         ? saleData.total
@@ -550,9 +518,7 @@ const processSale = async (userId, saleData) => {
       ]);
     }
 
-    // ============================================
     // 8. Movimiento de caja (QR - informativo)
-    // ============================================
     const montoQr =
       saleData.forma_pago === "qr"
         ? saleData.total

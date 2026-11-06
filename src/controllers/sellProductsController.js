@@ -2,6 +2,21 @@
 const sellProductsService = require("../services/sellProductsService");
 
 // ============================================
+// 🔒 LOCK EN MEMORIA contra doble venta
+// ============================================
+const salesInFlight = new Map(); // userId -> timestamp de inicio
+const IN_FLIGHT_TTL_MS = 30_000;
+
+const cleanupInFlight = () => {
+  const now = Date.now();
+  for (const [userId, startedAt] of salesInFlight.entries()) {
+    if (now - startedAt > IN_FLIGHT_TTL_MS) {
+      salesInFlight.delete(userId);
+    }
+  }
+};
+
+// ============================================
 // GET PRODUCTS
 // ============================================
 const getProducts = async (req, res) => {
@@ -62,7 +77,7 @@ const getCashRegisterStatus = async (req, res) => {
 };
 
 // ============================================
-// VALIDATE COUPON (nuevo endpoint)
+// VALIDATE COUPON
 // ============================================
 const validateCoupon = async (req, res) => {
   try {
@@ -86,9 +101,11 @@ const validateCoupon = async (req, res) => {
 };
 
 // ============================================
-// PROCESS SALE
+// PROCESS SALE — SIN client_sale_id, con lock en memoria
 // ============================================
 const processSale = async (req, res) => {
+  const startedAt = Date.now();
+
   try {
     const userId = parseInt(req.query.userId);
     if (!userId || isNaN(userId)) {
@@ -113,10 +130,47 @@ const processSale = async (req, res) => {
         .json({ error: "El total de la venta no puede ser negativo" });
     }
 
+    // 🔒 Limpiar locks viejos
+    cleanupInFlight();
+
+    // 🔒 ¿Ya hay una venta de este usuario en proceso?
+    if (salesInFlight.has(userId)) {
+      console.warn("[processSale] Doble submit bloqueado", {
+        userId,
+        inFlightSince: salesInFlight.get(userId),
+      });
+      return res.status(409).json({
+        error:
+          "Ya hay una venta en proceso. Espera a que termine antes de reintentar.",
+        code: "SALE_IN_PROGRESS",
+      });
+    }
+
+    // 🔒 Adquirir lock
+    salesInFlight.set(userId, Date.now());
+
+    console.log("[processSale] INICIO", {
+      startedAt,
+      userId,
+      total: saleData.total,
+      items: saleData.productos.length,
+      forma_pago: saleData.forma_pago,
+    });
+
     const result = await sellProductsService.processSale(userId, saleData);
+
+    console.log("[processSale] FIN", {
+      duration_ms: Date.now() - startedAt,
+      userId,
+      idventa: result.idventa,
+    });
+
     res.json(result);
   } catch (error) {
-    console.error("Error en processSale:", error);
+    console.error("[processSale] ERROR", {
+      duration_ms: Date.now() - startedAt,
+      message: error.message,
+    });
 
     if (
       error.message.includes("stock insuficiente") ||
@@ -153,6 +207,11 @@ const processSale = async (req, res) => {
       error:
         error.message || "Error interno del servidor al procesar la venta",
     });
+  } finally {
+    const userId = parseInt(req.query.userId);
+    if (!isNaN(userId)) {
+      salesInFlight.delete(userId);
+    }
   }
 };
 
