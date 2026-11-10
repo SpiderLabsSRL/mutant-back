@@ -68,6 +68,8 @@ const Planes = require("./src/routes/PlanesRoutes");
 const sidebarPasswordRoutes = require("./src/routes/sidebarPasswordRoutes");
 const cuponesRoutes = require("./src/routes/cuponesRoutes");
 const zumbaRoutes = require("./src/routes/zumbaRoutes");
+const sucursalesRoutes = require("./src/routes/sucursalesroutes");
+
 
 // ✅ CONFIGURACIÓN CORREGIDA: Usar las rutas SIN duplicar middleware
 app.use("/api/reminders", remindersRoutes);
@@ -90,6 +92,7 @@ app.use("/api/planes", Planes);
 app.use("/api/password", sidebarPasswordRoutes);
 app.use("/api/cupones", cuponesRoutes);
 app.use("/api/zumba", zumbaRoutes);
+app.use("/api/sucursales", sucursalesRoutes);
 
 // Manejador de errores global
 app.use((err, req, res, next) => {

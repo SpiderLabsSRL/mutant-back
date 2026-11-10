@@ -15,11 +15,11 @@ const login = async (req, res) => {
     const user = await authService.authenticateUser(username, password);
 
     let userResponse = {};
-    
-    if (user.userType === 'empleado') {
+
+    if (user.userType === "empleado") {
       let horarioPrincipal = null;
       if (user.horarios && user.horarios.length > 0) {
-        const horarioLV = user.horarios.find(h => h.dia_semana === 1);
+        const horarioLV = user.horarios.find((h) => h.dia_semana === 1);
         if (horarioLV) {
           horarioPrincipal = horarioLV;
         } else {
@@ -27,12 +27,18 @@ const login = async (req, res) => {
         }
       }
 
+      const isAdmin = user.rol === "admin";
+
       userResponse = {
         idpersona: user.idpersona,
         idempleado: user.idempleado,
         idusuario: user.idusuario,
         idcaja: user.idcaja,
-        idsucursal: user.idsucursal,
+        // 🔥 Admin NO tiene sucursal fija: la elegirá tras el login
+        idsucursal: isAdmin ? null : user.idsucursal,
+        // 🔥 Bandera para que el frontend sepa que debe pedir sucursal
+        needsSucursalSelection: isAdmin,
+        isAdmin: isAdmin,
         rol: user.rol,
         hora_ingreso: horarioPrincipal ? horarioPrincipal.hora_ingreso : null,
         hora_salida: horarioPrincipal ? horarioPrincipal.hora_salida : null,
@@ -40,8 +46,8 @@ const login = async (req, res) => {
         apellidos: user.apellidos,
         username: user.username,
         userType: user.userType,
-        sucursalNombre: user.sucursalNombre,
-        horarios: user.horarios
+        sucursalNombre: isAdmin ? null : user.sucursalNombre,
+        horarios: user.horarios,
       };
     } else {
       userResponse = {
@@ -51,7 +57,9 @@ const login = async (req, res) => {
         apellidos: user.apellidos,
         username: user.username,
         rol: user.rol,
-        userType: user.userType
+        userType: user.userType,
+        needsSucursalSelection: false,
+        isAdmin: false,
       };
     }
 
@@ -59,7 +67,7 @@ const login = async (req, res) => {
       id: user.idusuario,
       username: user.username,
       role: user.rol,
-      userType: user.userType
+      userType: user.userType,
     });
 
     res.json({
@@ -97,16 +105,20 @@ const loginWithFingerprint = async (req, res) => {
 
     let horarioPrincipal = null;
     if (user.horarios && user.horarios.length > 0) {
-      const horarioLV = user.horarios.find(h => h.dia_semana === 1);
+      const horarioLV = user.horarios.find((h) => h.dia_semana === 1);
       horarioPrincipal = horarioLV || user.horarios[0];
     }
+
+    const isAdmin = user.rol === "admin";
 
     const userResponse = {
       idpersona: user.idpersona,
       idempleado: user.idempleado,
       idusuario: user.idusuario,
       idcaja: user.idcaja,
-      idsucursal: user.idsucursal,
+      idsucursal: isAdmin ? null : user.idsucursal,
+      needsSucursalSelection: isAdmin,
+      isAdmin: isAdmin,
       rol: user.rol,
       hora_ingreso: horarioPrincipal ? horarioPrincipal.hora_ingreso : null,
       hora_salida: horarioPrincipal ? horarioPrincipal.hora_salida : null,
@@ -114,15 +126,15 @@ const loginWithFingerprint = async (req, res) => {
       apellidos: user.apellidos,
       username: user.username,
       userType: user.userType,
-      sucursalNombre: user.sucursalNombre,
-      horarios: user.horarios
+      sucursalNombre: isAdmin ? null : user.sucursalNombre,
+      horarios: user.horarios,
     };
 
     const token = generateToken({
       id: user.idusuario,
       username: user.username,
       role: user.rol,
-      userType: user.userType
+      userType: user.userType,
     });
 
     res.json({

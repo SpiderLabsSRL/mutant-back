@@ -4,7 +4,7 @@ const sellProductsService = require("../services/sellProductsService");
 // ============================================
 // 🔒 LOCK EN MEMORIA contra doble venta
 // ============================================
-const salesInFlight = new Map(); // userId -> timestamp de inicio
+const salesInFlight = new Map();
 const IN_FLIGHT_TTL_MS = 30_000;
 
 const cleanupInFlight = () => {
@@ -22,11 +22,15 @@ const cleanupInFlight = () => {
 const getProducts = async (req, res) => {
   try {
     const userId = parseInt(req.query.userId);
+    const sucursalId = req.query.sucursalId
+      ? parseInt(req.query.sucursalId)
+      : null;
+
     if (!userId || isNaN(userId)) {
       return res.status(400).json({ error: "ID de usuario válido requerido" });
     }
 
-    const products = await sellProductsService.getProducts(userId);
+    const products = await sellProductsService.getProducts(userId, sucursalId);
     res.json(products);
   } catch (error) {
     console.error("Error en getProducts:", error);
@@ -49,11 +53,18 @@ const getProducts = async (req, res) => {
 const getCashRegisterStatus = async (req, res) => {
   try {
     const userId = parseInt(req.query.userId);
+    const sucursalId = req.query.sucursalId
+      ? parseInt(req.query.sucursalId)
+      : null;
+
     if (!userId || isNaN(userId)) {
       return res.status(400).json({ error: "ID de usuario válido requerido" });
     }
 
-    const status = await sellProductsService.getCashRegisterStatus(userId);
+    const status = await sellProductsService.getCashRegisterStatus(
+      userId,
+      sucursalId
+    );
     res.json(status);
   } catch (error) {
     console.error("Error en getCashRegisterStatus:", error);
@@ -82,6 +93,9 @@ const getCashRegisterStatus = async (req, res) => {
 const validateCoupon = async (req, res) => {
   try {
     const userId = parseInt(req.query.userId);
+    const sucursalId = req.query.sucursalId
+      ? parseInt(req.query.sucursalId)
+      : null;
     const { codigo } = req.query;
 
     if (!userId || isNaN(userId)) {
@@ -92,7 +106,11 @@ const validateCoupon = async (req, res) => {
       return res.status(400).json({ error: "Código de cupón requerido" });
     }
 
-    const cupon = await sellProductsService.validateCoupon(userId, codigo);
+    const cupon = await sellProductsService.validateCoupon(
+      userId,
+      codigo,
+      sucursalId
+    );
     res.json(cupon);
   } catch (error) {
     console.error("Error en validateCoupon:", error);
@@ -101,13 +119,17 @@ const validateCoupon = async (req, res) => {
 };
 
 // ============================================
-// PROCESS SALE — SIN client_sale_id, con lock en memoria
+// PROCESS SALE
 // ============================================
 const processSale = async (req, res) => {
   const startedAt = Date.now();
 
   try {
     const userId = parseInt(req.query.userId);
+    const sucursalId = req.query.sucursalId
+      ? parseInt(req.query.sucursalId)
+      : null;
+
     if (!userId || isNaN(userId)) {
       return res.status(400).json({ error: "ID de usuario válido requerido" });
     }
@@ -130,10 +152,8 @@ const processSale = async (req, res) => {
         .json({ error: "El total de la venta no puede ser negativo" });
     }
 
-    // 🔒 Limpiar locks viejos
     cleanupInFlight();
 
-    // 🔒 ¿Ya hay una venta de este usuario en proceso?
     if (salesInFlight.has(userId)) {
       console.warn("[processSale] Doble submit bloqueado", {
         userId,
@@ -146,18 +166,22 @@ const processSale = async (req, res) => {
       });
     }
 
-    // 🔒 Adquirir lock
     salesInFlight.set(userId, Date.now());
 
     console.log("[processSale] INICIO", {
       startedAt,
       userId,
+      sucursalId,
       total: saleData.total,
       items: saleData.productos.length,
       forma_pago: saleData.forma_pago,
     });
 
-    const result = await sellProductsService.processSale(userId, saleData);
+    const result = await sellProductsService.processSale(
+      userId,
+      saleData,
+      sucursalId
+    );
 
     console.log("[processSale] FIN", {
       duration_ms: Date.now() - startedAt,

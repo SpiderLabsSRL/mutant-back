@@ -2,26 +2,117 @@
 const { query, pool } = require("../../db");
 
 // ============================================
-// GET PRODUCTS
+// HELPER: Obtiene sucursal y caja del usuario
+// - Si el user es admin y llega sucursalId, usa esa sucursal
+//   y la caja abierta por él (o la primera caja de esa sucursal).
+// - Si es empleado normal, usa empleados.sucursal_id + empleado_caja.
 // ============================================
-const getProducts = async (userId) => {
-  try {
-    const userQuery = `
-      SELECT 
-        e.sucursal_id,
-        e.id as empleado_id
-      FROM empleados e
-      JOIN usuarios u ON e.id = u.empleado_id
-      WHERE u.id = $1
-    `;
+const resolveUserContext = async (userId, sucursalId = null) => {
+  const userQuery = `
+    SELECT 
+      e.id as empleado_id,
+      e.rol,
+      e.sucursal_id as sucursal_empleado,
+      ec.caja_id as caja_empleado
+    FROM empleados e
+    JOIN usuarios u ON e.id = u.empleado_id
+    LEFT JOIN empleado_caja ec ON e.id = ec.empleado_id AND ec.estado = 1
+    WHERE u.id = $1
+    LIMIT 1
+  `;
 
-    const userResult = await query(userQuery, [userId]);
+  const userResult = await query(userQuery, [userId]);
 
-    if (userResult.rows.length === 0) {
-      throw new Error("Usuario no encontrado o no es un empleado");
+  if (userResult.rows.length === 0) {
+    throw new Error("Usuario no encontrado o no es un empleado");
+  }
+
+  const { empleado_id, rol, sucursal_empleado, caja_empleado } =
+    userResult.rows[0];
+
+  // 🔥 ADMIN: resolver sucursal y caja a partir de la sucursal elegida
+  if (rol === "admin") {
+    const sucursalFinal =
+      Number(sucursalId) || Number(sucursal_empleado) || 1;
+
+    // 1) Buscar caja abierta por el admin en esa sucursal
+    const cajaAbiertaResult = await query(
+      `
+      SELECT c.id
+      FROM cajas c
+      WHERE c.sucursal_id = $1
+        AND c.estado_caja = 'abierta'
+        AND (
+          SELECT mc.tipo
+          FROM movimientos_caja mc
+          WHERE mc.caja_id = c.id
+          ORDER BY mc.fecha DESC
+          LIMIT 1
+        ) = 'apertura'
+        AND (
+          SELECT mc.usuario_id
+          FROM movimientos_caja mc
+          WHERE mc.caja_id = c.id
+          ORDER BY mc.fecha DESC
+          LIMIT 1
+        ) = $2
+      ORDER BY c.id ASC
+      LIMIT 1
+      `,
+      [sucursalFinal, userId]
+    );
+
+    let cajaId = null;
+
+    if (cajaAbiertaResult.rows.length > 0) {
+      cajaId = cajaAbiertaResult.rows[0].id;
+    } else {
+      // 2) Si no tiene abierta, tomar la primera caja de esa sucursal
+      //    (probablemente cerrada; la validación de "abierta" se hará luego).
+      const cajaSucursalResult = await query(
+        `
+        SELECT id
+        FROM cajas
+        WHERE sucursal_id = $1
+        ORDER BY id ASC
+        LIMIT 1
+        `,
+        [sucursalFinal]
+      );
+
+      if (cajaSucursalResult.rows.length > 0) {
+        cajaId = cajaSucursalResult.rows[0].id;
+      }
     }
 
-    const { sucursal_id } = userResult.rows[0];
+    return {
+      empleado_id,
+      rol,
+      sucursal_id: sucursalFinal,
+      caja_id: cajaId,
+    };
+  }
+
+  // 🔥 NO ADMIN: flujo original
+  return {
+    empleado_id,
+    rol,
+    sucursal_id: sucursal_empleado,
+    caja_id: caja_empleado,
+  };
+};
+
+// ============================================
+// GET PRODUCTS
+// ============================================
+const getProducts = async (userId, sucursalId = null) => {
+  try {
+    const ctx = await resolveUserContext(userId, sucursalId);
+    const { sucursal_id } = ctx;
+
+    if (!sucursal_id) {
+      throw new Error("Usuario sin sucursal asignada");
+    }
 
     const productsQuery = `
       SELECT 
@@ -69,33 +160,17 @@ const getProducts = async (userId) => {
     return products;
   } catch (error) {
     console.error("Error en getProducts service:", error);
-    throw new Error("Error al obtener los productos");
+    throw new Error(error.message || "Error al obtener los productos");
   }
 };
 
 // ============================================
 // GET CASH REGISTER STATUS
 // ============================================
-const getCashRegisterStatus = async (userId) => {
+const getCashRegisterStatus = async (userId, sucursalId = null) => {
   try {
-    const userQuery = `
-      SELECT 
-        e.sucursal_id,
-        ec.caja_id
-      FROM empleados e
-      JOIN usuarios u ON e.id = u.empleado_id
-      LEFT JOIN empleado_caja ec ON e.id = ec.empleado_id AND ec.estado = 1
-      WHERE u.id = $1
-      LIMIT 1
-    `;
-
-    const userResult = await query(userQuery, [userId]);
-
-    if (userResult.rows.length === 0) {
-      throw new Error("Usuario no encontrado o no es un empleado");
-    }
-
-    const { caja_id } = userResult.rows[0];
+    const ctx = await resolveUserContext(userId, sucursalId);
+    const { caja_id } = ctx;
 
     if (!caja_id) {
       throw new Error("No hay caja activa para esta sucursal");
@@ -147,26 +222,18 @@ const getCashRegisterStatus = async (userId) => {
 // ============================================
 // VALIDATE COUPON
 // ============================================
-const validateCoupon = async (userId, codigo) => {
+const validateCoupon = async (userId, codigo, sucursalId = null) => {
   try {
     if (!codigo || !codigo.trim()) {
       throw new Error("Código de cupón requerido");
     }
 
-    const userQuery = `
-      SELECT e.sucursal_id
-      FROM empleados e
-      JOIN usuarios u ON e.id = u.empleado_id
-      WHERE u.id = $1
-    `;
+    const ctx = await resolveUserContext(userId, sucursalId);
+    const { sucursal_id } = ctx;
 
-    const userResult = await query(userQuery, [userId]);
-
-    if (userResult.rows.length === 0) {
-      throw new Error("Usuario no encontrado");
+    if (!sucursal_id) {
+      throw new Error("Usuario sin sucursal asignada");
     }
-
-    const { sucursal_id } = userResult.rows[0];
 
     const cuponQuery = `
       SELECT 
@@ -256,20 +323,21 @@ const validateCoupon = async (userId, codigo) => {
 };
 
 // ============================================
-// PROCESS SALE — VERSIÓN ORIGINAL SIN client_sale_id
+// PROCESS SALE — con soporte admin/sucursal
 // ============================================
-const processSale = async (userId, saleData) => {
+const processSale = async (userId, saleData, sucursalId = null) => {
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
 
-    // 1. Obtener empleado, sucursal y caja
+    // 1. Resolver sucursal, empleado y caja
     const userQuery = `
       SELECT 
         e.id as empleado_id,
-        e.sucursal_id,
-        ec.caja_id
+        e.rol,
+        e.sucursal_id as sucursal_empleado,
+        ec.caja_id as caja_empleado
       FROM empleados e
       JOIN usuarios u ON e.id = u.empleado_id
       LEFT JOIN empleado_caja ec ON e.id = ec.empleado_id AND ec.estado = 1
@@ -283,7 +351,61 @@ const processSale = async (userId, saleData) => {
       throw new Error("Usuario no encontrado o no es un empleado");
     }
 
-    const { empleado_id, sucursal_id, caja_id } = userResult.rows[0];
+    const { empleado_id, rol, sucursal_empleado, caja_empleado } =
+      userResult.rows[0];
+
+    let sucursal_id;
+    let caja_id;
+
+    if (rol === "admin") {
+      sucursal_id = Number(sucursalId) || Number(sucursal_empleado) || 1;
+
+      // Buscar caja abierta por el admin en esa sucursal
+      const cajaAbiertaResult = await client.query(
+        `
+        SELECT c.id
+        FROM cajas c
+        WHERE c.sucursal_id = $1
+          AND c.estado_caja = 'abierta'
+          AND (
+            SELECT mc.tipo
+            FROM movimientos_caja mc
+            WHERE mc.caja_id = c.id
+            ORDER BY mc.fecha DESC
+            LIMIT 1
+          ) = 'apertura'
+          AND (
+            SELECT mc.usuario_id
+            FROM movimientos_caja mc
+            WHERE mc.caja_id = c.id
+            ORDER BY mc.fecha DESC
+            LIMIT 1
+          ) = $2
+        ORDER BY c.id ASC
+        LIMIT 1
+        `,
+        [sucursal_id, userId]
+      );
+
+      if (cajaAbiertaResult.rows.length > 0) {
+        caja_id = cajaAbiertaResult.rows[0].id;
+      } else {
+        const cajaSucursalResult = await client.query(
+          `SELECT id FROM cajas WHERE sucursal_id = $1 ORDER BY id ASC LIMIT 1`,
+          [sucursal_id]
+        );
+        if (cajaSucursalResult.rows.length > 0) {
+          caja_id = cajaSucursalResult.rows[0].id;
+        }
+      }
+    } else {
+      sucursal_id = sucursal_empleado;
+      caja_id = caja_empleado;
+    }
+
+    if (!sucursal_id) {
+      throw new Error("Usuario sin sucursal asignada");
+    }
 
     if (!caja_id) {
       throw new Error("No hay caja activa para esta sucursal");
@@ -427,7 +549,7 @@ const processSale = async (userId, saleData) => {
       );
     }
 
-    // 5. Insertar venta (SIN client_sale_id)
+    // 5. Insertar venta
     const insertSaleQuery = `
       INSERT INTO ventas_productos (
         subtotal, descuento, descripcion_descuento, total, 

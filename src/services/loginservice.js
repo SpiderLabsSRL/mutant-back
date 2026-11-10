@@ -1,3 +1,4 @@
+// src/services/loginservice.js
 const { query } = require("../../db");
 const bcrypt = require("bcrypt");
 
@@ -59,7 +60,9 @@ const authenticateUser = async (username, password) => {
       user = result.rows[0];
       user.userType = 'empleado';
 
-      // 🔥 VALIDACIÓN: Sucursal inactiva (solo para empleados que no son admin)
+      // 🔥 VALIDACIÓN: Sucursal inactiva (solo para empleados que NO son admin)
+      // Los admins pueden iniciar sesión sin importar el estado de su sucursal
+      // porque ellos eligen la sucursal después del login.
       if (user.rol !== 'admin' && user.idsucursal) {
         if (user.estado_sucursal !== 1) {
           throw new Error("Sucursal Inactiva");
@@ -86,7 +89,7 @@ const authenticateUser = async (username, password) => {
            ORDER BY dia_semana`,
           [user.idempleado]
         );
-        
+
         user.horarios = horariosResult.rows;
       } else {
         // Para admin, no necesita horarios
@@ -169,7 +172,8 @@ const authenticateByFingerprint = async (ci) => {
       throw new Error("Empleado inactivo. Contacte al administrador.");
     }
 
-    // 🔥 VALIDACIÓN: Sucursal inactiva (solo para empleados que no son admin)
+    // 🔥 VALIDACIÓN: Sucursal inactiva (solo para empleados que NO son admin)
+    // Los admins pueden iniciar sesión sin importar el estado de su sucursal
     if (user.rol !== 'admin' && user.idsucursal) {
       if (user.estado_sucursal !== 1) {
         throw new Error("Sucursal Inactiva");

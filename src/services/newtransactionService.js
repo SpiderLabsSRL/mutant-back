@@ -1,9 +1,5 @@
+// src/services/newtransactionService.js
 const { query, pool } = require("../../db");
-
-// ============================================
-// HELPER: Formatea fecha tal cual está en BD
-// (sin conversiones de zona horaria)
-// ============================================
 
 // ============================================
 // GET ALL TRANSACTIONS (movimientos_caja)
@@ -80,7 +76,6 @@ exports.createTransaction = async ({
   try {
     await client.query("BEGIN");
 
-    // 1. Verificar que la caja esté abierta y obtener monto actual
     const cajaResult = await client.query(
       `SELECT estado_caja, COALESCE(total, 0) as total_actual 
        FROM cajas 
@@ -101,7 +96,6 @@ exports.createTransaction = async ({
 
     const montoAnterior = parseFloat(cajaActual.total_actual);
 
-    // 2. Calcular nuevo monto
     let montoActual = montoAnterior;
     if (tipo === "ingreso") {
       montoActual = montoAnterior + monto;
@@ -109,8 +103,6 @@ exports.createTransaction = async ({
       montoActual = montoAnterior - monto;
     }
 
-    // 3. Insertar movimiento
-    // ✅ FIX: Usamos NOW() (hora del servidor) sin TIMEZONE() para no desplazar la hora
     const result = await client.query(
       `INSERT INTO movimientos_caja 
         (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual, fecha)
@@ -127,13 +119,11 @@ exports.createTransaction = async ({
       ]
     );
 
-    // 4. Actualizar total de la caja
     await client.query(`UPDATE cajas SET total = $1 WHERE id = $2`, [
       montoActual,
       idCaja,
     ]);
 
-    // 5. Obtener información completa del movimiento
     const transactionResult = await client.query(
       `
       SELECT 
@@ -199,12 +189,23 @@ exports.getCashRegisterStatus = async (idCaja) => {
 
 // ============================================
 // GET ASSIGNED CASH REGISTER
+// --------------------------------------------
+// - Si el usuario es ADMIN y viene sucursalId:
+//     * Busca la caja abierta por ese admin en esa sucursal
+//       (último movimiento de apertura sin cierre).
+//     * Si no hay abierta, devuelve la primera caja activa
+//       de esa sucursal (para que pueda abrirla).
+// - Si el usuario NO es admin:
+//     * Sigue usando empleado_caja (lógica original).
 // ============================================
-exports.getAssignedCashRegister = async (idUsuario) => {
+exports.getAssignedCashRegister = async (idUsuario, sucursalId) => {
   try {
-    // Obtener el empleado_id del usuario
+    // 1. Obtener datos del usuario
     const userResult = await query(
-      `SELECT empleado_id FROM usuarios WHERE id = $1`,
+      `SELECT u.empleado_id, e.rol, e.sucursal_id
+       FROM usuarios u
+       INNER JOIN empleados e ON u.empleado_id = e.id
+       WHERE u.id = $1`,
       [idUsuario]
     );
 
@@ -212,9 +213,93 @@ exports.getAssignedCashRegister = async (idUsuario) => {
       throw new Error("Usuario no encontrado");
     }
 
-    const empleadoId = userResult.rows[0].empleado_id;
+    const { empleado_id: empleadoId, rol, sucursal_id: sucursalEmpleado } =
+      userResult.rows[0];
 
-    // Obtener la caja asignada al empleado
+    // ============================================
+    // 🔥 ADMIN: caja por sucursal seleccionada
+    // ============================================
+    if (rol === "admin") {
+      // Sucursal a usar: la que venga del frontend, o la del empleado, o la 1
+      const sucursalFinal =
+        Number(sucursalId) || Number(sucursalEmpleado) || 1;
+
+      // 1) Buscar si el admin tiene una caja ABIERTA en esa sucursal.
+      //    Se entiende "abierta por él" si el último movimiento de caja
+      //    es una apertura (no cierre) hecha por este mismo usuario.
+      const cajaAbiertaResult = await query(
+        `
+        SELECT c.id
+        FROM cajas c
+        WHERE c.sucursal_id = $1
+          AND c.estado_caja = 'abierta'
+          AND (
+            SELECT mc.tipo
+            FROM movimientos_caja mc
+            WHERE mc.caja_id = c.id
+            ORDER BY mc.fecha DESC
+            LIMIT 1
+          ) = 'apertura'
+          AND (
+            SELECT mc.usuario_id
+            FROM movimientos_caja mc
+            WHERE mc.caja_id = c.id
+            ORDER BY mc.fecha DESC
+            LIMIT 1
+          ) = $2
+        ORDER BY c.id ASC
+        LIMIT 1
+        `,
+        [sucursalFinal, idUsuario]
+      );
+
+      if (cajaAbiertaResult.rows.length > 0) {
+        return cajaAbiertaResult.rows[0].id;
+      }
+
+      // 2) Si no tiene caja abierta, devolver la primera caja CERRADA
+      //    de esa sucursal para que pueda abrirla.
+      const cajaCerradaResult = await query(
+        `
+        SELECT c.id
+        FROM cajas c
+        WHERE c.sucursal_id = $1
+          AND c.estado_caja = 'cerrada'
+        ORDER BY c.id ASC
+        LIMIT 1
+        `,
+        [sucursalFinal]
+      );
+
+      if (cajaCerradaResult.rows.length > 0) {
+        return cajaCerradaResult.rows[0].id;
+      }
+
+      // 3) Si esa sucursal no tiene cajas, intentar con cualquier caja
+      //    activa (por si la sucursal aún no tiene cajas registradas).
+      const cualquierCajaResult = await query(
+        `
+        SELECT c.id
+        FROM cajas c
+        WHERE c.sucursal_id = $1
+        ORDER BY c.id ASC
+        LIMIT 1
+        `,
+        [sucursalFinal]
+      );
+
+      if (cualquierCajaResult.rows.length > 0) {
+        return cualquierCajaResult.rows[0].id;
+      }
+
+      throw new Error(
+        `No hay cajas registradas para la sucursal ${sucursalFinal}`
+      );
+    }
+
+    // ============================================
+    // NO ADMIN: lógica original (empleado_caja)
+    // ============================================
     const cashRegisterResult = await query(
       `
       SELECT caja_id 
@@ -250,7 +335,6 @@ exports.openCashRegister = async (
   try {
     await client.query("BEGIN");
 
-    // 1. Verificar estado actual
     const cajaResult = await client.query(
       `SELECT estado_caja, COALESCE(total, 0) as total_actual 
        FROM cajas 
@@ -271,14 +355,11 @@ exports.openCashRegister = async (
 
     const montoAnterior = parseFloat(cajaActual.total_actual);
 
-    // 2. Actualizar estado y total de la caja
     await client.query(
       `UPDATE cajas SET estado_caja = 'abierta', total = $1 WHERE id = $2`,
       [monto_inicial, caja_id]
     );
 
-    // 3. Registrar movimiento de apertura
-    // ✅ FIX: Usamos NOW() (hora del servidor) sin TIMEZONE() para no desplazar la hora
     await client.query(
       `INSERT INTO movimientos_caja 
         (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual, fecha)
@@ -318,7 +399,6 @@ exports.closeCashRegister = async (
   try {
     await client.query("BEGIN");
 
-    // 1. Verificar estado actual
     const cajaResult = await client.query(
       `SELECT estado_caja, COALESCE(total, 0) as total_actual 
        FROM cajas 
@@ -339,14 +419,11 @@ exports.closeCashRegister = async (
 
     const montoAnterior = parseFloat(cajaActual.total_actual);
 
-    // 2. Actualizar estado y total
     await client.query(
       `UPDATE cajas SET estado_caja = 'cerrada', total = $1 WHERE id = $2`,
       [monto_final, caja_id]
     );
 
-    // 3. Registrar movimiento de cierre
-    // ✅ FIX: Usamos NOW() (hora del servidor) sin TIMEZONE() para no desplazar la hora
     await client.query(
       `INSERT INTO movimientos_caja 
         (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual, fecha)

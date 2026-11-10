@@ -1,3 +1,4 @@
+// src/controllers/newtransactionController.js
 const newtransactionService = require("../services/newtransactionService");
 
 // ============================================
@@ -87,17 +88,19 @@ exports.getCashRegisterStatus = async (req, res) => {
 
 // ============================================
 // GET ASSIGNED CASH REGISTER
+// Recibe idUsuario (obligatorio) y sucursalId (opcional, para admin)
 // ============================================
 exports.getAssignedCashRegister = async (req, res) => {
   try {
-    const { idUsuario } = req.query;
+    const { idUsuario, sucursalId } = req.query;
 
     if (!idUsuario) {
       return res.status(400).json({ error: "ID de usuario requerido" });
     }
 
     const idCaja = await newtransactionService.getAssignedCashRegister(
-      parseInt(idUsuario)
+      parseInt(idUsuario),
+      sucursalId ? parseInt(sucursalId) : null
     );
     res.json({ idCaja });
   } catch (error) {
