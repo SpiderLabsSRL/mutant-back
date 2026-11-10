@@ -4,18 +4,19 @@ const router = express.Router();
 const salesController = require("../controllers/salescontrolController");
 const { authenticate } = require("../middleware/loginmiddleware");
 
-// ⚠️ Aplicamos authenticate a TODAS las rutas del router
 router.use(authenticate);
 
-// ⚠️ IMPORTANTE: Las rutas específicas van ANTES de las dinámicas
+// ⚠️ Rutas específicas ANTES de las dinámicas
 router.get("/totals", salesController.getTotals);
+router.get("/resumen", salesController.getResumen);
 router.get("/sucursales/list", salesController.getSucursales);
+router.get("/empleados/list", salesController.getEmpleados);
 router.get("/", salesController.getSales);
 
-// ✅ Anular pago pendiente (abono) - debe ir ANTES de DELETE /:id
+// Anular pago pendiente (abono) - debe ir ANTES de DELETE /:id
 router.delete("/pagos/:id", salesController.anularPagoPendiente);
 
-// ✅ Anular venta
+// Anular venta
 router.delete("/:id", salesController.anularVenta);
 
 // Detalle (dinámica, va al final)

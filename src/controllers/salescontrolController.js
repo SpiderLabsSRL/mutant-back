@@ -15,7 +15,7 @@ async function resolveUserSucursalId(req) {
   try {
     if (empleadoId) {
       const r = await query(
-        `SELECT sucursal_id FROM empleados WHERE id = $1 AND estado = 1`,
+        `SELECT sucursal_id FROM empleados WHERE id = $1::int AND estado = 1`,
         [empleadoId]
       );
       if (r.rows.length > 0) return r.rows[0].sucursal_id;
@@ -25,7 +25,7 @@ async function resolveUserSucursalId(req) {
         `SELECT e.sucursal_id 
          FROM usuarios u 
          INNER JOIN empleados e ON u.empleado_id = e.id 
-         WHERE u.id = $1 AND e.estado = 1`,
+         WHERE u.id = $1::int AND e.estado = 1`,
         [usuarioId]
       );
       if (r.rows.length > 0) return r.rows[0].sucursal_id;
@@ -42,7 +42,7 @@ async function resolveUserEmpleadoId(req) {
 
   try {
     const r = await query(
-      `SELECT empleado_id FROM usuarios WHERE id = $1 LIMIT 1`,
+      `SELECT empleado_id FROM usuarios WHERE id = $1::int LIMIT 1`,
       [usuarioId]
     );
     if (r.rows.length > 0 && r.rows[0].empleado_id) {
@@ -52,7 +52,7 @@ async function resolveUserEmpleadoId(req) {
     if (personaId) {
       const r2 = await query(
         `SELECT id FROM empleados 
-         WHERE persona_id = $1 AND estado = 1 
+         WHERE persona_id = $1::int AND estado = 1 
          LIMIT 1`,
         [personaId]
       );
@@ -73,7 +73,7 @@ async function resolveUsuarioIdForzado(req) {
   if (empleadoId) {
     try {
       const r = await query(
-        `SELECT id FROM usuarios WHERE empleado_id = $1 LIMIT 1`,
+        `SELECT id FROM usuarios WHERE empleado_id = $1::int LIMIT 1`,
         [empleadoId]
       );
       if (r.rows.length > 0) return Number(r.rows[0].id);
@@ -88,72 +88,96 @@ function normalizeRol(rol) {
   return (rol || "").toString().toLowerCase().trim();
 }
 
+function buildFiltersFromQuery(query) {
+  const {
+    dateFilterType = "today",
+    specificDate,
+    startDate,
+    endDate,
+    sucursal,
+    empleadoId,
+    metodoPago,
+    tipo,
+  } = query;
+
+  return {
+    dateFilterType: dateFilterType || "today",
+    specificDate: specificDate || null,
+    startDate: startDate || null,
+    endDate: endDate || null,
+    sucursal: sucursal === "all" || !sucursal ? null : sucursal,
+    empleadoId: empleadoId === "all" || !empleadoId ? null : empleadoId,
+    metodoPago: metodoPago === "all" || !metodoPago ? null : metodoPago,
+    tipo: tipo === "servicio" ? "servicio" : "producto",
+  };
+}
+
+function validateFilters(filters) {
+  if (filters.dateFilterType === "range") {
+    if (!filters.startDate || !filters.endDate) {
+      return "Para rango de fechas, debe especificar fecha inicio y fecha fin";
+    }
+    if (new Date(filters.startDate) > new Date(filters.endDate)) {
+      return "La fecha inicio no puede ser mayor a la fecha fin";
+    }
+  }
+  if (filters.dateFilterType === "specific" && !filters.specificDate) {
+    return "Para fecha específica, debe seleccionar una fecha";
+  }
+  return null;
+}
+
+async function resolveEmpleadoIdForzado(req, filters) {
+  const userRol = normalizeRol(req.user?.rol);
+  let empleadoIdEfectivo = filters.empleadoId;
+
+  if (userRol === "recepcionista") {
+    const usuarioIdForzado = await resolveUsuarioIdForzado(req);
+    empleadoIdEfectivo = usuarioIdForzado ? usuarioIdForzado.toString() : null;
+  }
+
+  return { empleadoIdEfectivo, userRol };
+}
+
 // ============================================
 // GET SALES
 // ============================================
 const getSales = async (req, res) => {
   try {
-    const {
-      dateFilterType = "today",
-      specificDate,
-      startDate,
-      endDate,
-      sucursal,
-      empleadoId,
-      page = 1,
-      pageSize = 20,
-    } = req.query;
-
-    if (dateFilterType === "range") {
-      if (!startDate || !endDate) {
-        return res.status(400).json({
-          error:
-            "Para rango de fechas, debe especificar fecha inicio y fecha fin",
-        });
-      }
-      if (new Date(startDate) > new Date(endDate)) {
-        return res.status(400).json({
-          error: "La fecha inicio no puede ser mayor a la fecha fin",
-        });
-      }
-    }
-
-    if (dateFilterType === "specific" && !specificDate) {
-      return res.status(400).json({
-        error: "Para fecha específica, debe seleccionar una fecha",
-      });
+    const filters = buildFiltersFromQuery(req.query);
+    const validationError = validateFilters(filters);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
     }
 
     const userSucursalId = await resolveUserSucursalId(req);
-    const userRol = normalizeRol(req.user?.rol);
+    const { empleadoIdEfectivo, userRol } = await resolveEmpleadoIdForzado(
+      req,
+      filters
+    );
 
-    let empleadoIdEfectivo = empleadoId || null;
-
-    if (userRol === "recepcionista") {
-      const usuarioIdForzado = await resolveUsuarioIdForzado(req);
-      if (!usuarioIdForzado) {
-        return res.json({
-          sales: [],
-          pagination: { page: 1, pageSize: 20, total: 0, totalPages: 0 },
-        });
-      }
-      empleadoIdEfectivo = usuarioIdForzado.toString();
+    if (userRol === "recepcionista" && !empleadoIdEfectivo) {
+      return res.json({
+        sales: [],
+        pagination: {
+          page: 1,
+          pageSize: 20,
+          total: 0,
+          totalPages: 0,
+        },
+      });
     }
 
-    const filters = {
-      dateFilterType: dateFilterType || "today",
-      specificDate: specificDate || null,
-      startDate: startDate || null,
-      endDate: endDate || null,
-      sucursal: sucursal === "all" || !sucursal ? null : sucursal,
-      empleadoId: empleadoIdEfectivo,
-    };
+    const finalFilters = { ...filters, empleadoId: empleadoIdEfectivo };
 
-    const pageNum = Math.max(1, parseInt(page) || 1);
-    const pageSizeNum = Math.max(1, Math.min(parseInt(pageSize) || 20, 5000));
+    const pageNum = Math.max(1, parseInt(req.query.page) || 1);
+    const pageSizeNum = Math.max(
+      1,
+      Math.min(parseInt(req.query.pageSize) || 20, 200)
+    );
 
     const result = await salesService.getSales(
-      filters,
+      finalFilters,
       pageNum,
       pageSizeNum,
       userSucursalId,
@@ -176,69 +200,35 @@ const getSales = async (req, res) => {
 // ============================================
 const getTotals = async (req, res) => {
   try {
-    const {
-      dateFilterType = "today",
-      specificDate,
-      startDate,
-      endDate,
-      sucursal,
-      empleadoId,
-    } = req.query;
-
-    if (dateFilterType === "range") {
-      if (!startDate || !endDate) {
-        return res.status(400).json({
-          error:
-            "Para rango de fechas, debe especificar fecha inicio y fecha fin",
-        });
-      }
-      if (new Date(startDate) > new Date(endDate)) {
-        return res.status(400).json({
-          error: "La fecha inicio no puede ser mayor a la fecha fin",
-        });
-      }
-    }
-
-    if (dateFilterType === "specific" && !specificDate) {
-      return res.status(400).json({
-        error: "Para fecha específica, debe seleccionar una fecha",
-      });
+    const filters = buildFiltersFromQuery(req.query);
+    const validationError = validateFilters(filters);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
     }
 
     const userSucursalId = await resolveUserSucursalId(req);
-    const userRol = normalizeRol(req.user?.rol);
+    const { empleadoIdEfectivo, userRol } = await resolveEmpleadoIdForzado(
+      req,
+      filters
+    );
 
-    let empleadoIdEfectivo = empleadoId || null;
-
-    if (userRol === "recepcionista") {
-      const usuarioIdForzado = await resolveUsuarioIdForzado(req);
-      if (!usuarioIdForzado) {
-        return res.json({
-          totalGeneral: 0,
-          efectivoGeneral: 0,
-          qrGeneral: 0,
-          totalProductos: 0,
-          efectivoProductos: 0,
-          qrProductos: 0,
-          totalServicios: 0,
-          efectivoServicios: 0,
-          qrServicios: 0,
-        });
-      }
-      empleadoIdEfectivo = usuarioIdForzado.toString();
+    if (userRol === "recepcionista" && !empleadoIdEfectivo) {
+      return res.json({
+        totalGeneral: 0,
+        efectivoGeneral: 0,
+        qrGeneral: 0,
+        totalProductos: 0,
+        efectivoProductos: 0,
+        qrProductos: 0,
+        totalServicios: 0,
+        efectivoServicios: 0,
+        qrServicios: 0,
+      });
     }
 
-    const filters = {
-      dateFilterType: dateFilterType || "today",
-      specificDate: specificDate || null,
-      startDate: startDate || null,
-      endDate: endDate || null,
-      sucursal: sucursal === "all" || !sucursal ? null : sucursal,
-      empleadoId: empleadoIdEfectivo,
-    };
-
+    const finalFilters = { ...filters, empleadoId: empleadoIdEfectivo };
     const totals = await salesService.getTotals(
-      filters,
+      finalFilters,
       userSucursalId,
       userRol
     );
@@ -247,6 +237,57 @@ const getTotals = async (req, res) => {
     console.error("❌ Error in getTotals controller:", error);
     res.status(500).json({
       error: error.message || "Error al calcular los totales",
+      details:
+        process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+};
+
+// ============================================
+// GET RESUMEN DETALLADO
+// ============================================
+const getResumen = async (req, res) => {
+  try {
+    const filters = buildFiltersFromQuery(req.query);
+    const validationError = validateFilters(filters);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+
+    const userSucursalId = await resolveUserSucursalId(req);
+    const { empleadoIdEfectivo, userRol } = await resolveEmpleadoIdForzado(
+      req,
+      filters
+    );
+
+    if (userRol === "recepcionista" && !empleadoIdEfectivo) {
+      return res.json({
+        productos: {
+          items: [],
+          totalGeneral: 0,
+          totalEfectivo: 0,
+          totalQr: 0,
+        },
+        servicios: {
+          items: [],
+          totalGeneral: 0,
+          totalEfectivo: 0,
+          totalQr: 0,
+        },
+      });
+    }
+
+    const finalFilters = { ...filters, empleadoId: empleadoIdEfectivo };
+    const resumen = await salesService.getResumen(
+      finalFilters,
+      userSucursalId,
+      userRol
+    );
+    res.json(resumen);
+  } catch (error) {
+    console.error("❌ Error in getResumen controller:", error);
+    res.status(500).json({
+      error: error.message || "Error al calcular el resumen",
       details:
         process.env.NODE_ENV === "development" ? error.stack : undefined,
     });
@@ -297,37 +338,68 @@ const getSucursales = async (req, res) => {
 };
 
 // ============================================
-// ✅ ANULAR VENTA
+// GET EMPLEADOS (solo recepcionistas)
+// ============================================
+const getEmpleados = async (req, res) => {
+  try {
+    const userRol = normalizeRol(req.user?.rol);
+    const esAdminGlobal = userRol === "admin" || userRol === "superadmin";
+
+    let sucursalFiltro =
+      req.query.sucursal && req.query.sucursal !== "all"
+        ? req.query.sucursal
+        : null;
+
+    if (!esAdminGlobal) {
+      const userSucursalId = await resolveUserSucursalId(req);
+      if (userSucursalId) {
+        sucursalFiltro = userSucursalId.toString();
+      }
+    }
+
+    const empleados = await salesService.getEmpleados(sucursalFiltro);
+    res.json(empleados);
+  } catch (error) {
+    console.error("❌ Error in getEmpleados controller:", error);
+    res.status(500).json({
+      error: error.message || "Error al obtener los empleados",
+      details:
+        process.env.NODE_ENV === "development" ? error.stack : undefined,
+    });
+  }
+};
+
+// ============================================
+// ANULAR VENTA
 // ============================================
 const anularVenta = async (req, res) => {
   try {
     const { id } = req.params;
     const { type } = req.query;
 
-    console.log("🔎 ===== ANULAR VENTA =====");
-    console.log("🔎 req.user:", req.user);
-    console.log("🔎 id:", id, "| type:", type);
-
     if (!id) return res.status(400).json({ error: "ID de venta requerido" });
 
     if (type !== "producto" && type !== "servicio") {
-      return res
-        .status(400)
-        .json({ error: "Tipo de venta inválido. Debe ser 'producto' o 'servicio'" });
+      return res.status(400).json({
+        error: "Tipo de venta inválido. Debe ser 'producto' o 'servicio'",
+      });
     }
 
     const userRol = normalizeRol(req.user?.rol);
-    console.log("🔎 Rol resuelto:", JSON.stringify(userRol));
 
     if (userRol !== "admin") {
       return res.status(403).json({
-        error: `Solo un administrador puede anular ventas (rol detectado: "${userRol || "vacío"}")`,
+        error: `Solo un administrador puede anular ventas (rol detectado: "${
+          userRol || "vacío"
+        }")`,
       });
     }
 
     const usuarioId = await resolveUsuarioIdForzado(req);
     if (!usuarioId) {
-      return res.status(401).json({ error: "No se pudo resolver el usuario actual" });
+      return res
+        .status(401)
+        .json({ error: "No se pudo resolver el usuario actual" });
     }
 
     const userSucursalId = await resolveUserSucursalId(req);
@@ -354,28 +426,28 @@ const anularVenta = async (req, res) => {
 };
 
 // ============================================
-// ✅ ANULAR PAGO PENDIENTE (ABONO)
+// ANULAR PAGO PENDIENTE
 // ============================================
 const anularPagoPendiente = async (req, res) => {
   try {
     const { id } = req.params;
-
-    console.log("🔎 ===== ANULAR PAGO PENDIENTE =====");
-    console.log("🔎 req.user:", req.user);
-    console.log("🔎 id:", id);
 
     if (!id) return res.status(400).json({ error: "ID de pago requerido" });
 
     const userRol = normalizeRol(req.user?.rol);
     if (userRol !== "admin") {
       return res.status(403).json({
-        error: `Solo un administrador puede anular pagos (rol detectado: "${userRol || "vacío"}")`,
+        error: `Solo un administrador puede anular pagos (rol detectado: "${
+          userRol || "vacío"
+        }")`,
       });
     }
 
     const usuarioId = await resolveUsuarioIdForzado(req);
     if (!usuarioId) {
-      return res.status(401).json({ error: "No se pudo resolver el usuario actual" });
+      return res
+        .status(401)
+        .json({ error: "No se pudo resolver el usuario actual" });
     }
 
     const result = await salesService.anularPagoPendiente(id, {
@@ -388,8 +460,7 @@ const anularPagoPendiente = async (req, res) => {
     console.error("❌ Error in anularPagoPendiente controller:", error);
 
     const status =
-      error.statusCode ||
-      (error.message?.includes("no existe") ? 404 : 500);
+      error.statusCode || (error.message?.includes("no existe") ? 404 : 500);
 
     res.status(status).json({
       error: error.message || "Error al anular el pago",
@@ -401,8 +472,10 @@ const anularPagoPendiente = async (req, res) => {
 module.exports = {
   getSales,
   getTotals,
+  getResumen,
   getSaleDetails,
   getSucursales,
+  getEmpleados,
   anularVenta,
   anularPagoPendiente,
 };
