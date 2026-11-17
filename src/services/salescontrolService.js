@@ -8,6 +8,9 @@ const QR_REGEX =
 
 const LA_PAZ_DATE = (alias) => `(${alias}.fecha)::date`;
 
+// Roles que pueden aparecer en el filtro "Usuario" del Control de Ventas
+const ROLES_FILTRO_USUARIO = ["admin", "recepcionista"];
+
 function normalizeRol(rol) {
   return (rol || "").toString().toLowerCase().trim();
 }
@@ -174,12 +177,18 @@ async function applyEmpleadoFilter(
     return paramCount;
   }
 
-  if (normalizeRol(rol) !== "recepcionista") {
+  // ✅ Ahora permitimos admin y recepcionista
+  if (!ROLES_FILTRO_USUARIO.includes(normalizeRol(rol))) {
     whereConditions.push("1=0");
     return paramCount;
   }
 
-  if (sucursalFilter) {
+  // ✅ Los ADMINS son globales: se puede filtrar por ellos sin importar
+  //    la sucursal seleccionada (incluso si su empleado.sucursal_id es otra).
+  //    Los recepcionistas SÍ están atados a su sucursal.
+  const esAdmin = normalizeRol(rol) === "admin";
+
+  if (!esAdmin && sucursalFilter) {
     if (Number(sucursalEmpleado) !== Number(sucursalFilter)) {
       whereConditions.push("1=0");
       return paramCount;
@@ -895,38 +904,87 @@ const getSucursales = async () => {
 };
 
 // ============================================
-// GET EMPLEADOS — SOLO recepcionistas + sucursalId
+// GET EMPLEADOS — admin + recepcionista
+// Si sucursal = null/"all": el admin se replica por cada sucursal activa
+// (para que aparezca en "ambas sucursales" en el filtro).
+// Si sucursal tiene valor: solo empleados de esa sucursal.
 // ============================================
 const getEmpleados = async (sucursal = null) => {
   try {
-    const params = [];
-    let whereExtra = "";
+    const sinFiltroSucursal = !sucursal || sucursal === "all";
 
-    const baseWhere = `e.estado = 1 AND u.estado = 1 AND e.rol = 'recepcionista'`;
+    if (sinFiltroSucursal) {
+      const sucRes = await query(
+        `SELECT id FROM sucursales WHERE estado = 1 ORDER BY id`
+      );
+      const sucursalIds = sucRes.rows.map((r) => r.id);
 
-    if (sucursal && sucursal !== "all") {
-      params.push(Number(sucursal));
-      whereExtra = `AND e.sucursal_id = $${params.length}::int`;
+      const result = await query(
+        `SELECT DISTINCT
+           u.id as usuario_id,
+           CONCAT(p.nombres, ' ', p.apellidos) as nombre,
+           e.sucursal_id as "sucursalId",
+           e.rol as rol
+         FROM usuarios u
+         INNER JOIN empleados e ON u.empleado_id = e.id
+         INNER JOIN personas p ON e.persona_id = p.id
+         WHERE e.estado = 1
+           AND u.estado = 1
+           AND e.rol IN ('admin', 'recepcionista')
+         ORDER BY nombre`
+      );
+
+      const out = [];
+      for (const r of result.rows) {
+        const rolNorm = normalizeRol(r.rol);
+        if (rolNorm === "admin") {
+          for (const sid of sucursalIds) {
+            out.push({
+              id: r.usuario_id.toString(),
+              nombre: `${r.nombre} (Admin)`,
+              sucursalId: sid.toString(),
+              rol: r.rol,
+            });
+          }
+        } else {
+          out.push({
+            id: r.usuario_id.toString(),
+            nombre: r.nombre,
+            sucursalId:
+              r.sucursalId != null ? r.sucursalId.toString() : null,
+            rol: r.rol,
+          });
+        }
+      }
+
+      out.sort((a, b) => a.nombre.localeCompare(b.nombre));
+      return out;
     }
 
+    const params = [Number(sucursal)];
     const result = await query(
       `SELECT DISTINCT
-         u.id as id,
+         u.id as usuario_id,
          CONCAT(p.nombres, ' ', p.apellidos) as nombre,
-         e.sucursal_id as "sucursalId"
+         e.sucursal_id as "sucursalId",
+         e.rol as rol
        FROM usuarios u
        INNER JOIN empleados e ON u.empleado_id = e.id
        INNER JOIN personas p ON e.persona_id = p.id
-       WHERE ${baseWhere}
-       ${whereExtra}
+       WHERE e.estado = 1
+         AND u.estado = 1
+         AND e.rol IN ('admin', 'recepcionista')
+         AND e.sucursal_id = $1::int
        ORDER BY nombre`,
-      sanitizeParams(params)
+      params
     );
 
     return result.rows.map((r) => ({
-      id: r.id.toString(),
-      nombre: r.nombre,
+      id: r.usuario_id.toString(),
+      nombre:
+        normalizeRol(r.rol) === "admin" ? `${r.nombre} (Admin)` : r.nombre,
       sucursalId: r.sucursalId != null ? r.sucursalId.toString() : null,
+      rol: r.rol || null,
     }));
   } catch (error) {
     console.error("❌ Error in getEmpleados service:", error);

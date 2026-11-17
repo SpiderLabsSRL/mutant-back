@@ -338,7 +338,7 @@ const getSucursales = async (req, res) => {
 };
 
 // ============================================
-// GET EMPLEADOS (solo recepcionistas)
+// GET EMPLEADOS (admin + recepcionista)
 // ============================================
 const getEmpleados = async (req, res) => {
   try {
