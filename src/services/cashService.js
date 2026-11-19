@@ -61,9 +61,11 @@ function buildMovimientosWhere(cashBoxId, filters = {}) {
   const params = [cashBoxId];
   let paramCount = 2;
 
-  // --- Filtro por fecha ---
+  // --- Filtro por fecha (SIEMPRE en zona America/La_Paz) ---
   if (filters.dateFilterType === "specific" && filters.specificDate) {
-    conditions.push(`DATE(mc.fecha) = $${paramCount}`);
+    conditions.push(
+      `DATE(mc.fecha AT TIME ZONE 'America/La_Paz') = $${paramCount}`
+    );
     params.push(filters.specificDate);
     paramCount++;
   } else if (
@@ -72,14 +74,15 @@ function buildMovimientosWhere(cashBoxId, filters = {}) {
     filters.endDate
   ) {
     conditions.push(
-      `DATE(mc.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`
+      `DATE(mc.fecha AT TIME ZONE 'America/La_Paz') BETWEEN $${paramCount} AND $${
+        paramCount + 1
+      }`
     );
     params.push(filters.startDate, filters.endDate);
     paramCount += 2;
   }
 
   // --- Filtro por tipo ---
-  // type viene como: "all" | "ingreso" | "egreso" | "apertura" | "cierre"
   if (filters.type && filters.type !== "all") {
     conditions.push(`mc.tipo = $${paramCount}`);
     params.push(filters.type);
@@ -114,8 +117,6 @@ exports.getTransactionsByCashBox = async (
     console.log("📄 Paginación:", { page, pageSize });
 
     const offset = (page - 1) * pageSize;
-
-    // Orden: por defecto DESC (más recientes primero)
     const sortOrder = filters.sortOrder === "asc" ? "ASC" : "DESC";
 
     const { whereClause, params, paramCount } = buildMovimientosWhere(
@@ -123,7 +124,7 @@ exports.getTransactionsByCashBox = async (
       filters
     );
 
-    // Query para contar total (con JOINs porque el filtro de empleado los necesita)
+    // Query para contar total
     const countQuery = `
       SELECT COUNT(*) as total_count 
       FROM movimientos_caja mc
@@ -134,6 +135,7 @@ exports.getTransactionsByCashBox = async (
     `;
 
     // Query para obtener movimientos con paginación
+    // ⚠️ fecha formateada SIEMPRE en America/La_Paz
     const transactionsQuery = `
       SELECT 
         mc.id, 
@@ -141,7 +143,7 @@ exports.getTransactionsByCashBox = async (
         mc.tipo, 
         mc.descripcion, 
         mc.monto, 
-        TO_CHAR(mc.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+        TO_CHAR(mc.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
         mc.usuario_id,
         mc.monto_anterior,
         mc.monto_actual,
@@ -249,7 +251,7 @@ exports.getLactobarTransactionsByBranch = async (branchId) => {
       mc.tipo, 
       mc.descripcion, 
       mc.monto, 
-      TO_CHAR(mc.fecha, 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+      TO_CHAR(mc.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
       mc.usuario_id,
       CONCAT(p.nombres, ' ', p.apellidos) as empleado_nombre
      FROM movimientos_caja mc
@@ -406,13 +408,7 @@ exports.cerrarCaja = async ({ cajaId, usuarioId, montoFinal }) => {
       `INSERT INTO movimientos_caja 
         (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual)
        VALUES ($1, $2, $3, 'cierre', $4, $5, $3)`,
-      [
-        cajaId,
-        usuarioId,
-        montoFinal,
-        "Cierre de caja",
-        montoAnterior,
-      ]
+      [cajaId, usuarioId, montoFinal, "Cierre de caja", montoAnterior]
     );
 
     await client.query("COMMIT");
