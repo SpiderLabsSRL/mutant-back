@@ -11,7 +11,7 @@ exports.getBranches = async () => {
 };
 
 // ============================================
-// CAJAS POR SUCURSAL (con nuevo campo estado_caja y total)
+// CAJAS POR SUCURSAL
 // ============================================
 exports.getCashBoxesByBranch = async (branchId) => {
   const result = await query(
@@ -31,7 +31,7 @@ exports.getCashBoxesByBranch = async (branchId) => {
 };
 
 // ============================================
-// ESTADO DE CAJA (monto final)
+// ESTADO DE CAJA
 // ============================================
 exports.getCashBoxStatus = async (cashBoxId) => {
   try {
@@ -54,7 +54,54 @@ exports.getCashBoxStatus = async (cashBoxId) => {
 };
 
 // ============================================
-// MOVIMIENTOS POR CAJA (usa movimientos_caja)
+// HELPER: construye WHERE para filtros de movimientos
+// ============================================
+function buildMovimientosWhere(cashBoxId, filters = {}) {
+  const conditions = ["mc.caja_id = $1"];
+  const params = [cashBoxId];
+  let paramCount = 2;
+
+  // --- Filtro por fecha ---
+  if (filters.dateFilterType === "specific" && filters.specificDate) {
+    conditions.push(`DATE(mc.fecha) = $${paramCount}`);
+    params.push(filters.specificDate);
+    paramCount++;
+  } else if (
+    filters.dateFilterType === "range" &&
+    filters.startDate &&
+    filters.endDate
+  ) {
+    conditions.push(
+      `DATE(mc.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`
+    );
+    params.push(filters.startDate, filters.endDate);
+    paramCount += 2;
+  }
+
+  // --- Filtro por tipo ---
+  // type viene como: "all" | "ingreso" | "egreso" | "apertura" | "cierre"
+  if (filters.type && filters.type !== "all") {
+    conditions.push(`mc.tipo = $${paramCount}`);
+    params.push(filters.type);
+    paramCount++;
+  }
+
+  // --- Filtro por empleado (por nombre completo) ---
+  if (filters.empleado && filters.empleado !== "all") {
+    conditions.push(`CONCAT(p.nombres, ' ', p.apellidos) = $${paramCount}`);
+    params.push(filters.empleado);
+    paramCount++;
+  }
+
+  return {
+    whereClause: `WHERE ${conditions.join(" AND ")}`,
+    params,
+    paramCount,
+  };
+}
+
+// ============================================
+// MOVIMIENTOS POR CAJA (con filtros + paginación)
 // ============================================
 exports.getTransactionsByCashBox = async (
   cashBoxId,
@@ -68,37 +115,21 @@ exports.getTransactionsByCashBox = async (
 
     const offset = (page - 1) * pageSize;
 
-    // Preparar condiciones WHERE
-    let whereConditions = ["mc.caja_id = $1"];
-    let params = [cashBoxId];
-    let paramCount = 2;
+    // Orden: por defecto DESC (más recientes primero)
+    const sortOrder = filters.sortOrder === "asc" ? "ASC" : "DESC";
 
-    // Filtro por fecha
-    if (filters.dateFilterType === "specific" && filters.specificDate) {
-      whereConditions.push(`DATE(mc.fecha) = $${paramCount}`);
-      params.push(filters.specificDate);
-      paramCount++;
-    } else if (
-      filters.dateFilterType === "range" &&
-      filters.startDate &&
-      filters.endDate
-    ) {
-      whereConditions.push(
-        `DATE(mc.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`
-      );
-      params.push(filters.startDate, filters.endDate);
-      paramCount += 2;
-    }
+    const { whereClause, params, paramCount } = buildMovimientosWhere(
+      cashBoxId,
+      filters
+    );
 
-    const whereClause =
-      whereConditions.length > 0
-        ? `WHERE ${whereConditions.join(" AND ")}`
-        : "WHERE mc.caja_id = $1";
-
-    // Query para contar total
+    // Query para contar total (con JOINs porque el filtro de empleado los necesita)
     const countQuery = `
       SELECT COUNT(*) as total_count 
       FROM movimientos_caja mc
+      JOIN usuarios u ON mc.usuario_id = u.id
+      JOIN empleados e ON u.empleado_id = e.id
+      JOIN personas p ON e.persona_id = p.id
       ${whereClause}
     `;
 
@@ -122,20 +153,19 @@ exports.getTransactionsByCashBox = async (
       JOIN empleados e ON u.empleado_id = e.id
       JOIN personas p ON e.persona_id = p.id
       ${whereClause}
-      ORDER BY mc.fecha DESC
+      ORDER BY mc.fecha ${sortOrder}
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `;
 
-    // Parámetros para paginación
-    params.push(pageSize, offset);
+    const transactionsParams = [...params, pageSize, offset];
 
     console.log("🔄 Ejecutando consultas para movimientos...");
     console.log("Where clause:", whereClause);
-    console.log("Params:", params);
+    console.log("Params:", transactionsParams);
 
     const [countResult, transactionsResult] = await Promise.all([
-      query(countQuery, params.slice(0, params.length - 2)),
-      query(transactionsQuery, params),
+      query(countQuery, params),
+      query(transactionsQuery, transactionsParams),
     ]);
 
     const totalCount = parseInt(countResult.rows[0]?.total_count || 0);
@@ -149,7 +179,7 @@ exports.getTransactionsByCashBox = async (
         page,
         pageSize,
         total: totalCount,
-        totalPages: Math.ceil(totalCount / pageSize),
+        totalPages: Math.ceil(totalCount / pageSize) || 1,
       },
     };
   } catch (error) {
@@ -159,53 +189,31 @@ exports.getTransactionsByCashBox = async (
 };
 
 // ============================================
-// TOTALES DE MOVIMIENTOS
+// TOTALES DE MOVIMIENTOS (con los mismos filtros)
 // ============================================
 exports.getTransactionTotals = async (cashBoxId, filters = {}) => {
   try {
     console.log("📊 Calculando totales de movimientos con filtros:", filters);
 
-    let whereConditions = ["mc.caja_id = $1"];
-    let params = [cashBoxId];
-    let paramCount = 2;
+    const { whereClause, params } = buildMovimientosWhere(cashBoxId, filters);
 
-    // Filtro por fecha
-    if (filters.dateFilterType === "specific" && filters.specificDate) {
-      whereConditions.push(`DATE(mc.fecha) = $${paramCount}`);
-      params.push(filters.specificDate);
-      paramCount++;
-    } else if (
-      filters.dateFilterType === "range" &&
-      filters.startDate &&
-      filters.endDate
-    ) {
-      whereConditions.push(
-        `DATE(mc.fecha) BETWEEN $${paramCount} AND $${paramCount + 1}`
-      );
-      params.push(filters.startDate, filters.endDate);
-      paramCount += 2;
-    }
-
-    const whereClause =
-      whereConditions.length > 0
-        ? `WHERE ${whereConditions.join(" AND ")}`
-        : "WHERE mc.caja_id = $1";
-
-    // Query para totales de ingresos (ingreso + apertura)
     const ingresosQuery = `
       SELECT COALESCE(SUM(mc.monto), 0) as total_ingresos
       FROM movimientos_caja mc
+      JOIN usuarios u ON mc.usuario_id = u.id
+      JOIN empleados e ON u.empleado_id = e.id
+      JOIN personas p ON e.persona_id = p.id
       ${whereClause} AND mc.tipo IN ('ingreso', 'apertura')
     `;
 
-    // Query para totales de egresos (egreso + cierre)
     const egresosQuery = `
       SELECT COALESCE(SUM(mc.monto), 0) as total_egresos
       FROM movimientos_caja mc
+      JOIN usuarios u ON mc.usuario_id = u.id
+      JOIN empleados e ON u.empleado_id = e.id
+      JOIN personas p ON e.persona_id = p.id
       ${whereClause} AND mc.tipo IN ('egreso', 'cierre')
     `;
-
-    console.log("🔄 Ejecutando consultas para totales...");
 
     const [ingresosResult, egresosResult] = await Promise.all([
       query(ingresosQuery, params),
@@ -217,10 +225,7 @@ exports.getTransactionTotals = async (cashBoxId, filters = {}) => {
     );
     const totalEgresos = parseFloat(egresosResult.rows[0]?.total_egresos || 0);
 
-    console.log("📊 Resultados de totales:", {
-      totalIngresos,
-      totalEgresos,
-    });
+    console.log("📊 Resultados de totales:", { totalIngresos, totalEgresos });
 
     return {
       totalIngresos,
@@ -260,13 +265,8 @@ exports.getLactobarTransactionsByBranch = async (branchId) => {
 };
 
 // ============================================
-// HELPERS ADICIONALES (para crear movimientos desde ventas)
+// HELPERS (crear movimientos desde ventas, apertura/cierre)
 // ============================================
-
-/**
- * Registra un movimiento de caja
- * Se puede llamar desde otros servicios (ventas, apertura, cierre)
- */
 exports.registrarMovimiento = async ({
   cajaId,
   usuarioId,
@@ -281,7 +281,6 @@ exports.registrarMovimiento = async ({
   try {
     await client.query("BEGIN");
 
-    // Obtener monto actual
     const cajaResult = await client.query(
       `SELECT COALESCE(total, 0) as total_actual FROM cajas WHERE id = $1 FOR UPDATE`,
       [cajaId]
@@ -293,7 +292,6 @@ exports.registrarMovimiento = async ({
 
     const montoAnterior = parseFloat(cajaResult.rows[0].total_actual);
 
-    // Calcular nuevo monto
     let montoActual = montoAnterior;
     if (tipo === "ingreso" || tipo === "apertura") {
       montoActual = montoAnterior + parseFloat(monto);
@@ -301,7 +299,6 @@ exports.registrarMovimiento = async ({
       montoActual = montoAnterior - parseFloat(monto);
     }
 
-    // Insertar movimiento
     const insertResult = await client.query(
       `INSERT INTO movimientos_caja 
         (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual, 
@@ -321,7 +318,6 @@ exports.registrarMovimiento = async ({
       ]
     );
 
-    // Actualizar total de la caja
     await client.query(`UPDATE cajas SET total = $1 WHERE id = $2`, [
       montoActual,
       cajaId,
@@ -338,16 +334,12 @@ exports.registrarMovimiento = async ({
   }
 };
 
-/**
- * Abre una caja
- */
 exports.abrirCaja = async ({ cajaId, usuarioId, montoInicial }) => {
   const client = await require("../../db").pool.connect();
 
   try {
     await client.query("BEGIN");
 
-    // Verificar que no esté abierta
     const cajaResult = await client.query(
       `SELECT estado_caja FROM cajas WHERE id = $1 FOR UPDATE`,
       [cajaId]
@@ -361,13 +353,11 @@ exports.abrirCaja = async ({ cajaId, usuarioId, montoInicial }) => {
       throw new Error("La caja ya está abierta");
     }
 
-    // Actualizar estado y total
     await client.query(
       `UPDATE cajas SET estado_caja = 'abierta', total = $1 WHERE id = $2`,
       [montoInicial, cajaId]
     );
 
-    // Registrar movimiento de apertura
     await client.query(
       `INSERT INTO movimientos_caja 
         (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual)
@@ -386,9 +376,6 @@ exports.abrirCaja = async ({ cajaId, usuarioId, montoInicial }) => {
   }
 };
 
-/**
- * Cierra una caja
- */
 exports.cerrarCaja = async ({ cajaId, usuarioId, montoFinal }) => {
   const client = await require("../../db").pool.connect();
 
@@ -410,13 +397,11 @@ exports.cerrarCaja = async ({ cajaId, usuarioId, montoFinal }) => {
 
     const montoAnterior = parseFloat(cajaResult.rows[0].total_actual);
 
-    // Actualizar estado y total
     await client.query(
       `UPDATE cajas SET estado_caja = 'cerrada', total = $1 WHERE id = $2`,
       [montoFinal, cajaId]
     );
 
-    // Registrar movimiento de cierre
     await client.query(
       `INSERT INTO movimientos_caja 
         (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual)

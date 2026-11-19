@@ -28,7 +28,7 @@ exports.getCashBoxesByBranch = async (req, res) => {
 };
 
 // ============================================
-// ESTADO DE CAJA (monto final)
+// ESTADO DE CAJA
 // ============================================
 exports.getCashBoxStatus = async (req, res) => {
   try {
@@ -42,7 +42,7 @@ exports.getCashBoxStatus = async (req, res) => {
 };
 
 // ============================================
-// MOVIMIENTOS POR CAJA (con paginación)
+// MOVIMIENTOS POR CAJA (con filtros + paginación)
 // ============================================
 exports.getTransactionsByCashBox = async (req, res) => {
   try {
@@ -52,6 +52,9 @@ exports.getTransactionsByCashBox = async (req, res) => {
       specificDate,
       startDate,
       endDate,
+      type,
+      empleado,
+      sortOrder,
       page = 1,
       pageSize = 20,
     } = req.query;
@@ -62,6 +65,9 @@ exports.getTransactionsByCashBox = async (req, res) => {
       specificDate,
       startDate,
       endDate,
+      type,
+      empleado,
+      sortOrder,
       page,
       pageSize,
     });
@@ -71,6 +77,9 @@ exports.getTransactionsByCashBox = async (req, res) => {
       specificDate,
       startDate,
       endDate,
+      type,
+      empleado,
+      sortOrder,
     };
 
     const pageNum = Math.max(1, parseInt(page));
@@ -100,7 +109,7 @@ exports.getTransactionsByCashBox = async (req, res) => {
 };
 
 // ============================================
-// TOTALES DE MOVIMIENTOS (sin paginación)
+// TOTALES DE MOVIMIENTOS (con los mismos filtros)
 // ============================================
 exports.getTransactionTotals = async (req, res) => {
   try {
@@ -110,6 +119,8 @@ exports.getTransactionTotals = async (req, res) => {
       specificDate,
       startDate,
       endDate,
+      type,
+      empleado,
     } = req.query;
 
     console.log("📊 Filtros recibidos para totales de movimientos:", {
@@ -118,6 +129,8 @@ exports.getTransactionTotals = async (req, res) => {
       specificDate,
       startDate,
       endDate,
+      type,
+      empleado,
     });
 
     const filters = {
@@ -125,6 +138,8 @@ exports.getTransactionTotals = async (req, res) => {
       specificDate,
       startDate,
       endDate,
+      type,
+      empleado,
     };
 
     const totals = await cashService.getTransactionTotals(cashBoxId, filters);
@@ -141,7 +156,7 @@ exports.getTransactionTotals = async (req, res) => {
 };
 
 // ============================================
-// MOVIMIENTOS DE LACTOBAR POR SUCURSAL
+// MOVIMIENTOS DE LACTOBAR
 // ============================================
 exports.getLactobarTransactions = async (req, res) => {
   try {
