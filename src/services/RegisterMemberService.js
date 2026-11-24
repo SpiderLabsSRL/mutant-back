@@ -108,9 +108,9 @@ exports.searchPeople = async (searchTerm) => {
     SELECT id, nombres, apellidos, ci, telefono, fecha_nacimiento
     FROM personas
     WHERE (
-      unaccent(LOWER(REGEXP_REPLACE(TRIM(nombres), '\\s+', ' ', 'g'))) 
+      unaccent(LOWER(REGEXP_REPLACE(TRIM(nombres), '\\s+', ' ', 'g')))
         ILIKE unaccent(LOWER($1))
-      OR unaccent(LOWER(REGEXP_REPLACE(TRIM(apellidos), '\\s+', ' ', 'g'))) 
+      OR unaccent(LOWER(REGEXP_REPLACE(TRIM(apellidos), '\\s+', ' ', 'g')))
         ILIKE unaccent(LOWER($1))
       OR TRIM(ci) ILIKE $1
       OR unaccent(LOWER(
@@ -150,13 +150,13 @@ exports.searchPeople = async (searchTerm) => {
 exports.getActiveSubscriptions = async (personaId, sucursalId) => {
   const result = await query(
     `
-    SELECT i.id, i.servicio_id, i.sucursal_id, i.fecha_inicio, i.fecha_vencimiento, 
+    SELECT i.id, i.servicio_id, i.sucursal_id, i.fecha_inicio, i.fecha_vencimiento,
            i.ingresos_disponibles, i.estado, i.estado_inscripcion,
            s.multisucursal, ts.nombre AS tipo_servicio
     FROM inscripciones i
     INNER JOIN servicios s ON i.servicio_id = s.id
     LEFT JOIN tipos_servicio ts ON s.tipo_servicio_id = ts.id
-    WHERE i.persona_id = $1 
+    WHERE i.persona_id = $1
       AND i.estado = $2
       AND i.fecha_vencimiento >= CURRENT_DATE
       AND (i.sucursal_id = $3 OR s.multisucursal = true)
@@ -174,12 +174,12 @@ exports.getActiveSubscriptions = async (personaId, sucursalId) => {
 exports.getCashRegisterStatus = async (cajaId) => {
   const result = await query(
     `
-    SELECT 
+    SELECT
       c.id as caja_id,
       c.nombre as nombre_caja,
       COALESCE(c.estado_caja, 'cerrada') as estado,
       COALESCE(c.total, 0) as monto_final,
-      (SELECT monto FROM movimientos_caja 
+      (SELECT monto FROM movimientos_caja
        WHERE caja_id = c.id AND tipo = 'apertura'
        ORDER BY fecha DESC LIMIT 1) as monto_inicial,
       (SELECT usuario_id FROM movimientos_caja
@@ -208,7 +208,7 @@ exports.validateCoupon = async (codigo, sucursalId) => {
 
   const cuponResult = await query(
     `
-    SELECT 
+    SELECT
       c.id, c.codigo, c.tipo, c.valor_descuento, c.descripcion,
       c.fecha_inicio, c.fecha_fin, c.usos, c.usos_maximos,
       c.aplica_servicios, c.aplica_productos, c.estado
@@ -274,7 +274,7 @@ exports.validateCoupon = async (codigo, sucursalId) => {
 exports.getAvailableCoupons = async (sucursalId) => {
   const result = await query(
     `
-    SELECT 
+    SELECT
       c.id, c.codigo, c.tipo, c.valor_descuento, c.descripcion,
       c.fecha_inicio, c.fecha_fin, c.usos, c.usos_maximos
     FROM cupones c
@@ -468,15 +468,29 @@ exports.registerMember = async (registrationData) => {
     }
 
     // ============================================
-    // 3. Resolver personaIndexes → personaIds
+    // 3. Resolver personaIndexes → { idx, personaId }
     // ============================================
-    const resolvePersonaIds = (servicio) => {
-      if (!servicio.personaIndexes || servicio.personaIndexes.length === 0) {
-        return [...personaIds];
-      }
-      return servicio.personaIndexes
-        .map((idx) => personaIds[idx])
-        .filter((id) => id !== undefined && id !== null);
+    const resolvePersonas = (servicio) => {
+      const idxs =
+        !servicio.personaIndexes || servicio.personaIndexes.length === 0
+          ? personaIds.map((_, i) => i)
+          : servicio.personaIndexes;
+
+      return idxs
+        .map((idx) => ({ idx, personaId: personaIds[idx] }))
+        .filter((x) => x.personaId !== undefined && x.personaId !== null);
+    };
+
+    // 🆕 Asignación por persona enviada por el frontend:
+    //    { personaIndex, fechaInicio, fechaVencimiento, accion }
+    //    accion: "replace" | "future" | null
+    const getAsignacion = (servicio, idx) => {
+      if (!Array.isArray(servicio.asignaciones)) return null;
+      return (
+        servicio.asignaciones.find(
+          (a) => Number(a.personaIndex) === Number(idx)
+        ) || null
+      );
     };
 
     // ============================================
@@ -485,14 +499,14 @@ exports.registerMember = async (registrationData) => {
     const acciones = [];
 
     for (const servicio of serviciosInfo) {
-      const realPersonaIds = resolvePersonaIds(servicio);
+      const personasServicio = resolvePersonas(servicio);
 
       const sinPersona =
         servicio.sinPersona === true ||
         (Number(servicio.cantidad_personas) === 0 &&
-          realPersonaIds.length === 0);
+          personasServicio.length === 0);
 
-      if (realPersonaIds.length === 0) {
+      if (personasServicio.length === 0) {
         if (sinPersona) {
           acciones.push({
             servicio,
@@ -512,7 +526,20 @@ exports.registerMember = async (registrationData) => {
 
       const tipoServicio = servicio.tipo_servicio || "general";
 
-      for (const personaId of realPersonaIds) {
+      for (const { idx, personaId } of personasServicio) {
+        const asignacion = getAsignacion(servicio, idx);
+
+        // Fechas propias de la persona (si el frontend las envió);
+        // si no, se usan las fechas generales del servicio.
+        const fechaInicioPersona = toYMD(
+          (asignacion && asignacion.fechaInicio) || servicio.fechaInicio
+        );
+        const fechaVencimientoPersona = toYMD(
+          (asignacion && asignacion.fechaVencimiento) ||
+            servicio.fechaVencimiento
+        );
+        const accionElegida = asignacion ? asignacion.accion : null;
+
         const conflicto = await analizarConflictoInscripcion(
           client,
           personaId,
@@ -526,19 +553,38 @@ exports.registerMember = async (registrationData) => {
           );
         }
 
+        // Vence en más de 7 días → solo se puede reemplazar
         if (conflicto.status === "reemplazo") {
           acciones.push({
             servicio,
             personaId,
             accion: "reemplazo",
             reemplazaId: conflicto.activa.id,
-            fechaInicio: toYMD(servicio.fechaInicio),
-            fechaVencimiento: toYMD(servicio.fechaVencimiento),
+            fechaInicio: fechaInicioPersona,
+            fechaVencimiento: fechaVencimientoPersona,
           });
           continue;
         }
 
+        // Vence en 7 días o menos → el usuario elige:
+        //   - "replace": reemplazar la mensualidad actual (opción principal)
+        //   - "future":  programar para cuando termine la actual (opcional)
+        //   Si no llega ninguna elección (p. ej. servicios sin diálogo),
+        //   se mantiene el comportamiento anterior: programar a futuro,
+        //   que es la opción no destructiva.
         if (conflicto.status === "futuro_permitido") {
+          if (accionElegida === "replace") {
+            acciones.push({
+              servicio,
+              personaId,
+              accion: "reemplazo",
+              reemplazaId: conflicto.activa.id,
+              fechaInicio: fechaInicioPersona,
+              fechaVencimiento: fechaVencimientoPersona,
+            });
+            continue;
+          }
+
           const finActivaYMD = toYMD(conflicto.activa.fecha_vencimiento);
           const inicioYMD = addDiasYMD(finActivaYMD, 1);
 
@@ -565,8 +611,8 @@ exports.registerMember = async (registrationData) => {
           personaId,
           accion: "nueva",
           reemplazaId: null,
-          fechaInicio: toYMD(servicio.fechaInicio),
-          fechaVencimiento: toYMD(servicio.fechaVencimiento),
+          fechaInicio: fechaInicioPersona,
+          fechaVencimiento: fechaVencimientoPersona,
         });
       }
     }
@@ -719,8 +765,8 @@ exports.registerMember = async (registrationData) => {
       ) {
         const otras = await client.query(
           `
-          SELECT sucursal_id 
-          FROM servicio_sucursal 
+          SELECT sucursal_id
+          FROM servicio_sucursal
           WHERE servicio_id = $1 AND sucursal_id != $2 AND disponible = true
         `,
           [servicio.servicioId, registrationData.sucursalId]
@@ -786,7 +832,7 @@ exports.registerMember = async (registrationData) => {
     const ventaResult = await client.query(
       `
       INSERT INTO ventas_servicios (
-        persona_id, empleado_id, subtotal, descuento, descripcion_descuento, 
+        persona_id, empleado_id, subtotal, descuento, descripcion_descuento,
         total, forma_pago, detalle_pago, sucursal_id, caja_id, cupon_id, fecha
       )
       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, TIMEZONE('America/La_Paz', NOW()))
@@ -901,9 +947,9 @@ exports.registerMember = async (registrationData) => {
 
     if (montoEfectivoCaja > 0) {
       const cajaResult = await client.query(
-        `SELECT estado_caja, COALESCE(total, 0) as total_actual 
-         FROM cajas 
-         WHERE id = $1 
+        `SELECT estado_caja, COALESCE(total, 0) as total_actual
+         FROM cajas
+         WHERE id = $1
          FOR UPDATE`,
         [registrationData.cajaId]
       );
@@ -942,7 +988,7 @@ exports.registerMember = async (registrationData) => {
 
       await client.query(
         `
-        INSERT INTO movimientos_caja 
+        INSERT INTO movimientos_caja
           (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual,
            venta_servicio_id, fecha)
         VALUES ($1, $2, $3, 'ingreso', $4, $5, $6, $7, TIMEZONE('America/La_Paz', NOW()))
@@ -995,7 +1041,7 @@ exports.registerMember = async (registrationData) => {
 exports.getPagosPendientes = async (personaId) => {
   const result = await query(
     `
-    SELECT 
+    SELECT
       pp.id,
       pp.persona_id as "personaId",
       pp.venta_servicio_id as "ventaServicioId",
@@ -1051,8 +1097,8 @@ exports.updatePagoPendiente = async (pagoId, montoPagado) => {
 
     await client.query(
       `
-      UPDATE pagos_pendientes 
-      SET 
+      UPDATE pagos_pendientes
+      SET
         monto_pagado = $1,
         monto_pendiente = $2,
         fecha_ultima_actualizacion = $3,
