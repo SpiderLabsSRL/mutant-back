@@ -1727,6 +1727,103 @@ const obtenerMovimientosFechasInscripcion = async (
 };
 
 // ============================================
+// DIFERENCIAS EN CAJA QR
+// --------------------------------------------
+// En cada apertura/cierre recepción confirma el monto QR que ve en su app.
+// En el movimiento QR: monto_anterior = saldo del sistema, monto = confirmado.
+// Aquí se listan los que no coincidieron, con quién los registró.
+// ============================================
+const obtenerDiferenciasQr = async (mes, sucursalId = null) => {
+  try {
+    const params = [mes];
+    let filtroSucursal = "";
+    if (sucursalId) {
+      params.push(Number(sucursalId));
+      filtroSucursal = `AND c.sucursal_id = $${params.length}`;
+    }
+
+    const result = await query(
+      `
+      SELECT
+        mc.id,
+        TO_CHAR(mc.fecha, 'YYYY-MM-DD HH24:MI') AS fecha,
+        mc.tipo,
+        c.id AS caja_id,
+        c.nombre AS caja_nombre,
+        s.id AS sucursal_id,
+        s.nombre AS sucursal_nombre,
+        CONCAT(p.nombres, ' ', p.apellidos) AS usuario_nombre,
+        COALESCE(mc.monto_anterior, 0) AS monto_sistema,
+        COALESCE(mc.monto, 0) AS monto_confirmado,
+        COALESCE(mc.monto, 0) - COALESCE(mc.monto_anterior, 0) AS diferencia
+      FROM movimientos_caja mc
+      INNER JOIN cajas c ON mc.caja_id = c.id
+      INNER JOIN sucursales s ON c.sucursal_id = s.id
+      INNER JOIN usuarios u ON mc.usuario_id = u.id
+      INNER JOIN empleados e ON u.empleado_id = e.id
+      INNER JOIN personas p ON e.persona_id = p.id
+      WHERE mc.metodo = 'qr'
+        AND mc.tipo IN ('apertura', 'cierre')
+        AND ROUND(COALESCE(mc.monto, 0) - COALESCE(mc.monto_anterior, 0), 2) <> 0
+        AND TO_CHAR(mc.fecha, 'YYYY-MM') = $1
+        ${filtroSucursal}
+      ORDER BY mc.fecha DESC, mc.id DESC
+      `,
+      params
+    );
+
+    const detalle = result.rows.map((r) => ({
+      id: r.id,
+      fecha: r.fecha,
+      tipo: r.tipo,
+      cajaId: r.caja_id,
+      cajaNombre: r.caja_nombre,
+      sucursalId: String(r.sucursal_id),
+      sucursalNombre: r.sucursal_nombre,
+      usuarioNombre: r.usuario_nombre,
+      montoSistema: parseFloat(r.monto_sistema) || 0,
+      montoConfirmado: parseFloat(r.monto_confirmado) || 0,
+      diferencia: Math.round((parseFloat(r.diferencia) || 0) * 100) / 100,
+    }));
+
+    const round2 = (n) => Math.round(n * 100) / 100;
+    const faltantes = detalle.filter((d) => d.diferencia < 0);
+    const sobrantes = detalle.filter((d) => d.diferencia > 0);
+
+    // Resumen por usuario (quién registró)
+    const porUsuarioMap = new Map();
+    for (const d of detalle) {
+      const actual = porUsuarioMap.get(d.usuarioNombre) || {
+        usuarioNombre: d.usuarioNombre,
+        cantidad: 0,
+        montoTotal: 0,
+      };
+      actual.cantidad += 1;
+      actual.montoTotal = round2(actual.montoTotal + Math.abs(d.diferencia));
+      porUsuarioMap.set(d.usuarioNombre, actual);
+    }
+
+    return {
+      resumen: {
+        cantidad: detalle.length,
+        montoTotal: round2(detalle.reduce((s, d) => s + Math.abs(d.diferencia), 0)),
+        cantidadFaltantes: faltantes.length,
+        montoFaltante: round2(faltantes.reduce((s, d) => s + Math.abs(d.diferencia), 0)),
+        cantidadSobrantes: sobrantes.length,
+        montoSobrante: round2(sobrantes.reduce((s, d) => s + d.diferencia, 0)),
+      },
+      porUsuario: Array.from(porUsuarioMap.values()).sort(
+        (a, b) => b.cantidad - a.cantidad
+      ),
+      detalle,
+    };
+  } catch (error) {
+    console.error("Error en obtenerDiferenciasQr:", error);
+    throw error;
+  }
+};
+
+// ============================================
 // EXPORTS
 // ============================================
 module.exports = {
@@ -1751,4 +1848,5 @@ module.exports = {
   obtenerPagosInformativos,
   actualizarSueldoEmpleado,
   obtenerReportesZumba,
+  obtenerDiferenciasQr,
 };

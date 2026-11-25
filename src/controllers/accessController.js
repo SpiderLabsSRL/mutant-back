@@ -23,6 +23,31 @@ exports.getAccessLogs = async (req, res) => {
 };
 
 // ============================================
+// HISTORIAL DE ACCESOS (paginado, búsqueda y rango de fechas)
+// ============================================
+exports.getAccessHistory = async (req, res) => {
+  try {
+    const { search, type, status, branchId, startDate, endDate, page, pageSize } =
+      req.query;
+
+    const result = await accessService.getAccessHistory({
+      searchTerm: search,
+      typeFilter: type,
+      statusFilter: status,
+      branchId: branchId ? parseInt(branchId) : null,
+      startDate,
+      endDate,
+      page,
+      pageSize,
+    });
+    res.json(result);
+  } catch (error) {
+    console.error("Error in getAccessHistory:", error);
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// ============================================
 // SEARCH MEMBERS
 // ============================================
 exports.searchMembers = async (req, res) => {

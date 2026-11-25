@@ -337,6 +337,125 @@ exports.getAccessLogs = async (
 };
 
 // ============================================
+// HISTORIAL DE ACCESOS (paginado + búsqueda + rango de fechas)
+// --------------------------------------------
+// Endpoint independiente de getAccessLogs (que sigue mostrando solo hoy).
+// Permite buscar accesos de cualquier día por nombre/CI/detalle sin
+// límite fijo de registros: se pagina en el servidor.
+// ============================================
+const YMD_REGEX = /^\d{4}-\d{2}-\d{2}$/;
+
+exports.getAccessHistory = async ({
+  searchTerm,
+  typeFilter,
+  statusFilter,
+  branchId,
+  startDate,
+  endDate,
+  page = 1,
+  pageSize = 50,
+}) => {
+  const params = [];
+  const where = [];
+
+  // Rango de fechas (YYYY-MM-DD). Sin fechas → hoy (hora de La Paz).
+  const desde = YMD_REGEX.test(startDate || "") ? startDate : null;
+  const hasta = YMD_REGEX.test(endDate || "") ? endDate : desde;
+  if (desde) {
+    params.push(desde, hasta);
+    where.push(
+      `ra.fecha::date BETWEEN $${params.length - 1}::date AND $${params.length}::date`
+    );
+  } else {
+    where.push(`ra.fecha::date = TIMEZONE('America/La_Paz', NOW())::date`);
+  }
+
+  if (branchId && !Number.isNaN(Number(branchId))) {
+    params.push(Number(branchId));
+    where.push(`ra.sucursal_id = $${params.length}`);
+  }
+
+  if (typeFilter === "cliente" || typeFilter === "empleado") {
+    params.push(typeFilter);
+    where.push(`ra.tipo_persona = $${params.length}`);
+  }
+
+  if (statusFilter === "exitoso" || statusFilter === "denegado") {
+    params.push(statusFilter);
+    where.push(`ra.estado = $${params.length}`);
+  }
+
+  // Búsqueda: cada palabra debe aparecer en nombre, apellido, CI o detalle
+  // (sin importar mayúsculas ni tildes). Ej: "juan perez" o "perez juan".
+  const palabras = (searchTerm || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 6);
+  for (const palabra of palabras) {
+    params.push(`%${palabra}%`);
+    const i = params.length;
+    where.push(`(
+      unaccent(LOWER(COALESCE(p.nombres, ''))) ILIKE unaccent(LOWER($${i}))
+      OR unaccent(LOWER(COALESCE(p.apellidos, ''))) ILIKE unaccent(LOWER($${i}))
+      OR COALESCE(p.ci, '') ILIKE $${i}
+      OR unaccent(LOWER(COALESCE(ra.detalle, ''))) ILIKE unaccent(LOWER($${i}))
+    )`);
+  }
+
+  const whereSql = `WHERE ${where.join(" AND ")}`;
+  const fromSql = `
+    FROM registros_acceso ra
+    INNER JOIN personas p ON ra.persona_id = p.id
+    LEFT JOIN servicios s ON ra.servicio_id = s.id
+  `;
+
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const size = Math.min(200, Math.max(1, parseInt(pageSize, 10) || 50));
+  const offset = (pageNum - 1) * size;
+
+  const [countResult, rowsResult] = await Promise.all([
+    query(`SELECT COUNT(*)::int AS total ${fromSql} ${whereSql}`, params),
+    query(
+      `
+      SELECT
+        ra.id,
+        TO_CHAR(ra.fecha, 'YYYY-MM-DD HH24:MI') as fecha,
+        ra.persona_id,
+        ra.servicio_id,
+        ra.inscripcion_id,
+        ra.detalle,
+        ra.estado,
+        ra.sucursal_id,
+        ra.usuario_registro_id,
+        ra.tipo_persona,
+        p.nombres as persona_nombres,
+        p.apellidos as persona_apellidos,
+        p.ci as persona_ci,
+        s.nombre as servicio_nombre
+      ${fromSql}
+      ${whereSql}
+      ORDER BY ra.fecha DESC, ra.id DESC
+      LIMIT ${size} OFFSET ${offset}
+      `,
+      params
+    ),
+  ]);
+
+  const total = countResult.rows[0]?.total || 0;
+  return {
+    logs: rowsResult.rows,
+    pagination: {
+      page: pageNum,
+      pageSize: size,
+      total,
+      totalPages: Math.max(1, Math.ceil(total / size)),
+    },
+  };
+};
+
+// ============================================
 // SEARCH MEMBERS
 // ============================================
 exports.searchMembers = async (searchTerm, typeFilter = "all", branchId) => {

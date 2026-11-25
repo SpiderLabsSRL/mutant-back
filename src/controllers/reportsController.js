@@ -345,6 +345,25 @@ const getPagosInformativos = async (req, res) => {
   }
 };
 
+const getDiferenciasQr = async (req, res) => {
+  try {
+    const { mes, sucursalId } = req.query;
+
+    if (!mes || !/^\d{4}-\d{2}$/.test(mes)) {
+      return res.status(400).json({ error: "El mes es obligatorio (YYYY-MM)" });
+    }
+
+    const data = await reportsService.obtenerDiferenciasQr(
+      mes,
+      sucursalId && sucursalId !== "all" ? sucursalId : null
+    );
+    res.json(data);
+  } catch (error) {
+    console.error("Error en getDiferenciasQr:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
 const actualizarSueldoEmpleado = async (req, res) => {
   try {
     const { id } = req.params;
@@ -416,6 +435,7 @@ module.exports = {
   getEmpleadosReporte,
   getAtrasosEmpleados,
   getPagosInformativos,
+  getDiferenciasQr,
   actualizarSueldoEmpleado,
   getReportesZumba,
 };

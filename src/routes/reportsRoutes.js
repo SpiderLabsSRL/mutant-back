@@ -50,6 +50,9 @@ router.get("/servicios-disponibles", reportsController.getServiciosDisponibles);
 router.get("/empleados", reportsController.getEmpleadosReporte);
 router.get("/atrasos-empleados", reportsController.getAtrasosEmpleados);
 router.get("/pagos-informativos", reportsController.getPagosInformativos);
+
+// Diferencias en caja QR (apertura/cierre)
+router.get("/diferencias-qr", reportsController.getDiferenciasQr);
 router.patch("/empleados/:id/sueldo", reportsController.actualizarSueldoEmpleado);
 router.get("/zumba", reportsController.getReportesZumba);
 // ============================================

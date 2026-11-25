@@ -5,6 +5,9 @@ const accessController = require("../controllers/accessController");
 // Obtener registros de acceso (solo del día actual por defecto)
 router.get("/logs", accessController.getAccessLogs);
 
+// Historial de accesos (paginado + búsqueda + fechas)
+router.get("/logs/history", accessController.getAccessHistory);
+
 // Buscar miembros (clientes y empleados)
 router.get("/members", accessController.searchMembers);
 
