@@ -1,5 +1,6 @@
 // src/services/sellProductsService.js
 const { query, pool } = require("../../db");
+const { registrarCobroEnCaja } = require("../utils/cajaMovimientos");
 
 // ============================================
 // HELPER: Obtiene sucursal y caja del usuario
@@ -43,17 +44,11 @@ const resolveUserContext = async (userId, sucursalId = null) => {
       WHERE c.sucursal_id = $1
         AND c.estado_caja = 'abierta'
         AND (
-          SELECT mc.tipo
-          FROM movimientos_caja mc
-          WHERE mc.caja_id = c.id
-          ORDER BY mc.fecha DESC
-          LIMIT 1
-        ) = 'apertura'
-        AND (
           SELECT mc.usuario_id
           FROM movimientos_caja mc
           WHERE mc.caja_id = c.id
-          ORDER BY mc.fecha DESC
+            AND mc.tipo IN ('apertura', 'cierre')
+          ORDER BY mc.fecha DESC, mc.id DESC
           LIMIT 1
         ) = $2
       ORDER BY c.id ASC
@@ -182,12 +177,13 @@ const getCashRegisterStatus = async (userId, sucursalId = null) => {
         c.nombre as nombre_caja,
         COALESCE(c.estado_caja, 'cerrada') as estado,
         COALESCE(c.total, 0) as monto_final,
-        (SELECT monto FROM movimientos_caja 
-         WHERE caja_id = c.id AND tipo = 'apertura'
-         ORDER BY fecha DESC LIMIT 1) as monto_inicial,
+        COALESCE(c.total_qr, 0) as monto_qr,
+        (SELECT monto FROM movimientos_caja
+         WHERE caja_id = c.id AND tipo = 'apertura' AND metodo = 'efectivo'
+         ORDER BY fecha DESC, id DESC LIMIT 1) as monto_inicial,
         (SELECT usuario_id FROM movimientos_caja
          WHERE caja_id = c.id
-         ORDER BY fecha DESC LIMIT 1) as usuario_id
+         ORDER BY fecha DESC, id DESC LIMIT 1) as usuario_id
       FROM cajas c
       WHERE c.id = $1
     `;
@@ -210,6 +206,7 @@ const getCashRegisterStatus = async (userId, sucursalId = null) => {
       estado: caja.estado,
       monto_inicial: parseFloat(caja.monto_inicial) || 0,
       monto_final: parseFloat(caja.monto_final) || 0,
+      monto_qr: parseFloat(caja.monto_qr) || 0,
       usuario_id: caja.usuario_id,
       nombre_caja: caja.nombre_caja,
     };
@@ -368,17 +365,11 @@ const processSale = async (userId, saleData, sucursalId = null) => {
         WHERE c.sucursal_id = $1
           AND c.estado_caja = 'abierta'
           AND (
-            SELECT mc.tipo
-            FROM movimientos_caja mc
-            WHERE mc.caja_id = c.id
-            ORDER BY mc.fecha DESC
-            LIMIT 1
-          ) = 'apertura'
-          AND (
             SELECT mc.usuario_id
             FROM movimientos_caja mc
             WHERE mc.caja_id = c.id
-            ORDER BY mc.fecha DESC
+              AND mc.tipo IN ('apertura', 'cierre')
+            ORDER BY mc.fecha DESC, mc.id DESC
             LIMIT 1
           ) = $2
         ORDER BY c.id ASC
@@ -431,22 +422,39 @@ const processSale = async (userId, saleData, sucursalId = null) => {
       throw new Error("La caja no está abierta para realizar ventas");
     }
 
-    const montoAnteriorCaja = parseFloat(cajaActual.total_actual);
-
     // 3. Validar stock
+    //    - cantidad debe ser un entero > 0 (una cantidad negativa sumaba stock)
+    //    - se suman las líneas repetidas del mismo producto antes de validar
+    //      (antes cada línea se validaba contra el stock completo)
+    //    - FOR UPDATE bloquea la fila para que dos ventas simultáneas no
+    //      vendan el mismo stock
+    const cantidadesPorProducto = new Map();
     for (const producto of saleData.productos) {
+      const cantidad = Number(producto.cantidad);
+      if (!Number.isInteger(cantidad) || cantidad <= 0) {
+        throw new Error("La cantidad de cada producto debe ser un entero mayor a 0");
+      }
+      const productoId = Number(producto.producto_id);
+      cantidadesPorProducto.set(
+        productoId,
+        (cantidadesPorProducto.get(productoId) || 0) + cantidad
+      );
+    }
+
+    for (const [productoId, cantidadTotal] of cantidadesPorProducto.entries()) {
       const productQuery = `
-        SELECT 
+        SELECT
           p.nombre,
           ps.stock,
           ps.stock IS NULL as sin_stock
         FROM producto_sucursal ps
         JOIN productos p ON ps.producto_id = p.id
         WHERE ps.producto_id = $1 AND ps.sucursal_id = $2
+        FOR UPDATE OF ps
       `;
 
       const productResult = await client.query(productQuery, [
-        producto.producto_id,
+        productoId,
         sucursal_id,
       ]);
 
@@ -458,9 +466,9 @@ const processSale = async (userId, saleData, sucursalId = null) => {
 
       if (!productInfo.sin_stock) {
         const currentStock = productInfo.stock || 0;
-        if (currentStock < producto.cantidad) {
+        if (currentStock < cantidadTotal) {
           throw new Error(
-            `Stock insuficiente para ${productInfo.nombre}. Disponible: ${currentStock}, Solicitado: ${producto.cantidad}`
+            `Stock insuficiente para ${productInfo.nombre}. Disponible: ${currentStock}, Solicitado: ${cantidadTotal}`
           );
         }
       }
@@ -598,72 +606,30 @@ const processSale = async (userId, saleData, sucursalId = null) => {
       );
 
       if (stockCheck.rows.length > 0 && !stockCheck.rows[0].sin_stock) {
-        await client.query(
-          `UPDATE producto_sucursal 
+        const updateStock = await client.query(
+          `UPDATE producto_sucursal
            SET stock = stock - $1
-           WHERE producto_id = $2 AND sucursal_id = $3`,
-          [producto.cantidad, producto.producto_id, sucursal_id]
+           WHERE producto_id = $2 AND sucursal_id = $3 AND stock >= $1`,
+          [Number(producto.cantidad), producto.producto_id, sucursal_id]
         );
+        if (updateStock.rowCount === 0) {
+          throw new Error("Stock insuficiente al descontar el producto");
+        }
       }
     }
 
-    // 7. Movimiento de caja (efectivo)
-    const montoEfectivo =
-      saleData.forma_pago === "efectivo"
-        ? saleData.total
-        : saleData.forma_pago === "mixto"
-        ? saleData.monto_efectivo || 0
-        : 0;
-
-    if (montoEfectivo > 0) {
-      const montoActual = montoAnteriorCaja + montoEfectivo;
-
-      await client.query(
-        `INSERT INTO movimientos_caja 
-          (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual,
-           venta_producto_id, fecha)
-         VALUES ($1, $2, $3, 'ingreso', $4, $5, $6, $7, TIMEZONE('America/La_Paz', NOW()))`,
-        [
-          caja_id,
-          userId,
-          montoEfectivo,
-          `Venta #${ventaId} - Productos (Efectivo)`,
-          montoAnteriorCaja,
-          montoActual,
-          ventaId,
-        ]
-      );
-
-      await client.query(`UPDATE cajas SET total = $1 WHERE id = $2`, [
-        montoActual,
-        caja_id,
-      ]);
-    }
-
-    // 8. Movimiento de caja (QR - informativo)
-    const montoQr =
-      saleData.forma_pago === "qr"
-        ? saleData.total
-        : saleData.forma_pago === "mixto"
-        ? saleData.monto_qr || 0
-        : 0;
-
-    if (montoQr > 0) {
-      await client.query(
-        `INSERT INTO movimientos_caja 
-          (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual,
-           venta_producto_id, fecha)
-         VALUES ($1, $2, $3, 'ingreso', $4, $5, $5, $6, TIMEZONE('America/La_Paz', NOW()))`,
-        [
-          caja_id,
-          userId,
-          montoQr,
-          `Venta #${ventaId} - Productos (QR - no afecta caja física)`,
-          montoAnteriorCaja,
-          ventaId,
-        ]
-      );
-    }
+    // 7. Movimientos de caja: parte efectivo → caja efectivo, parte QR → caja QR
+    await registrarCobroEnCaja(client, {
+      cajaId: caja_id,
+      usuarioId: userId,
+      formaPago: saleData.forma_pago,
+      monto: saleData.total,
+      montoEfectivo: saleData.monto_efectivo,
+      montoQr: saleData.monto_qr,
+      descripcion: `Venta #${ventaId} - Productos`,
+      ventaProductoId: ventaId,
+      mensajeCajaCerrada: "La caja no está abierta para realizar ventas",
+    });
 
     await client.query("COMMIT");
 

@@ -43,7 +43,7 @@ exports.getTransactionsByCashRegisterAndUser = async (req, res) => {
 // ============================================
 exports.createTransaction = async (req, res) => {
   try {
-    const { tipo, descripcion, monto, caja_id, usuario_id } = req.body;
+    const { tipo, descripcion, monto, caja_id, usuario_id, metodo } = req.body;
 
     if (!usuario_id) {
       return res.status(400).json({ error: "ID de usuario requerido" });
@@ -55,12 +55,25 @@ exports.createTransaction = async (req, res) => {
         .json({ error: "Tipo inválido. Debe ser 'ingreso' o 'egreso'" });
     }
 
+    const metodoFinal = metodo || "efectivo";
+    if (!["efectivo", "qr"].includes(metodoFinal)) {
+      return res
+        .status(400)
+        .json({ error: "Método inválido. Debe ser 'efectivo' o 'qr'" });
+    }
+
+    const montoNum = parseFloat(monto);
+    if (isNaN(montoNum) || montoNum <= 0) {
+      return res.status(400).json({ error: "El monto debe ser mayor a 0" });
+    }
+
     const transaction = await newtransactionService.createTransaction({
       tipo,
       descripcion,
-      monto: parseFloat(monto),
+      monto: montoNum,
       idCaja: parseInt(caja_id),
       idUsuario: parseInt(usuario_id),
+      metodo: metodoFinal,
     });
 
     res.status(201).json(transaction);
@@ -118,7 +131,8 @@ exports.getAssignedCashRegister = async (req, res) => {
 // ============================================
 exports.openCashRegister = async (req, res) => {
   try {
-    const { caja_id, monto_inicial, usuario_id, descripcion } = req.body;
+    const { caja_id, monto_inicial, usuario_id, descripcion, monto_qr } =
+      req.body;
 
     if (!caja_id || monto_inicial === undefined || !usuario_id) {
       return res
@@ -130,7 +144,10 @@ exports.openCashRegister = async (req, res) => {
       parseInt(caja_id),
       parseFloat(monto_inicial),
       parseInt(usuario_id),
-      descripcion
+      descripcion,
+      monto_qr === undefined || monto_qr === null || monto_qr === ""
+        ? null
+        : parseFloat(monto_qr)
     );
 
     res.status(201).json(result);
@@ -145,7 +162,8 @@ exports.openCashRegister = async (req, res) => {
 // ============================================
 exports.closeCashRegister = async (req, res) => {
   try {
-    const { caja_id, monto_final, usuario_id, descripcion } = req.body;
+    const { caja_id, monto_final, usuario_id, descripcion, monto_qr } =
+      req.body;
 
     if (!caja_id || monto_final === undefined || !usuario_id) {
       return res
@@ -157,7 +175,10 @@ exports.closeCashRegister = async (req, res) => {
       parseInt(caja_id),
       parseFloat(monto_final),
       parseInt(usuario_id),
-      descripcion
+      descripcion,
+      monto_qr === undefined || monto_qr === null || monto_qr === ""
+        ? null
+        : parseFloat(monto_qr)
     );
 
     res.status(200).json(result);

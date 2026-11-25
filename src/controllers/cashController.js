@@ -53,6 +53,7 @@ exports.getTransactionsByCashBox = async (req, res) => {
       startDate,
       endDate,
       type,
+      metodo,
       empleado,
       sortOrder,
       page = 1,
@@ -66,6 +67,7 @@ exports.getTransactionsByCashBox = async (req, res) => {
       startDate,
       endDate,
       type,
+      metodo,
       empleado,
       sortOrder,
       page,
@@ -78,6 +80,7 @@ exports.getTransactionsByCashBox = async (req, res) => {
       startDate,
       endDate,
       type,
+      metodo,
       empleado,
       sortOrder,
     };
@@ -120,6 +123,7 @@ exports.getTransactionTotals = async (req, res) => {
       startDate,
       endDate,
       type,
+      metodo,
       empleado,
     } = req.query;
 
@@ -130,6 +134,7 @@ exports.getTransactionTotals = async (req, res) => {
       startDate,
       endDate,
       type,
+      metodo,
       empleado,
     });
 
@@ -139,6 +144,7 @@ exports.getTransactionTotals = async (req, res) => {
       startDate,
       endDate,
       type,
+      metodo,
       empleado,
     };
 

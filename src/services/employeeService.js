@@ -86,6 +86,53 @@ exports.getEmployees = async () => {
 };
 
 // ============================================
+// HELPER: asignar caja (combo efectivo + QR) a un recepcionista
+// - La caja es obligatoria para recepcionistas.
+// - Debe existir y pertenecer a la sucursal del empleado.
+// - Usa ON CONFLICT por el UNIQUE(empleado_id, caja_id): antes fallaba al
+//   reasignar una caja que el empleado ya tuvo (fila con estado 0).
+// ============================================
+async function asignarCajaRecepcionista(client, empleadoId, cajaId, sucursalId) {
+  const cajaIdNum = parseInt(cajaId, 10);
+  if (!Number.isInteger(cajaIdNum) || cajaIdNum <= 0) {
+    const err = new Error("Debe asignar una caja al recepcionista");
+    err.statusCode = 400;
+    throw err;
+  }
+
+  const cajaResult = await client.query(
+    "SELECT id, sucursal_id FROM cajas WHERE id = $1",
+    [cajaIdNum]
+  );
+  if (cajaResult.rows.length === 0) {
+    const err = new Error("La caja seleccionada no existe");
+    err.statusCode = 400;
+    throw err;
+  }
+  if (
+    sucursalId &&
+    Number(cajaResult.rows[0].sucursal_id) !== Number(sucursalId)
+  ) {
+    const err = new Error(
+      "La caja seleccionada no pertenece a la sucursal del empleado"
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  await client.query(
+    "UPDATE empleado_caja SET estado = 0 WHERE empleado_id = $1 AND caja_id <> $2",
+    [empleadoId, cajaIdNum]
+  );
+  await client.query(
+    `INSERT INTO empleado_caja (empleado_id, caja_id, estado)
+     VALUES ($1, $2, 1)
+     ON CONFLICT (empleado_id, caja_id) DO UPDATE SET estado = 1`,
+    [empleadoId, cajaIdNum]
+  );
+}
+
+// ============================================
 // CREATE EMPLOYEE
 // ============================================
 exports.createEmployee = async (employeeData) => {
@@ -121,12 +168,8 @@ exports.createEmployee = async (employeeData) => {
     );
     const empleadoId = empleadoResult.rows[0].id;
 
-    if (caja_id && cargo === "recepcionista") {
-      await client.query(
-        `INSERT INTO empleado_caja (empleado_id, caja_id, estado) 
-         VALUES ($1, $2, 1)`,
-        [empleadoId, caja_id]
-      );
+    if (cargo === "recepcionista") {
+      await asignarCajaRecepcionista(client, empleadoId, caja_id, sucursal_id);
     }
 
     if (cargo !== "admin" && horarios && horarios.length > 0) {
@@ -213,24 +256,8 @@ exports.updateEmployee = async (id, employeeData) => {
       [cargo, cargo === "admin" ? null : sucursal_id, id]
     );
 
-    if (cargo === "recepcionista" && caja_id) {
-      const asignacionExistente = await client.query(
-        "SELECT id FROM empleado_caja WHERE empleado_id = $1 AND estado = 1",
-        [id]
-      );
-
-      if (asignacionExistente.rows.length > 0) {
-        await client.query(
-          "UPDATE empleado_caja SET caja_id = $1 WHERE empleado_id = $2 AND estado = 1",
-          [caja_id, id]
-        );
-      } else {
-        await client.query(
-          `INSERT INTO empleado_caja (empleado_id, caja_id, estado) 
-           VALUES ($1, $2, 1)`,
-          [id, caja_id]
-        );
-      }
+    if (cargo === "recepcionista") {
+      await asignarCajaRecepcionista(client, id, caja_id, sucursal_id);
     } else {
       await client.query(
         "UPDATE empleado_caja SET estado = 0 WHERE empleado_id = $1",

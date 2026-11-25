@@ -1,4 +1,8 @@
 const { query, pool } = require("../../db");
+const {
+  registrarCobroEnCaja,
+  splitMontoPorMetodo,
+} = require("../utils/cajaMovimientos");
 
 // ============================================
 // CONVENCIÓN DE ESTADOS POR TABLA (verificado en BD)
@@ -179,12 +183,13 @@ exports.getCashRegisterStatus = async (cajaId) => {
       c.nombre as nombre_caja,
       COALESCE(c.estado_caja, 'cerrada') as estado,
       COALESCE(c.total, 0) as monto_final,
+      COALESCE(c.total_qr, 0) as monto_qr,
       (SELECT monto FROM movimientos_caja
-       WHERE caja_id = c.id AND tipo = 'apertura'
-       ORDER BY fecha DESC LIMIT 1) as monto_inicial,
+       WHERE caja_id = c.id AND tipo = 'apertura' AND metodo = 'efectivo'
+       ORDER BY fecha DESC, id DESC LIMIT 1) as monto_inicial,
       (SELECT usuario_id FROM movimientos_caja
        WHERE caja_id = c.id
-       ORDER BY fecha DESC LIMIT 1) as usuario_id
+       ORDER BY fecha DESC, id DESC LIMIT 1) as usuario_id
     FROM cajas c
     WHERE c.id = $1
   `,
@@ -804,7 +809,20 @@ exports.registerMember = async (registrationData) => {
     } else if (registrationData.formaPago === "qr") {
       detallePago = "Pago completo con QR";
     } else if (registrationData.formaPago === "mixto") {
-      detallePago = `Efectivo: ${registrationData.montoEfectivo}, QR: ${registrationData.montoQr}`;
+      // En pago en plazos se anota lo realmente entregado en cada método
+      // (los reportes de ventas leen estos montos del detalle).
+      const partes = registrationData.pagoPlazos
+        ? splitMontoPorMetodo(
+            "mixto",
+            registrationData.montoEntregado,
+            registrationData.montoEfectivo,
+            registrationData.montoQr
+          )
+        : {
+            efectivo: registrationData.montoEfectivo,
+            qr: registrationData.montoQr,
+          };
+      detallePago = `Efectivo: ${partes.efectivo}, QR: ${partes.qr}`;
     }
 
     if (registrationData.pagoPlazos) {
@@ -924,51 +942,14 @@ exports.registerMember = async (registrationData) => {
     }
 
     // ============================================
-    // 13. Movimiento de caja (SOLO EFECTIVO)
+    // 13. Movimientos de caja (efectivo → caja efectivo, QR → caja QR)
+    //     En pago en plazos solo se registra lo entregado ahora.
     // ============================================
-    let montoBaseCaja;
+    const montoCobradoCaja = registrationData.pagoPlazos
+      ? Number(registrationData.montoEntregado || 0)
+      : Number(registrationData.total || 0);
 
-    if (registrationData.pagoPlazos) {
-      montoBaseCaja = Number(registrationData.montoEntregado || 0);
-    } else {
-      montoBaseCaja = Number(registrationData.total);
-    }
-
-    let montoEfectivoCaja = 0;
-    if (registrationData.formaPago === "efectivo") {
-      montoEfectivoCaja = montoBaseCaja;
-    } else if (registrationData.formaPago === "mixto") {
-      const proporcionEfectivo =
-        Number(registrationData.montoEfectivo || 0) /
-        (Number(registrationData.montoEfectivo || 0) +
-          Number(registrationData.montoQr || 0) || 1);
-      montoEfectivoCaja = montoBaseCaja * proporcionEfectivo;
-    }
-
-    if (montoEfectivoCaja > 0) {
-      const cajaResult = await client.query(
-        `SELECT estado_caja, COALESCE(total, 0) as total_actual
-         FROM cajas
-         WHERE id = $1
-         FOR UPDATE`,
-        [registrationData.cajaId]
-      );
-
-      if (cajaResult.rows.length === 0) {
-        throw new Error("Caja no encontrada");
-      }
-
-      const cajaActual = cajaResult.rows[0];
-
-      if (cajaActual.estado_caja !== "abierta") {
-        throw new Error(
-          "La caja no está abierta para realizar inscripciones"
-        );
-      }
-
-      const montoAnterior = parseFloat(cajaActual.total_actual);
-      const montoActual = montoAnterior + montoEfectivoCaja;
-
+    if (montoCobradoCaja > 0) {
       const usuarioResult = await client.query(
         `SELECT id as usuario_id FROM usuarios WHERE empleado_id = $1`,
         [registrationData.empleadoId]
@@ -984,30 +965,20 @@ exports.registerMember = async (registrationData) => {
 
       const descripcionMovimiento = registrationData.pagoPlazos
         ? `Ingreso por inscripción (Pago en plazos - Entregado: Bs. ${registrationData.montoEntregado}, Pendiente: Bs. ${registrationData.montoPendiente})`
-        : "Ingreso por inscripción de servicios (Efectivo)";
+        : "Ingreso por inscripción de servicios";
 
-      await client.query(
-        `
-        INSERT INTO movimientos_caja
-          (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual,
-           venta_servicio_id, fecha)
-        VALUES ($1, $2, $3, 'ingreso', $4, $5, $6, $7, TIMEZONE('America/La_Paz', NOW()))
-      `,
-        [
-          registrationData.cajaId,
-          usuarioId,
-          montoEfectivoCaja,
-          descripcionMovimiento,
-          montoAnterior,
-          montoActual,
-          ventaId,
-        ]
-      );
-
-      await client.query(`UPDATE cajas SET total = $1 WHERE id = $2`, [
-        montoActual,
-        registrationData.cajaId,
-      ]);
+      await registrarCobroEnCaja(client, {
+        cajaId: registrationData.cajaId,
+        usuarioId,
+        formaPago: registrationData.formaPago,
+        monto: montoCobradoCaja,
+        montoEfectivo: registrationData.montoEfectivo,
+        montoQr: registrationData.montoQr,
+        descripcion: descripcionMovimiento,
+        ventaServicioId: ventaId,
+        mensajeCajaCerrada:
+          "La caja no está abierta para realizar inscripciones",
+      });
     }
 
     await client.query("COMMIT");

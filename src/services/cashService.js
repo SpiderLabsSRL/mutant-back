@@ -21,7 +21,8 @@ exports.getCashBoxesByBranch = async (branchId) => {
       sucursal_id, 
       estado,
       estado_caja,
-      COALESCE(total, 0) as total
+      COALESCE(total, 0) as total,
+      COALESCE(total_qr, 0) as total_qr
      FROM cajas 
      WHERE sucursal_id = $1 AND estado = 1 
      ORDER BY nombre`,
@@ -36,20 +37,20 @@ exports.getCashBoxesByBranch = async (branchId) => {
 exports.getCashBoxStatus = async (cashBoxId) => {
   try {
     const result = await query(
-      `SELECT COALESCE(total, 0) as monto_final, estado_caja
+      `SELECT COALESCE(total, 0) as monto_final, COALESCE(total_qr, 0) as monto_qr, estado_caja
        FROM cajas 
        WHERE id = $1`,
       [cashBoxId]
     );
 
     if (result.rows.length === 0) {
-      return { monto_final: "0", estado_caja: "cerrada" };
+      return { monto_final: "0", monto_qr: "0", estado_caja: "cerrada" };
     }
 
     return result.rows[0];
   } catch (error) {
     console.error("Error al consultar estado de caja:", error);
-    return { monto_final: "0", estado_caja: "cerrada" };
+    return { monto_final: "0", monto_qr: "0", estado_caja: "cerrada" };
   }
 };
 
@@ -86,6 +87,13 @@ function buildMovimientosWhere(cashBoxId, filters = {}) {
   if (filters.type && filters.type !== "all") {
     conditions.push(`mc.tipo = $${paramCount}`);
     params.push(filters.type);
+    paramCount++;
+  }
+
+  // --- Filtro por método (efectivo | qr) ---
+  if (filters.metodo && ["efectivo", "qr"].includes(filters.metodo)) {
+    conditions.push(`mc.metodo = $${paramCount}`);
+    params.push(filters.metodo);
     paramCount++;
   }
 
@@ -141,6 +149,7 @@ exports.getTransactionsByCashBox = async (
         mc.id, 
         mc.caja_id, 
         mc.tipo, 
+        mc.metodo,
         mc.descripcion, 
         mc.monto, 
         TO_CHAR(mc.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
@@ -155,7 +164,7 @@ exports.getTransactionsByCashBox = async (
       JOIN empleados e ON u.empleado_id = e.id
       JOIN personas p ON e.persona_id = p.id
       ${whereClause}
-      ORDER BY mc.fecha ${sortOrder}
+      ORDER BY mc.fecha ${sortOrder}, mc.id ${sortOrder}
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `;
 
@@ -249,6 +258,7 @@ exports.getLactobarTransactionsByBranch = async (branchId) => {
       mc.id, 
       mc.caja_id, 
       mc.tipo, 
+      mc.metodo,
       mc.descripcion, 
       mc.monto, 
       TO_CHAR(mc.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
@@ -267,157 +277,9 @@ exports.getLactobarTransactionsByBranch = async (branchId) => {
 };
 
 // ============================================
-// HELPERS (crear movimientos desde ventas, apertura/cierre)
+// NOTA: los movimientos de caja (ingresos/egresos en efectivo o QR) se
+// registran con src/utils/cajaMovimientos.js, y la apertura/cierre con
+// newtransactionService (abre y cierra efectivo + QR a la vez).
+// Los helpers antiguos registrarMovimiento/abrirCaja/cerrarCaja no se
+// usaban en ninguna ruta y no contemplaban QR, por eso se quitaron.
 // ============================================
-exports.registrarMovimiento = async ({
-  cajaId,
-  usuarioId,
-  monto,
-  tipo,
-  descripcion,
-  ventaServicioId = null,
-  ventaProductoId = null,
-}) => {
-  const client = await require("../../db").pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const cajaResult = await client.query(
-      `SELECT COALESCE(total, 0) as total_actual FROM cajas WHERE id = $1 FOR UPDATE`,
-      [cajaId]
-    );
-
-    if (cajaResult.rows.length === 0) {
-      throw new Error("Caja no encontrada");
-    }
-
-    const montoAnterior = parseFloat(cajaResult.rows[0].total_actual);
-
-    let montoActual = montoAnterior;
-    if (tipo === "ingreso" || tipo === "apertura") {
-      montoActual = montoAnterior + parseFloat(monto);
-    } else if (tipo === "egreso" || tipo === "cierre") {
-      montoActual = montoAnterior - parseFloat(monto);
-    }
-
-    const insertResult = await client.query(
-      `INSERT INTO movimientos_caja 
-        (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual, 
-         venta_servicio_id, venta_producto_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-       RETURNING *`,
-      [
-        cajaId,
-        usuarioId,
-        monto,
-        tipo,
-        descripcion,
-        montoAnterior,
-        montoActual,
-        ventaServicioId,
-        ventaProductoId,
-      ]
-    );
-
-    await client.query(`UPDATE cajas SET total = $1 WHERE id = $2`, [
-      montoActual,
-      cajaId,
-    ]);
-
-    await client.query("COMMIT");
-
-    return insertResult.rows[0];
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-};
-
-exports.abrirCaja = async ({ cajaId, usuarioId, montoInicial }) => {
-  const client = await require("../../db").pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const cajaResult = await client.query(
-      `SELECT estado_caja FROM cajas WHERE id = $1 FOR UPDATE`,
-      [cajaId]
-    );
-
-    if (cajaResult.rows.length === 0) {
-      throw new Error("Caja no encontrada");
-    }
-
-    if (cajaResult.rows[0].estado_caja === "abierta") {
-      throw new Error("La caja ya está abierta");
-    }
-
-    await client.query(
-      `UPDATE cajas SET estado_caja = 'abierta', total = $1 WHERE id = $2`,
-      [montoInicial, cajaId]
-    );
-
-    await client.query(
-      `INSERT INTO movimientos_caja 
-        (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual)
-       VALUES ($1, $2, $3, 'apertura', $4, 0, $3)`,
-      [cajaId, usuarioId, montoInicial, "Apertura de caja"]
-    );
-
-    await client.query("COMMIT");
-
-    return { success: true, montoInicial };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-};
-
-exports.cerrarCaja = async ({ cajaId, usuarioId, montoFinal }) => {
-  const client = await require("../../db").pool.connect();
-
-  try {
-    await client.query("BEGIN");
-
-    const cajaResult = await client.query(
-      `SELECT estado_caja, COALESCE(total, 0) as total_actual FROM cajas WHERE id = $1 FOR UPDATE`,
-      [cajaId]
-    );
-
-    if (cajaResult.rows.length === 0) {
-      throw new Error("Caja no encontrada");
-    }
-
-    if (cajaResult.rows[0].estado_caja !== "abierta") {
-      throw new Error("La caja no está abierta");
-    }
-
-    const montoAnterior = parseFloat(cajaResult.rows[0].total_actual);
-
-    await client.query(
-      `UPDATE cajas SET estado_caja = 'cerrada', total = $1 WHERE id = $2`,
-      [montoFinal, cajaId]
-    );
-
-    await client.query(
-      `INSERT INTO movimientos_caja 
-        (caja_id, usuario_id, monto, tipo, descripcion, monto_anterior, monto_actual)
-       VALUES ($1, $2, $3, 'cierre', $4, $5, $3)`,
-      [cajaId, usuarioId, montoFinal, "Cierre de caja", montoAnterior]
-    );
-
-    await client.query("COMMIT");
-
-    return { success: true, montoFinal };
-  } catch (error) {
-    await client.query("ROLLBACK");
-    throw error;
-  } finally {
-    client.release();
-  }
-};

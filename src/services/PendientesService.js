@@ -1,5 +1,6 @@
 // services/PendientesService.js
 const { query, pool } = require("../../db");
+const { registrarCobroEnCaja, round2 } = require("../utils/cajaMovimientos");
 
 // ============================================
 // OBTENER PAGOS PENDIENTES
@@ -57,6 +58,7 @@ exports.registrarPago = async (pagoId, pagoData) => {
         pp.venta_servicio_id
       FROM pagos_pendientes pp
       WHERE pp.id = $1 AND pp.estado = 'pendiente'
+      FOR UPDATE
     `, [pagoId]);
     
     if (pagoActual.rows.length === 0) {
@@ -74,11 +76,15 @@ exports.registrarPago = async (pagoId, pagoData) => {
     const montoPagadoActual = parseFloat(monto_pagado);
     const montoPendienteActual = parseFloat(monto_pendiente);
     const montoTotalActual = parseFloat(monto_total);
-    const montoPagadoNuevo = parseFloat(pagoData.montoPagado);
-    
-    const nuevoMontoPagado = montoPagadoActual + montoPagadoNuevo;
-    const nuevoMontoPendiente = montoPendienteActual - montoPagadoNuevo;
-    
+    const montoPagadoNuevo = round2(parseFloat(pagoData.montoPagado));
+
+    if (!(montoPagadoNuevo > 0)) {
+      throw new Error("El monto pagado debe ser mayor a 0");
+    }
+
+    const nuevoMontoPagado = round2(montoPagadoActual + montoPagadoNuevo);
+    const nuevoMontoPendiente = round2(montoPendienteActual - montoPagadoNuevo);
+
     if (nuevoMontoPendiente < 0) {
       throw new Error("El monto pagado no puede ser mayor al monto pendiente");
     }
@@ -114,19 +120,6 @@ exports.registrarPago = async (pagoId, pagoData) => {
     }
     
     const usuarioId = usuarioResult.rows[0].usuario_id;
-    
-    // 5. Verificar que la caja existe y obtener su total actual
-    const cajaResult = await client.query(`
-      SELECT id, total, estado_caja
-      FROM cajas
-      WHERE id = $1
-    `, [pagoData.cajaId]);
-    
-    if (cajaResult.rows.length === 0) {
-      throw new Error("Caja no encontrada");
-    }
-    
-    const montoAnteriorCaja = parseFloat(cajaResult.rows[0].total) || 0;
     
     // 6. Construir detalle_pago en formato limpio y compatible con regex
     //    → efectivo: "Efectivo: 50"
@@ -179,43 +172,19 @@ exports.registrarPago = async (pagoId, pagoData) => {
       `, [nuevaVentaId, inscripcionId, montoPagadoNuevo]);
     }
     
-    // 9. Calcular monto en efectivo real (solo lo que entra físicamente a caja)
-    const montoEfectivo =
-      pagoData.formaPago === 'efectivo'
-        ? montoPagadoNuevo
-        : pagoData.formaPago === 'mixto'
-          ? parseFloat(pagoData.montoEfectivo) || 0
-          : 0; // qr puro → no entra efectivo a caja
-    
-    // 10. Registrar movimiento de caja (solo si hay efectivo)
-    if (montoEfectivo > 0) {
-      const montoActualCaja = montoAnteriorCaja + montoEfectivo;
-      
-      await client.query(`
-        INSERT INTO movimientos_caja (
-          caja_id, usuario_id, monto, tipo, descripcion,
-          monto_anterior, monto_actual, fecha,
-          venta_servicio_id
-        )
-        VALUES ($1, $2, $3, 'ingreso', $4, $5, $6, TIMEZONE('America/La_Paz', NOW()), $7)
-      `, [
-        pagoData.cajaId,
-        usuarioId,
-        montoEfectivo,
-        `Pago de deuda pendiente (${detallePago})`,
-        montoAnteriorCaja,
-        montoActualCaja,
-        nuevaVentaId
-      ]);
-      
-      // 11. Actualizar el total de la caja
-      await client.query(`
-        UPDATE cajas
-        SET total = $1
-        WHERE id = $2
-      `, [montoActualCaja, pagoData.cajaId]);
-    }
-    
+    // 9. Movimientos de caja: efectivo → caja efectivo, QR → caja QR
+    await registrarCobroEnCaja(client, {
+      cajaId: pagoData.cajaId,
+      usuarioId,
+      formaPago: pagoData.formaPago,
+      monto: montoPagadoNuevo,
+      montoEfectivo: pagoData.montoEfectivo,
+      montoQr: pagoData.montoQr,
+      descripcion: `Pago de deuda pendiente (${detallePago})`,
+      ventaServicioId: nuevaVentaId,
+      mensajeCajaCerrada: "La caja no está abierta para registrar pagos",
+    });
+
     await client.query('COMMIT');
     
     return {

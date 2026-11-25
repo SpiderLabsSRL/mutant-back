@@ -1,5 +1,29 @@
 // backend/services/salescontrolService.js
 const { query, pool } = require("../../db");
+const { registrarMovimientoCaja, round2 } = require("../utils/cajaMovimientos");
+
+// ============================================
+// Suma, por caja y método (efectivo/qr), los ingresos que generaron
+// las ventas indicadas. Se usa ANTES de borrar sus movimientos para
+// saber exactamente cuánto revertir en cada parte de la caja.
+// ============================================
+async function acumularReversos(client, reversos, { productoIds = [], servicioIds = [] }) {
+  if (productoIds.length === 0 && servicioIds.length === 0) return;
+
+  const result = await client.query(
+    `SELECT caja_id, metodo, COALESCE(SUM(monto), 0) AS total
+     FROM movimientos_caja
+     WHERE tipo = 'ingreso'
+       AND (venta_producto_id = ANY($1::int[]) OR venta_servicio_id = ANY($2::int[]))
+     GROUP BY caja_id, metodo`,
+    [productoIds, servicioIds]
+  );
+
+  for (const row of result.rows) {
+    const key = `${row.caja_id}|${row.metodo || "efectivo"}`;
+    reversos.set(key, round2((reversos.get(key) || 0) + parseFloat(row.total)));
+  }
+}
 
 const EFECTIVO_REGEX =
   "(?:efectivo|Efectivo)\\s*[:=]?\\s*(?:Bs\\.?)?\\s*([0-9]+(?:[.,][0-9]+)?)";
@@ -1057,8 +1081,9 @@ const anularVenta = async (saleId, saleType, actor) => {
     }
 
     let cuponId = venta.cupon_id || null;
-    let montoEfectivoCaja = 0;
     let esAbono = false;
+    // Map "cajaId|metodo" → monto a revertir
+    const reversos = new Map();
 
     if (saleType === "producto") {
       const detallesResult = await client.query(
@@ -1082,16 +1107,7 @@ const anularVenta = async (saleId, saleType, actor) => {
         }
       }
 
-      if (venta.forma_pago === "efectivo") {
-        montoEfectivoCaja = parseFloat(venta.total) || 0;
-      } else if (venta.forma_pago === "mixto") {
-        const m = (venta.detalle_pago || "").match(
-          new RegExp(EFECTIVO_REGEX, "i")
-        );
-        const parsed = m ? parseFloat((m[1] || "0").replace(",", ".")) : 0;
-        montoEfectivoCaja =
-          parsed > 0 ? parsed : (parseFloat(venta.total) || 0) / 2;
-      }
+      await acumularReversos(client, reversos, { productoIds: [ventaIdNum] });
 
       await client.query(
         `DELETE FROM movimientos_caja WHERE venta_producto_id = $1::int`,
@@ -1143,16 +1159,7 @@ const anularVenta = async (saleId, saleType, actor) => {
           );
         }
 
-        if (venta.forma_pago === "efectivo") {
-          montoEfectivoCaja = parseFloat(venta.total) || 0;
-        } else if (venta.forma_pago === "mixto") {
-          const m = (venta.detalle_pago || "").match(
-            new RegExp(EFECTIVO_REGEX, "i")
-          );
-          const parsed = m ? parseFloat((m[1] || "0").replace(",", ".")) : 0;
-          montoEfectivoCaja =
-            parsed > 0 ? parsed : (parseFloat(venta.total) || 0) / 2;
-        }
+        await acumularReversos(client, reversos, { servicioIds: [ventaIdNum] });
 
         await client.query(
           `DELETE FROM movimientos_caja WHERE venta_servicio_id = $1::int`,
@@ -1179,6 +1186,10 @@ const anularVenta = async (saleId, saleType, actor) => {
             (r) => r.venta_servicio_id
           );
 
+          await acumularReversos(client, reversos, {
+            servicioIds: ventasAsociadasIds,
+          });
+
           await client.query(
             `DELETE FROM pagos_pendientes WHERE venta_servicio_id = ANY($1::int[])`,
             [ventasAsociadasIds]
@@ -1204,17 +1215,6 @@ const anularVenta = async (saleId, saleType, actor) => {
             [inscripcionIds]
           );
         }
-
-        if (venta.forma_pago === "efectivo") {
-          montoEfectivoCaja = parseFloat(venta.total) || 0;
-        } else if (venta.forma_pago === "mixto") {
-          const m = (venta.detalle_pago || "").match(
-            new RegExp(EFECTIVO_REGEX, "i")
-          );
-          const parsed = m ? parseFloat((m[1] || "0").replace(",", ".")) : 0;
-          montoEfectivoCaja =
-            parsed > 0 ? parsed : (parseFloat(venta.total) || 0) / 2;
-        }
       }
     }
 
@@ -1225,76 +1225,27 @@ const anularVenta = async (saleId, saleType, actor) => {
       );
     }
 
-    if (montoEfectivoCaja > 0) {
-      const cajaResult = await client.query(
-        `SELECT estado_caja, COALESCE(total, 0) AS total_actual FROM cajas WHERE id = $1::int FOR UPDATE`,
-        [venta.caja_id]
-      );
-
-      if (cajaResult.rows.length === 0) {
-        throw new Error("Caja asociada a la venta no encontrada");
-      }
-
-      const caja = cajaResult.rows[0];
-      const totalActual = parseFloat(caja.total_actual) || 0;
-      const nuevoTotal = Math.max(0, totalActual - montoEfectivoCaja);
-
-      await client.query(`UPDATE cajas SET total = $1 WHERE id = $2::int`, [
-        nuevoTotal,
-        venta.caja_id,
-      ]);
+    // Reverso en cada caja y método (efectivo / QR) según lo que realmente
+    // ingresó por estas ventas. Se registra aunque la caja ya esté cerrada.
+    for (const [key, montoReverso] of reversos.entries()) {
+      if (!(montoReverso > 0)) continue;
+      const [cajaIdStr, metodo] = key.split("|");
+      const cajaIdReverso = parseInt(cajaIdStr, 10);
+      const etiqueta = metodo === "qr" ? "QR" : "efectivo";
 
       const descripcionEgreso = esAbono
-        ? `Anulación de abono #${ventaIdNum} - reverso efectivo`
-        : `Anulación venta #${ventaIdNum} (${saleType}) - reverso efectivo`;
+        ? `Anulación de abono #${ventaIdNum} - reverso ${etiqueta}`
+        : `Anulación venta #${ventaIdNum} (${saleType}) - reverso ${etiqueta}`;
 
-      const egresoResult = await client.query(
-        `INSERT INTO movimientos_caja
-          (caja_id, usuario_id, monto, tipo, descripcion,
-           monto_anterior, monto_actual, venta_servicio_id, venta_producto_id, fecha)
-         VALUES ($1::int, $2::int, $3, 'egreso', $4, $5, $6, NULL, NULL,
-                 TIMEZONE('America/La_Paz', NOW()))
-         RETURNING id, fecha`,
-        [
-          venta.caja_id,
-          usuarioId,
-          montoEfectivoCaja,
-          descripcionEgreso,
-          totalActual,
-          nuevoTotal,
-        ]
-      );
-
-      const egresoId = egresoResult.rows[0].id;
-      const egresoFecha = egresoResult.rows[0].fecha;
-
-      const posterioresResult = await client.query(
-        `SELECT id, monto, tipo FROM movimientos_caja
-         WHERE caja_id = $1::int AND (fecha > $2 OR (fecha = $2 AND id > $3::int))
-         ORDER BY fecha ASC, id ASC`,
-        [venta.caja_id, egresoFecha, egresoId]
-      );
-
-      let runningTotal = nuevoTotal;
-
-      for (const mov of posterioresResult.rows) {
-        const montoMov = parseFloat(mov.monto) || 0;
-        const anterior = runningTotal;
-        let actual = runningTotal;
-
-        if (mov.tipo === "ingreso") actual = anterior + montoMov;
-        else if (mov.tipo === "egreso")
-          actual = Math.max(0, anterior - montoMov);
-        else if (mov.tipo === "apertura") actual = montoMov;
-        else if (mov.tipo === "cierre") actual = anterior;
-
-        await client.query(
-          `UPDATE movimientos_caja SET monto_anterior = $1, monto_actual = $2 WHERE id = $3::int`,
-          [anterior, actual, mov.id]
-        );
-
-        runningTotal = actual;
-      }
+      await registrarMovimientoCaja(client, {
+        cajaId: cajaIdReverso,
+        usuarioId,
+        metodo,
+        tipo: "egreso",
+        monto: montoReverso,
+        descripcion: descripcionEgreso,
+        requiereAbierta: false,
+      });
     }
 
     await client.query("COMMIT");
