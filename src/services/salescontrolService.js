@@ -32,6 +32,9 @@ const QR_REGEX =
 
 const LA_PAZ_DATE = (alias) => `(${alias}.fecha)::date`;
 
+// Días en los que el admin puede anular una venta (hoy + ayer)
+const DIAS_ANULACION = 2;
+
 // Roles que pueden aparecer en el filtro "Usuario" del Control de Ventas
 const ROLES_FILTRO_USUARIO = ["admin", "recepcionista"];
 
@@ -1051,6 +1054,11 @@ const anularVenta = async (saleId, saleType, actor) => {
          v.fecha,
          (v.fecha)::date AS fecha_dia,
          (NOW() AT TIME ZONE 'America/La_Paz')::date AS hoy_dia,
+         -- Plazo de anulación: hoy y ayer (2 días, hora de La Paz)
+         (
+           (v.fecha)::date >= (NOW() AT TIME ZONE 'America/La_Paz')::date - ${DIAS_ANULACION - 1}
+           AND (v.fecha)::date <= (NOW() AT TIME ZONE 'America/La_Paz')::date
+         ) AS dentro_plazo,
          v.sucursal_id,
          v.caja_id,
          v.empleado_id,
@@ -1069,15 +1077,10 @@ const anularVenta = async (saleId, saleType, actor) => {
 
     const venta = ventaResult.rows[0];
 
-    const fechaVentaStr = venta.fecha_dia
-      ? new Date(venta.fecha_dia).toISOString().slice(0, 10)
-      : null;
-    const hoyStr = venta.hoy_dia
-      ? new Date(venta.hoy_dia).toISOString().slice(0, 10)
-      : null;
-
-    if (!fechaVentaStr || !hoyStr || fechaVentaStr !== hoyStr) {
-      throw new Error("Solo se pueden anular ventas realizadas el día de hoy");
+    if (!venta.dentro_plazo) {
+      throw new Error(
+        "Solo se pueden anular ventas realizadas hoy o ayer"
+      );
     }
 
     let cuponId = venta.cupon_id || null;

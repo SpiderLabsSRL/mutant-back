@@ -375,7 +375,8 @@ const getEmpleados = async (req, res) => {
 const anularVenta = async (req, res) => {
   try {
     const { id } = req.params;
-    const { type } = req.query;
+    // Se acepta "type" o "tipo" como nombre del parámetro
+    const type = req.query.type || req.query.tipo;
 
     if (!id) return res.status(400).json({ error: "ID de venta requerido" });
 
