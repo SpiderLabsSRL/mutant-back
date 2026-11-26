@@ -37,20 +37,32 @@ exports.getCashBoxesByBranch = async (branchId) => {
 exports.getCashBoxStatus = async (cashBoxId) => {
   try {
     const result = await query(
-      `SELECT COALESCE(total, 0) as monto_final, COALESCE(total_qr, 0) as monto_qr, estado_caja
+      `SELECT 
+        COALESCE(total, 0) as monto_final,
+        COALESCE(total_qr, 0) as monto_qr,
+        estado_caja
        FROM cajas 
        WHERE id = $1`,
       [cashBoxId]
     );
 
     if (result.rows.length === 0) {
-      return { monto_final: "0", monto_qr: "0", estado_caja: "cerrada" };
+      return {
+        monto_final: "0",
+        monto_qr: "0",
+        estado_caja: "cerrada",
+      };
     }
 
     return result.rows[0];
   } catch (error) {
     console.error("Error al consultar estado de caja:", error);
-    return { monto_final: "0", monto_qr: "0", estado_caja: "cerrada" };
+
+    return {
+      monto_final: "0",
+      monto_qr: "0",
+      estado_caja: "cerrada",
+    };
   }
 };
 
@@ -62,11 +74,31 @@ function buildMovimientosWhere(cashBoxId, filters = {}) {
   const params = [cashBoxId];
   let paramCount = 2;
 
-  // --- Filtro por fecha (SIEMPRE en zona America/La_Paz) ---
-  if (filters.dateFilterType === "specific" && filters.specificDate) {
-    conditions.push(
-      `DATE(mc.fecha AT TIME ZONE 'America/La_Paz') = $${paramCount}`
-    );
+  // ============================================
+  // FILTRO POR FECHA
+  // ============================================
+  // La base de datos almacena la hora boliviana
+  // representada como UTC (+00).
+  //
+  // Se utiliza UTC para conservar la fecha y hora
+  // registrada, sin aplicar un segundo desfase.
+  //
+  // Inicio inclusivo y final exclusivo.
+  // ============================================
+
+  if (
+    filters.dateFilterType === "specific" &&
+    filters.specificDate
+  ) {
+    conditions.push(`
+      mc.fecha >= (
+        $${paramCount}::date::timestamp AT TIME ZONE 'UTC'
+      )
+      AND mc.fecha < (
+        ($${paramCount}::date + 1)::timestamp AT TIME ZONE 'UTC'
+      )
+    `);
+
     params.push(filters.specificDate);
     paramCount++;
   } else if (
@@ -74,11 +106,15 @@ function buildMovimientosWhere(cashBoxId, filters = {}) {
     filters.startDate &&
     filters.endDate
   ) {
-    conditions.push(
-      `DATE(mc.fecha AT TIME ZONE 'America/La_Paz') BETWEEN $${paramCount} AND $${
-        paramCount + 1
-      }`
-    );
+    conditions.push(`
+      mc.fecha >= (
+        $${paramCount}::date::timestamp AT TIME ZONE 'UTC'
+      )
+      AND mc.fecha < (
+        ($${paramCount + 1}::date + 1)::timestamp AT TIME ZONE 'UTC'
+      )
+    `);
+
     params.push(filters.startDate, filters.endDate);
     paramCount += 2;
   }
@@ -91,15 +127,24 @@ function buildMovimientosWhere(cashBoxId, filters = {}) {
   }
 
   // --- Filtro por método (efectivo | qr) ---
-  if (filters.metodo && ["efectivo", "qr"].includes(filters.metodo)) {
+  if (
+    filters.metodo &&
+    ["efectivo", "qr"].includes(filters.metodo)
+  ) {
     conditions.push(`mc.metodo = $${paramCount}`);
     params.push(filters.metodo);
     paramCount++;
   }
 
-  // --- Filtro por empleado (por nombre completo) ---
-  if (filters.empleado && filters.empleado !== "all") {
-    conditions.push(`CONCAT(p.nombres, ' ', p.apellidos) = $${paramCount}`);
+  // --- Filtro por empleado (nombre completo) ---
+  if (
+    filters.empleado &&
+    filters.empleado !== "all"
+  ) {
+    conditions.push(
+      `CONCAT(p.nombres, ' ', p.apellidos) = $${paramCount}`
+    );
+
     params.push(filters.empleado);
     paramCount++;
   }
@@ -121,16 +166,23 @@ exports.getTransactionsByCashBox = async (
   pageSize = 20
 ) => {
   try {
-    console.log("🔍 Filtros recibidos en getTransactionsByCashBox:", filters);
-    console.log("📄 Paginación:", { page, pageSize });
-
-    const offset = (page - 1) * pageSize;
-    const sortOrder = filters.sortOrder === "asc" ? "ASC" : "DESC";
-
-    const { whereClause, params, paramCount } = buildMovimientosWhere(
-      cashBoxId,
+    console.log(
+      "🔍 Filtros recibidos en getTransactionsByCashBox:",
       filters
     );
+
+    console.log("📄 Paginación:", {
+      page,
+      pageSize,
+    });
+
+    const offset = (page - 1) * pageSize;
+
+    const sortOrder =
+      filters.sortOrder === "asc" ? "ASC" : "DESC";
+
+    const { whereClause, params, paramCount } =
+      buildMovimientosWhere(cashBoxId, filters);
 
     // Query para contar total
     const countQuery = `
@@ -142,8 +194,8 @@ exports.getTransactionsByCashBox = async (
       ${whereClause}
     `;
 
-    // Query para obtener movimientos con paginación
-    // ⚠️ fecha formateada SIEMPRE en America/La_Paz
+    // Query para obtener movimientos con paginación.
+    // La fecha conserva la hora registrada en Supabase.
     const transactionsQuery = `
       SELECT 
         mc.id, 
@@ -151,14 +203,21 @@ exports.getTransactionsByCashBox = async (
         mc.tipo, 
         mc.metodo,
         mc.descripcion, 
-        mc.monto, 
-        TO_CHAR(mc.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+        mc.monto,
+        TO_CHAR(
+          mc.fecha AT TIME ZONE 'UTC',
+          'DD/MM/YYYY, HH24:MI:SS'
+        ) as fecha,
         mc.usuario_id,
         mc.monto_anterior,
         mc.monto_actual,
         mc.venta_servicio_id,
         mc.venta_producto_id,
-        CONCAT(p.nombres, ' ', p.apellidos) as empleado_nombre
+        CONCAT(
+          p.nombres,
+          ' ',
+          p.apellidos
+        ) as empleado_nombre
       FROM movimientos_caja mc
       JOIN usuarios u ON mc.usuario_id = u.id
       JOIN empleados e ON u.empleado_id = e.id
@@ -168,18 +227,29 @@ exports.getTransactionsByCashBox = async (
       LIMIT $${paramCount} OFFSET $${paramCount + 1}
     `;
 
-    const transactionsParams = [...params, pageSize, offset];
+    const transactionsParams = [
+      ...params,
+      pageSize,
+      offset,
+    ];
 
-    console.log("🔄 Ejecutando consultas para movimientos...");
+    console.log(
+      "🔄 Ejecutando consultas para movimientos..."
+    );
+
     console.log("Where clause:", whereClause);
     console.log("Params:", transactionsParams);
 
-    const [countResult, transactionsResult] = await Promise.all([
-      query(countQuery, params),
-      query(transactionsQuery, transactionsParams),
-    ]);
+    const [countResult, transactionsResult] =
+      await Promise.all([
+        query(countQuery, params),
+        query(transactionsQuery, transactionsParams),
+      ]);
 
-    const totalCount = parseInt(countResult.rows[0]?.total_count || 0);
+    const totalCount = parseInt(
+      countResult.rows[0]?.total_count || 0
+    );
+
     console.log(
       `✅ Movimientos encontrados: ${transactionsResult.rows.length} de ${totalCount} totales`
     );
@@ -190,11 +260,16 @@ exports.getTransactionsByCashBox = async (
         page,
         pageSize,
         total: totalCount,
-        totalPages: Math.ceil(totalCount / pageSize) || 1,
+        totalPages:
+          Math.ceil(totalCount / pageSize) || 1,
       },
     };
   } catch (error) {
-    console.error("❌ Error en getTransactionsByCashBox service:", error);
+    console.error(
+      "❌ Error en getTransactionsByCashBox service:",
+      error
+    );
+
     throw error;
   }
 };
@@ -202,41 +277,62 @@ exports.getTransactionsByCashBox = async (
 // ============================================
 // TOTALES DE MOVIMIENTOS (con los mismos filtros)
 // ============================================
-exports.getTransactionTotals = async (cashBoxId, filters = {}) => {
+exports.getTransactionTotals = async (
+  cashBoxId,
+  filters = {}
+) => {
   try {
-    console.log("📊 Calculando totales de movimientos con filtros:", filters);
+    console.log(
+      "📊 Calculando totales de movimientos con filtros:",
+      filters
+    );
 
-    const { whereClause, params } = buildMovimientosWhere(cashBoxId, filters);
+    const { whereClause, params } =
+      buildMovimientosWhere(cashBoxId, filters);
 
     const ingresosQuery = `
-      SELECT COALESCE(SUM(mc.monto), 0) as total_ingresos
+      SELECT
+        COALESCE(SUM(mc.monto), 0) as total_ingresos
       FROM movimientos_caja mc
       JOIN usuarios u ON mc.usuario_id = u.id
       JOIN empleados e ON u.empleado_id = e.id
       JOIN personas p ON e.persona_id = p.id
-      ${whereClause} AND mc.tipo IN ('ingreso', 'apertura')
+      ${whereClause}
+      AND mc.tipo IN ('ingreso', 'apertura')
     `;
 
     const egresosQuery = `
-      SELECT COALESCE(SUM(mc.monto), 0) as total_egresos
+      SELECT
+        COALESCE(SUM(mc.monto), 0) as total_egresos
       FROM movimientos_caja mc
       JOIN usuarios u ON mc.usuario_id = u.id
       JOIN empleados e ON u.empleado_id = e.id
       JOIN personas p ON e.persona_id = p.id
-      ${whereClause} AND mc.tipo IN ('egreso', 'cierre')
+      ${whereClause}
+      AND mc.tipo IN ('egreso', 'cierre')
     `;
 
-    const [ingresosResult, egresosResult] = await Promise.all([
-      query(ingresosQuery, params),
-      query(egresosQuery, params),
-    ]);
+    const [ingresosResult, egresosResult] =
+      await Promise.all([
+        query(ingresosQuery, params),
+        query(egresosQuery, params),
+      ]);
 
     const totalIngresos = parseFloat(
       ingresosResult.rows[0]?.total_ingresos || 0
     );
-    const totalEgresos = parseFloat(egresosResult.rows[0]?.total_egresos || 0);
 
-    console.log("📊 Resultados de totales:", { totalIngresos, totalEgresos });
+    const totalEgresos = parseFloat(
+      egresosResult.rows[0]?.total_egresos || 0
+    );
+
+    console.log(
+      "📊 Resultados de totales:",
+      {
+        totalIngresos,
+        totalEgresos,
+      }
+    );
 
     return {
       totalIngresos,
@@ -244,7 +340,11 @@ exports.getTransactionTotals = async (cashBoxId, filters = {}) => {
       totalCaja: 0,
     };
   } catch (error) {
-    console.error("❌ Error en getTransactionTotals service:", error);
+    console.error(
+      "❌ Error en getTransactionTotals service:",
+      error
+    );
+
     throw error;
   }
 };
@@ -252,7 +352,9 @@ exports.getTransactionTotals = async (cashBoxId, filters = {}) => {
 // ============================================
 // MOVIMIENTOS DE LACTOBAR POR SUCURSAL
 // ============================================
-exports.getLactobarTransactionsByBranch = async (branchId) => {
+exports.getLactobarTransactionsByBranch = async (
+  branchId
+) => {
   const result = await query(
     `SELECT 
       mc.id, 
@@ -260,26 +362,39 @@ exports.getLactobarTransactionsByBranch = async (branchId) => {
       mc.tipo, 
       mc.metodo,
       mc.descripcion, 
-      mc.monto, 
-      TO_CHAR(mc.fecha AT TIME ZONE 'America/La_Paz', 'DD/MM/YYYY, HH24:MI:SS') as fecha,
+      mc.monto,
+      TO_CHAR(
+        mc.fecha AT TIME ZONE 'UTC',
+        'DD/MM/YYYY, HH24:MI:SS'
+      ) as fecha,
       mc.usuario_id,
-      CONCAT(p.nombres, ' ', p.apellidos) as empleado_nombre
+      CONCAT(
+        p.nombres,
+        ' ',
+        p.apellidos
+      ) as empleado_nombre
      FROM movimientos_caja mc
      JOIN cajas c ON mc.caja_id = c.id
      JOIN usuarios u ON mc.usuario_id = u.id
      JOIN empleados e ON u.empleado_id = e.id
      JOIN personas p ON e.persona_id = p.id
-     WHERE c.sucursal_id = $1 AND c.nombre ILIKE '%lactobar%'
+     WHERE c.sucursal_id = $1
+     AND c.nombre ILIKE '%lactobar%'
      ORDER BY mc.fecha DESC`,
     [branchId]
   );
+
   return result.rows;
 };
 
 // ============================================
-// NOTA: los movimientos de caja (ingresos/egresos en efectivo o QR) se
-// registran con src/utils/cajaMovimientos.js, y la apertura/cierre con
-// newtransactionService (abre y cierra efectivo + QR a la vez).
-// Los helpers antiguos registrarMovimiento/abrirCaja/cerrarCaja no se
-// usaban en ninguna ruta y no contemplaban QR, por eso se quitaron.
+// NOTA: los movimientos de caja (ingresos/egresos
+// en efectivo o QR) se registran con
+// src/utils/cajaMovimientos.js, y la apertura/cierre
+// con newtransactionService (abre y cierra efectivo
+// + QR a la vez).
+//
+// Los helpers antiguos registrarMovimiento/abrirCaja/
+// cerrarCaja no se usaban en ninguna ruta y no
+// contemplaban QR, por eso se quitaron.
 // ============================================
